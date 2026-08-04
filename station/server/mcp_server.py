@@ -234,9 +234,12 @@ def _exec_tool(name, args):
             raise P.PipelineError(f"job 不存在: {args['job_id']}")
         return j
     if name == "delete_output":
-        target = P.OUTPUT_DIR / args["name"]
-        if not target.exists():
-            raise P.PipelineError(f"文件不存在: {target}")
+        # 🔒 F3.3：用 _resolve_safe 校验 name 必须落在 OUTPUT_DIR 白名单内，
+        # 否则攻击者可用 "../../../etc/passwd" 跨出 OUTPUT_DIR（Windows 上
+        # Path / "../.." 经 target.exists()/target.unlink() 会让 OS 解析 ..）。
+        # 该工具已被 tier=blocked 拦截，但路径遍历 bug 本身仍存在，
+        # 此处做 defense-in-depth。
+        target = P._resolve_safe(args["name"], P.OUTPUT_DIR, must_exist=True)
         target.unlink()
         return {"deleted": str(target)}
     raise P.PipelineError(f"未知工具: {name}")

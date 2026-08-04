@@ -12,15 +12,38 @@
   - _summary dedup_video 包含 phash_passed 和 applied_level
 """
 
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 _STATION = Path(__file__).resolve().parent.parent
+# 注：把 hooks/ 也加进 path 是为了 import common（F3.3 加了 is_path_allowed）。
+# 不 import pre_tool_guard —— 它在模块顶层重写 sys.stdin/stdout（GBK 修复），
+# 会破坏 pytest 的 stdio 捕获。
+sys.path.insert(0, str(_STATION / "hooks"))
 sys.path.insert(0, str(_STATION / "server"))
 
+import common as C  # noqa: E402
 import mcp_server as S  # noqa: E402
+
+
+def _run_pre_tool_guard(payload):
+    """通过 subprocess 调 pre_tool_guard.py（与 server 真实用法一致）。
+
+    不直接 import —— pre_tool_guard 在模块顶层重写 sys.stdin/stdout
+    (line 36-38 的 GBK 修复)，会破坏 pytest 的 stdio 捕获。
+    subprocess 调用则天然隔离。
+    """
+    hook = _STATION / "hooks" / "pre_tool_guard.py"
+    proc = subprocess.run(
+        [sys.executable, str(hook)],
+        input=__import__("json").dumps(payload, ensure_ascii=False).encode("utf-8"),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+    )
+    out = proc.stdout.decode("utf-8", "replace").strip()
+    return __import__("json").loads(out) if out else {}
 
 
 # ----------------- stub pipeline -----------------
@@ -259,3 +282,95 @@ def test_summary_dedup_video_includes_phash_passed_and_level():
     assert s["phash_passed"] is True
     assert s["phash"] == {"passed": True}
     assert s["applied_level"] == "heavy"
+
+
+# ===========================================================================
+# F3.3 路径白名单双保险
+# ===========================================================================
+
+# ---- common.is_path_allowed 纯函数 ----
+def test_is_path_allowed_inside_base():
+    """相对路径 + 在 base 内 → ok。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        ok, reason = C.is_path_allowed("a/b.mp4", td)
+        assert ok is True
+        assert reason == ""
+
+
+def test_is_path_allowed_absolute_outside():
+    """绝对路径越界（Windows 盘符） → deny + 给出原因。"""
+    ok, reason = C.is_path_allowed("C:/Windows/System32/notepad.exe",
+                                   "F:/ai_agent/dev2")
+    assert ok is False
+    assert "不在白名单" in reason
+
+
+def test_is_path_allowed_traversal():
+    """.. 穿越 → deny + resolve 后的绝对路径出现在 reason。"""
+    ok, reason = C.is_path_allowed("../../etc/passwd", "F:/ai_agent/dev2/xiaomi/ai/test11")
+    assert ok is False
+    assert "不在白名单" in reason
+
+
+# ---- pre_tool_guard 形态校验（hook 第一道闸）----
+def test_pre_tool_guard_denies_absolute_src():
+    """guard() 收到 src 含 Windows 盘符 → permissionDecision=deny。
+
+    通过 subprocess 调 pre_tool_guard.py —— 与 server 真实用法一致。
+    直接 import 会触发 hook 顶层的 sys.stdin 重写（GBK 修复），
+    进而破坏 pytest 的 stdio 捕获。
+    """
+    out = _run_pre_tool_guard({"tool_name": "dedup_video",
+                               "tool_input": {"src": "C:/foo"},
+                               "tier": "warned"})
+    assert out["continue"] is False
+    assert out["permissionDecision"] == "deny"
+    assert "路径白名单" in out["reason"]
+    assert "Windows 盘符" in out["reason"]
+
+
+def test_pre_tool_guard_denies_traversal_src():
+    """guard() 收到 src 含 .. 穿越 → permissionDecision=deny。"""
+    out = _run_pre_tool_guard({"tool_name": "dedup_video",
+                               "tool_input": {"src": "../../../etc/passwd"},
+                               "tier": "warned"})
+    assert out["continue"] is False
+    assert out["permissionDecision"] == "deny"
+    assert "路径白名单" in out["reason"]
+    assert ".. 穿越" in out["reason"]
+
+
+def test_pre_tool_guard_allows_normal_src():
+    """普通相对中文名 → 走完 warn 分支，返回 ask（不被 hook 第一道闸拦）。"""
+    out = _run_pre_tool_guard({"tool_name": "dedup_video",
+                               "tool_input": {"src": "微笑.mp4"},
+                               "tier": "warned"})
+    assert out["continue"] is True
+    # warned 工具应继续走 ask 分支
+    assert out["permissionDecision"] == "ask"
+
+
+# ---- pipeline._resolve_safe（第二道闸）----
+def test_probe_video_rejects_outside_path():
+    """probe_video(src=C:/foo) → PipelineError（拒绝越界）。"""
+    try:
+        S.P.probe_video("C:/Windows/System32/notepad.exe")
+    except S.P.PipelineError as e:
+        assert "白名单" in str(e)
+        return
+    raise AssertionError("应抛 PipelineError")
+
+
+def test_delete_output_rejects_traversal():
+    """_resolve_safe(../../../etc/passwd, OUTPUT_DIR) → PipelineError。
+
+    对应 mcp_server.py delete_output 的 defense-in-depth：
+    即使 tier=blocked 拦截了正常调用，路径遍历 bug 本身被堵住。
+    """
+    try:
+        S.P._resolve_safe("../../etc/passwd", S.P.OUTPUT_DIR, must_exist=False)
+    except S.P.PipelineError as e:
+        assert "白名单" in str(e)
+        return
+    raise AssertionError("应抛 PipelineError")

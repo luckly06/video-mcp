@@ -153,3 +153,30 @@ def recent_tools():
         if rec.get("status") == "ok" and rec.get("tool_name"):
             tools.add(rec["tool_name"])
     return tools
+
+
+# ---------------------------------------------------------------------------
+# F3.3 路径白名单（hook 第一道闸 + 测试用）
+# ---------------------------------------------------------------------------
+def is_path_allowed(path, base_dir):
+    """🛡️ F3.3 路径白名单。
+
+    返回 (ok, reason)：
+      ok=True  → 路径 resolve 后在 base_dir 子树内（或等价于 base_dir）
+      ok=False → reason 给出人类可读原因
+    校验规则与 pipeline._resolve_safe 完全一致：resolve 后必须 relative_to(base)。
+    与 _resolve_safe 的区别：抛错 vs 返 (False, reason)，适合 hook 这种只读 deny 的场景。
+    """
+    try:
+        base = Path(base_dir).resolve()
+        p = Path(path)
+        if not p.is_absolute():
+            p = base / p
+        p = p.resolve()
+    except (OSError, RuntimeError) as e:
+        return False, f"路径解析失败: {e}"
+    try:
+        p.relative_to(base)
+    except ValueError:
+        return False, f"路径 {p} 不在白名单 {base} 内"
+    return True, ""

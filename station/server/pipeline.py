@@ -156,12 +156,8 @@ def list_assets():
 
 
 def probe_video(path):
-    """用 ffprobe 读取视频关键信息。"""
-    p = Path(path)
-    if not p.is_absolute():
-        p = VIDEO_DIR / path
-    if not p.exists():
-        raise PipelineError(f"文件不存在: {p}")
+    """用 ffprobe 读取视频关键信息。🔒 F3.3：src 必须落在 VIDEO_DIR 白名单内。"""
+    p = _resolve_safe(path, VIDEO_DIR, must_exist=True)
 
     if not FFPROBE.exists():
         raise PipelineError(f"ffprobe 未找到: {FFPROBE}")
@@ -750,7 +746,9 @@ def remove_watermark(src, platform, out_name=None):
     h = min(h, src_info["height"] - y - 1)
 
     stem = Path(src_info["name"]).stem
-    out_path = OUTPUT_DIR / (out_name or f"{stem}_去{platform}水印.mp4")
+    # 🔒 F3.3：out_name 也走白名单，防止越界写到 OUTPUT_DIR 外。
+    out_path = _resolve_safe(out_name or f"{stem}_去{platform}水印.mp4",
+                             OUTPUT_DIR, must_exist=False)
 
     cmd = [
         str(FFMPEG), "-y", "-i", src_info["path"],

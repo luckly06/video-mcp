@@ -40,8 +40,48 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 sys.path.insert(0, __file__.rsplit("\\", 1)[0] if "\\" in __file__ else ".")
 from common import (
     load_rules, classify, check_chain, check_body, apply_auto_fill,
-    recent_tools,
+    is_path_allowed, recent_tools,
 )
+from pathlib import Path
+
+
+# F3.3 路径白名单（hook 第一道闸）：
+# tool_name -> [(field_name, "VIDEO_DIR" | "OUTPUT_DIR")]
+# 注：hook 是 subprocess 运行，无法拿 pipeline.VIDEO_DIR 绝对路径（脆弱），
+# 所以 hook 这一层只做**形态校验**（拒绝绝对路径前缀与 .. 穿越）；
+# 真正的 resolve + relative_to 由 pipeline._resolve_safe 第二道闸保证。
+_PATH_FIELDS = {
+    "dedup_video":      [("src", "VIDEO_DIR")],
+    "batch_fission":    [("src", "VIDEO_DIR")],
+    "remove_watermark": [("src", "VIDEO_DIR")],
+    "probe_video":      [("src", "VIDEO_DIR")],
+    "delete_output":    [("name", "OUTPUT_DIR")],
+}
+
+
+def _check_path_shape(tool, body):
+    """F3.3 hook 形态校验：返回 None = 通过；返回 str = deny 原因。
+
+    拒绝：
+      - Unix 绝对路径前缀（/）
+      - UNC 路径前缀（\\）
+      - Windows 盘符（C:）
+      - 路径中任一段为 ..
+    """
+    rules = _PATH_FIELDS.get(tool)
+    if not rules:
+        return None
+    for field, _base in rules:
+        v = body.get(field)
+        if not v or not isinstance(v, str):
+            continue  # 缺字段交给 check_body 报错；非字符串由更上层兜底
+        if v.startswith("/") or v.startswith("\\"):
+            return f"[路径白名单] {tool}.{field}={v!r} 含绝对路径前缀（Unix/UNC），hook 拒绝"
+        if len(v) >= 2 and v[1] == ":":
+            return f"[路径白名单] {tool}.{field}={v!r} 含 Windows 盘符，hook 拒绝"
+        if ".." in Path(v).parts:
+            return f"[路径白名单] {tool}.{field}={v!r} 含 .. 穿越，hook 拒绝"
+    return None
 
 
 def guard(payload):
@@ -72,6 +112,16 @@ def guard(payload):
             "permissionDecision": "deny",
             "level": level,
             "reason": f"[强制走链] {hint}",
+        }
+
+    # 4.5 F3.3 路径形态校验（hook 第一道闸，越界 deny）
+    path_err = _check_path_shape(tool, body)
+    if path_err:
+        return {
+            "continue": False,
+            "permissionDecision": "deny",
+            "level": level,
+            "reason": path_err,
         }
 
     # 5. 自动补全（modifiedInput）
