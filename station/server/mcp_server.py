@@ -96,6 +96,10 @@ TOOLS = [
                 "src": {"type": "string", "description": "文件名或绝对路径"},
                 "params": {"type": "object", "description": "可选：覆盖默认参数（brightness/contrast/saturation/rotate_deg/fps_range/bitrate_mul/bitrate_kbps/denoise）"},
                 "out_name": {"type": "string", "description": "可选：输出文件名"},
+                "level": {"type": "string", "enum": ["light", "medium", "heavy"], "description": "强度档：light=轻微、medium=中等（默认）、heavy=强烈；控制 crop/speed/trim 幅度"},
+                "dimensions": {"type": "object", "description": "维度开关：picture/rotate/crop/flip/speed/trim 六个布尔；flip 默认 false，开了必传 flip_mode"},
+                "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
+                "seed": {"type": "integer", "description": "随机种子；缺省随机回填"},
             },
             "required": ["src"],
         },
@@ -110,6 +114,9 @@ TOOLS = [
                 "src": {"type": "string"},
                 "count": {"type": "integer", "description": "变体数量 1-20"},
                 "params": {"type": "object"},
+                "level": {"type": "string", "enum": ["light", "medium", "heavy"], "description": "强度档：light=轻微、medium=中等、heavy=强烈；控制 crop/speed/trim 幅度"},
+                "dimensions": {"type": "object", "description": "维度开关：picture/rotate/crop/flip/speed/trim 六个布尔；flip 默认 false，开了必传 flip_mode"},
+                "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
             },
             "required": ["src", "count"],
         },
@@ -189,11 +196,31 @@ def _exec_tool(name, args):
     if name == "probe_video":
         return P.probe_video(args["src"])
     if name == "dedup_video":
-        r = P.dedup_video(args["src"], params=args.get("params"), out_name=args.get("out_name"))
+        r = P.dedup_video(
+            args["src"],
+            params=args.get("params"),
+            out_name=args.get("out_name"),
+            seed=args.get("seed"),
+            level=args.get("level"),
+            dimensions=args.get("dimensions"),
+            flip_mode=args.get("flip_mode"),
+            trim_phase=args.get("trim_phase"),
+        )
         r["job_id"] = _new_job("dedup", {"src": r["src"]["name"], "output": r["output_path"]})
         return r
     if name == "batch_fission":
-        r = P.batch_fission(args["src"], count=args.get("count", 3), params=args.get("params"))
+        # count 默认值由 rules.json auto_fill 提供 (5)；不写 fallback 3。
+        # 若有人绕过 handle_rpc 直接调 _exec_tool，pipeline 内部 int(count) 会失败，
+        # 这是去除 server 双重默认后的明确边界（_exec_tool 是内部接口，不该被直调）。
+        # seed / trim_phase 不传：pipeline.batch_fission 签名没有这两个参数。
+        r = P.batch_fission(
+            args["src"],
+            count=args.get("count"),
+            params=args.get("params"),
+            level=args.get("level"),
+            dimensions=args.get("dimensions"),
+            flip_mode=args.get("flip_mode"),
+        )
         r["job_id"] = _new_job("fission", {"src": r["src"], "count": r["count"]})
         return r
     if name == "list_watermark_templates":
@@ -264,6 +291,16 @@ def handle_rpc(req, headers):
         if input_responses and input_responses.get("confirm") is False:
             return _ok(rpc_id, _content(f"用户取消了 {name}。"))
 
+        # F3.2 镜像：tier 求值器只读 body.get(field) 顶层；dimensions.flip 嵌套
+        # 不被 rules.json tier2（field=flip, value=true）命中。必须在这里镜像到
+        # args["flip"] 顶层，hook 跑 check_body 时才能拦下「flip=true 缺 flip_mode」。
+        # 必须放在 _run_hook 之前，否则 hook 已错过 tier 求值。
+        if name in ("dedup_video", "batch_fission"):
+            dims = args.get("dimensions")
+            if isinstance(dims, dict) and dims.get("flip"):
+                args = dict(args)
+                args["flip"] = True
+
         # --- PreToolUse hook：拦截 + 校验 + 补全 ---
         pre = _run_hook("pre_tool_guard.py", {
             "hook_event": "PreToolUse", "tool_name": name, "tool_input": args, "tier": tool["_tier"],
@@ -296,9 +333,35 @@ def handle_rpc(req, headers):
 
 def _summary(name, result):
     if name == "dedup_video":
-        return {"output": result.get("output_path"), "checks": result.get("checks")}
+        checks = result.get("checks") or {}
+        return {
+            "output": result.get("output_path"),
+            "checks": checks,
+            "phash": checks.get("phash"),
+            "phash_passed": bool(checks.get("phash", {}).get("passed")),
+            "applied_level": (result.get("applied_params") or {}).get("level"),
+        }
     if name == "batch_fission":
-        return {"count": result.get("count"), "all_unique": result.get("all_unique")}
+        wrapper = result.get("matrix") or {}
+        inner = wrapper.get("matrix") if isinstance(wrapper, dict) else []
+        off = []
+        if isinstance(inner, list):
+            for i, row in enumerate(inner):
+                if not isinstance(row, list):
+                    continue
+                for j, v in enumerate(row):
+                    if i == j or v is None:
+                        continue
+                    if isinstance(v, bool) or not isinstance(v, (int, float)):
+                        continue
+                    off.append(float(v))
+        return {
+            "count": result.get("count"),
+            "all_unique": result.get("all_unique"),
+            "all_pass": wrapper.get("all_pass") if isinstance(wrapper, dict) else None,
+            "off_diagonal_mean": round(sum(off) / len(off), 3) if off else None,
+            "off_diagonal_min": round(min(off), 3) if off else None,
+        }
     return {"ok": True}
 
 
