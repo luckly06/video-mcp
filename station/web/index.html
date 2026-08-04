@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>视频去重数字员工 · Agent 工位</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- 连接状态横幅（fetch 失败时显示） -->
+  <div id="conn-banner" class="conn-banner hidden">
+    <span class="conn-dot"></span>
+    <span id="conn-text">正在连接 MCP Server…</span>
+    <button id="conn-retry" class="conn-retry">重试连接</button>
+  </div>
+
+  <!-- ======================= 顶部：工牌 + 协议说明 ======================= -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <!-- 数字员工工牌卡片（身份层） -->
+      <div class="badge-card">
+        <div class="badge-avatar">🤖</div>
+        <div class="badge-main">
+          <div class="badge-name-row">
+            <span class="badge-name">视频去重数字员工</span>
+            <span class="badge-status" id="badge-status">
+              <span class="status-dot"></span>持续在线
+            </span>
+          </div>
+          <div class="badge-meta">
+            <span class="badge-no">工号 <b id="emp-no">VD-2026-0728</b></span>
+            <span class="badge-sep">·</span>
+            <span id="server-name" class="badge-server">video-dedup-station</span>
+            <span class="badge-sep">·</span>
+            <span id="server-proto" class="badge-proto">MCP 2026-07-28</span>
+          </div>
+          <div class="badge-duties">
+            <span class="duty-label">职责边界</span>
+            <span class="duty-tag">视频去重</span>
+            <span class="duty-tag">水印处理</span>
+            <span class="duty-tag">批量裂变</span>
+            <span class="duty-tag muted">不做剪辑 / 不做上传 / 不越权</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="proto-note">
+      底层：CRVideoMate 同捆 ffmpeg 复现的去重管线 &nbsp;·&nbsp; 协议：MCP 2026-07-28 无状态 HTTP（JSON-RPC over POST）&nbsp;·&nbsp; 人机接力：Agent 干到 70 分自动完成去重 + 自检，人来点交付
+    </div>
+  </header>
+
+  <!-- ======================= 三栏主体 ======================= -->
+  <div class="layout">
+
+    <!-- --------- 左栏：权限边界 + 工具清单 --------- -->
+    <aside class="col col-left">
+      <section class="panel">
+        <h2 class="panel-title">🔐 权限边界</h2>
+        <div class="perm-block">
+          <div class="perm-sub">可访问目录</div>
+          <div class="perm-item">
+            <span class="perm-ok">✓</span>
+            <code>video/</code>
+            <span class="perm-desc">素材只读</span>
+          </div>
+          <div class="perm-item">
+            <span class="perm-ok">✓</span>
+            <code>output/</code>
+            <span class="perm-desc">产出写入</span>
+          </div>
+          <div class="perm-item denied">
+            <span class="perm-no">✗</span>
+            <code>其它目录</code>
+            <span class="perm-desc">一律拒绝</span>
+          </div>
+        </div>
+        <div class="perm-block">
+          <div class="perm-sub">工具白名单</div>
+          <div class="whitelist" id="whitelist">
+            <span class="wl-hint">加载中…</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-title">🧰 工具清单 <span class="panel-sub">tools/list</span></h2>
+        <div class="tier-legend">
+          <span class="tier-chip tier-audit">audit 审计</span>
+          <span class="tier-chip tier-warned">warned 确认</span>
+          <span class="tier-chip tier-blocked">blocked 阻断</span>
+          <span class="tier-chip tier-pass">pass 放行</span>
+        </div>
+        <div id="tools-list" class="tools-list">
+          <div class="loading">加载工具中…</div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- --------- 中栏：工作台 --------- -->
+    <main class="col col-center">
+      <section class="panel workbench">
+        <h2 class="panel-title">🎬 工作台</h2>
+
+        <!-- 素材选择 + 探测 -->
+        <div class="wb-row">
+          <label class="wb-label" for="asset-select">素材</label>
+          <select id="asset-select" class="wb-select">
+            <option value="">加载素材中…</option>
+          </select>
+          <button id="btn-refresh-assets" class="btn btn-ghost" title="刷新素材列表">↻</button>
+          <button id="btn-probe" class="btn btn-audit">🔍 探测</button>
+        </div>
+
+        <!-- 探测结果卡片 -->
+        <div id="probe-card" class="result-card hidden">
+          <div class="result-head">
+            <span class="result-title">探测结果 · probe_video</span>
+            <span class="tier-chip tier-audit">audit</span>
+          </div>
+          <div id="probe-grid" class="probe-grid"></div>
+        </div>
+
+        <div class="wb-divider"></div>
+
+        <!-- 去重 -->
+        <div class="wb-row">
+          <span class="wb-action-label">单条去重</span>
+          <button id="btn-dedup" class="btn btn-warned">▶ 开始去重</button>
+          <span class="wb-hint">去重前建议先探测（链式规则要求 probe_video）</span>
+        </div>
+
+        <!-- 去重自检报告卡片 -->
+        <div id="dedup-card" class="result-card hidden">
+          <div class="result-head">
+            <span class="result-title">自检报告 · dedup_video</span>
+            <span class="tier-chip tier-warned">warned</span>
+          </div>
+          <div class="checks">
+            <div class="check-item" id="chk-md5">
+              <span class="check-mark">—</span>
+              <span class="check-text">MD5 已改变</span>
+            </div>
+            <div class="check-item" id="chk-res">
+              <span class="check-mark">—</span>
+              <span class="check-text">分辨率保持</span>
+            </div>
+            <div class="check-item" id="chk-dur">
+              <span class="check-mark">—</span>
+              <span class="check-text">时长一致</span>
+            </div>
+          </div>
+          <div id="dedup-detail" class="dedup-detail"></div>
+          <div class="handoff">
+            <span class="handoff-icon">🤝</span>
+            <span class="handoff-text">Agent 已完成去重（70 分），请人工决策是否交付。</span>
+            <div class="handoff-btns">
+              <button id="btn-deliver" class="btn btn-primary btn-sm">✅ 确认交付</button>
+              <button id="btn-regen" class="btn btn-ghost btn-sm">🔄 再生成变体</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="wb-divider"></div>
+
+        <!-- 裂变 -->
+        <div class="wb-row">
+          <span class="wb-action-label">批量裂变</span>
+          <input id="fission-count" class="wb-num" type="number" min="1" max="20" value="3" />
+          <span class="wb-unit">个变体</span>
+          <button id="btn-fission" class="btn btn-warned">🧬 裂变</button>
+        </div>
+
+        <!-- 裂变结果卡片 -->
+        <div id="fission-card" class="result-card hidden">
+          <div class="result-head">
+            <span class="result-title">裂变结果 · batch_fission</span>
+            <span class="tier-chip tier-warned">warned</span>
+          </div>
+          <div id="fission-summary" class="fission-summary"></div>
+          <div id="fission-list" class="fission-list"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- --------- 右栏：记忆 / 审计流 --------- -->
+    <aside class="col col-right">
+      <section class="panel">
+        <h2 class="panel-title">🧠 记忆 · 审计流 <span class="panel-sub">会话记忆</span></h2>
+        <div class="memory-toolbar">
+          <span id="memory-count" class="memory-count">0 条记录</span>
+          <button id="btn-clear-memory" class="btn btn-ghost btn-sm">清空</button>
+        </div>
+        <div id="timeline" class="timeline">
+          <div class="tl-empty">暂无操作记录。发起探测 / 去重后，这里会记录你的每一步。</div>
+        </div>
+        <div class="memory-foot">
+          记录存于浏览器 localStorage，仅本会话/本机可见。体现"记忆 + 责任"层：每步操作可追溯。
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <!-- ======================= 人工决策点 模态框 ======================= -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <span class="modal-title">⚠️ 人工决策点</span>
+      </div>
+      <div class="modal-body">
+        <p id="modal-msg" class="modal-msg"></p>
+        <div class="modal-op">
+          <div class="modal-op-label">即将执行</div>
+          <div id="modal-op-name" class="modal-op-name"></div>
+          <div class="modal-op-label">参数</div>
+          <pre id="modal-op-params" class="modal-op-params"></pre>
+        </div>
+        <div class="modal-notice">
+          人机接力：此为高风险 / 不可逆操作，MCP Server 已按 SEP-2322 返回 input_required，需人工确认后才会真正执行。
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button id="modal-cancel" class="btn btn-ghost">取消</button>
+        <button id="modal-confirm" class="btn btn-primary">确认执行</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
