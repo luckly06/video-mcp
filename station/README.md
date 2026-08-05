@@ -12,7 +12,7 @@
 ## 一键启动
 
 ```bash
-cd video-agent-station
+cd station
 python run.py
 ```
 
@@ -24,7 +24,7 @@ python server/mcp_server.py       # 起 server
 # 然后双击 web/index.html
 ```
 
-依赖：Python 3.x（仅标准库）+ 同捆 ffmpeg。无需 pip install。
+依赖：Python 3.x + 同捆 ffmpeg。数值 pHash 自检需先执行 `pip install -r requirements.txt`；缺少 `imagehash`/Pillow 时会自动降级为 ffmpeg signature 二值判定。
 
 ---
 
@@ -60,7 +60,7 @@ Web 壳（`web/`）呈现「数字员工工牌」，五层对应：
 | **责任** | 每步可视化、审计流落盘、人工决策弹窗、blocked 硬阻断 |
 
 **人机接力**（数字员工「持续在线、过程可控、结果可审计」）：
-Agent 干到「70 分」（去重完成 + 三项自检）→ 人工决策「是否交付 / 是否再生成变体」。
+Agent 干到「70 分」（去重完成 + 五项自检：MD5 / 分辨率 / 时长 / ≥5s / pHash）→ 人工决策「是否交付 / 是否再生成变体」。
 决策点用 **MCP 2026-07-28 的 `InputRequiredResult` + `requestState`**（SEP-2322 多轮请求）承载：
 warned/blocked 工具首次调用返回 `input_required`，用户确认后**重发原请求**并回传 `requestState`——
 任意 server 实例都能接住重试（无状态）。
@@ -95,17 +95,17 @@ video-agent-station/
 
 ---
 
-## 端到端验证（已通过）
+## 端到端验证状态
 
-用素材 `video/下班来接我.mp4`（1070×1914 竖屏）实测：
+本期已由实现侧用 `assets/下班来接我.mp4`（1070×1914 竖屏）执行以下 1–7 步，并形成 `docs/eval/F5.1-浏览器步骤5-7执行报告.md`；独立 QA 尚未签字，因此当前交付状态保持“等待 QA”，不得把实现侧结果或 QA 执行失败视为独立验收通过。完整复核项见 `web/README-手测清单.md`：
 
 1. `server/discover` → 协议 2026-07-28 ✅
 2. `tools/list` → ttlMs=300000 缓存元数据，8 工具 ✅
 3. `probe_video` → 1070×1914, MD5 a9bfee34 ✅
 4. `dedup_video` 无确认 → `input_required` + requestState（人工决策点）✅
-5. `dedup_video` 带确认 → 执行，三项自检全过（MD5 变 / 分辨率保持 / 时长一致），生成 job_id ✅
-6. `delete_output` 带确认 → 仍被 Hook 第4级硬阻断拦截 ✅
-7. 审计日志落盘 5 条，含 output 路径 + 自检结果 ✅
+5. `dedup_video` 带确认 → 执行并展示五项自检（MD5 / 分辨率 / 时长 / ≥5s / pHash），生成 `job_id` ✅ 实现侧 PASS / ⏳ 独立 QA 待签字
+6. `delete_output` 带确认 → 仍被 Hook 第4级硬阻断拦截 ✅ 实现侧 PASS / ⏳ 独立 QA 待签字
+7. 审计日志落盘，含 output 路径 + 自检结果 ✅ 实现侧 PASS / ⏳ 独立 QA 待签字
 
 ---
 

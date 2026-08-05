@@ -1,0 +1,135 @@
+@font-face {
+  font-family: "iconfont"; /* Project id 5191313 */
+  src: url('iconfont.woff2?t=1780664989823') format('woff2'),
+       url('iconfont.woff?t=1780664989823') format('woff'),
+       url('iconfont.ttf?t=1780664989823') format('truetype');
+}
+
+.iconfont {
+  font-family: "iconfont" !important;
+  font-size: 16px;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.icon-a-010-gift:before {
+  content: "\e7f8";
+}
+
+.icon-a-023-award:before {
+  content: "\e7f9";
+}
+
+.icon-a-022-award:before {
+  content: "\e7fa";
+}
+
+.icon-a-025-award:before {
+  content: "\e7fb";
+}
+
+.icon-a-024-award:before {
+  content: "\e7fc";
+}
+
+.icon-a-014-2ndplace:before {
+  content: "\e7fd";
+}
+
+.icon-a-019-award:before {
+  content: "\e7fe";
+}
+
+.icon-a-008-trophy:before {
+  content: "\e7ff";
+}
+
+.icon-a-001-certificate:before {
+  content: "\e800";
+}
+
+.icon-a-004-trophy:before {
+  content: "\e801";
+}
+
+.icon-a-021-award:before {
+  content: "\e802";
+}
+
+.icon-a-006-giftvoucher:before {
+  content: "\e803";
+}
+
+.icon-a-009-giftvoucher:before {
+  content: "\e804";
+}
+
+.icon-a-030-crown:before {
+  content: "\e805";
+}
+
+.icon-a-026-goldmedal:before {
+  content: "\e806";
+}
+
+.icon-a-003-certificate:before {
+  content: "\e807";
+}
+
+.icon-a-015-3rdplace:before {
+  content: "\e808";
+}
+
+.icon-a-028-throne:before {
+  content: "\e809";
+}
+
+.icon-a-013-1stplace:before {
+  content: "\e80a";
+}
+
+.icon-a-005-trophy:before {
+  content: "\e80b";
+}
+
+.icon-a-027-treasurechest:before {
+  content: "\e80c";
+}
+
+.icon-a-018-medal:before {
+  content: "\e80d";
+}
+
+.icon-a-002-certificate:before {
+  content: "\e80e";
+}
+
+.icon-a-029-trophy:before {
+  content: "\e80f";
+}
+
+.icon-a-012-award:before {
+  content: "\e810";
+}
+
+.icon-a-007-trophy:before {
+  content: "\e7f3";
+}
+
+.icon-a-020-award:before {
+  content: "\e7f4";
+}
+
+.icon-a-016-medal:before {
+  content: "\e7f5";
+}
+
+.icon-a-017-flag:before {
+  content: "\e7f6";
+}
+
+.icon-a-011-award:before {
+  content: "\e7f7";
+}
+

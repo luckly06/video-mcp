@@ -30,8 +30,8 @@
 
 | Skill | 用途 | 核心走链 |
 |-------|------|----------|
-| [dedup-video](dedup-video/SKILL.md) | 单条视频去重（改 MD5、保分辨率） | probe → 确认 → dedup → get_job → 自检三项 → 失败诊断回退 |
-| [batch-fission](batch-fission/SKILL.md) | 一素材裂变多变体分发 | probe → 确认数量 → fission → 校验 all_unique → 有重复重试 |
+| [dedup-video](dedup-video/SKILL.md) | 单条视频去重（改 MD5、保分辨率、pHash 自检） | probe → 选 level/维度 → 确认 → dedup → get_job → 自检五项含 pHash → 失败诊断回退 |
+| [batch-fission](batch-fission/SKILL.md) | 一素材裂变多变体分发（MD5 + pHash 矩阵） | probe → 选 count/level/维度 → 确认 → fission → 校验 all_unique + matrix → 过近对诊断回退 |
 | [remove-watermark](remove-watermark/SKILL.md) | 按平台模板去水印 | list_templates → probe → 选平台 → remove（确认）→ 验片 |
 
 ## SKILL.md 约定

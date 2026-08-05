@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pure · 商城 / Designed for you</title>
+  <link rel="stylesheet" href="css/pure.css">
+</head>
+<body>
+
+<!-- ============ 顶部公告 ============ -->
+<div class="top-bar" id="marqueeTrack"></div>
+
+<!-- ============ Header ============ -->
+<header class="site-header">
+  <div class="container">
+    <a href="index.html" class="site-logo">Pure<span class="light"> · Mall</span></a>
+    <nav class="site-nav">
+      <a href="index.html" class="active">首页</a>
+      <a href="products.html">商店</a>
+      <a href="products.html?cat=ELEC">电子</a>
+      <a href="products.html?cat=HOME">家居</a>
+      <a href="products.html?cat=STYLE">服饰</a>
+      <a href="products.html?cat=BEAUTY">美妆</a>
+      <a href="user.html">账户</a>
+    </nav>
+    <div class="site-header-actions">
+      <a href="user.html">搜索</a>
+      <a href="user.html">账户</a>
+      <a href="cart.html" class="cart-link">购物车<span class="count">0</span></a>
+    </div>
+  </div>
+</header>
+
+<!-- ============ Hero ============ -->
+<section class="hero">
+  <div class="container">
+    <div class="eyebrow">Pure 商城 · 2026</div>
+    <h1>好物。<br><span class="muted">就是好物。</span></h1>
+    <p class="lede">每一件商品，都经过严格筛选。<br>让你的日常，多一点恰到好处。</p>
+    <div class="cta-row">
+      <a class="btn-link" href="products.html">选购</a>
+      <a class="btn-link" href="products.html?cat=ELEC">了解电子 ›</a>
+    </div>
+    <div class="hero-product">
+      <div class="product-shot">📱</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 分类 ============ -->
+<section class="section">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">分类浏览</div>
+      <h2>逛逛。</h2>
+      <div class="lede">四大主题，承蒙惠顾。</div>
+    </div>
+    <div class="categories" id="catGrid"></div>
+  </div>
+</section>
+
+<!-- ============ 双格推广 ============ -->
+<section class="section" style="padding-top:0;">
+  <div class="container">
+    <div class="duo">
+      <div class="duo-card">
+        <div class="name">iPhone 系列</div>
+        <div class="lede">拍摄 · 性能 · 续航，再进一步。</div>
+        <div class="links" style="display:flex;justify-content:center;gap:16px">
+          <a class="btn-link" href="products.html?cat=ELEC">选购</a>
+          <a class="btn-link" href="products.html?cat=ELEC">了解更多 ›</a>
+        </div>
+        <div class="glyph">📱</div>
+      </div>
+      <div class="duo-card">
+        <div class="name">MacBook Air</div>
+        <div class="lede">轻薄 · 强劲 · 持久续航。</div>
+        <div class="links" style="display:flex;justify-content:center;gap:16px">
+          <a class="btn-link" href="products.html?cat=ELEC">选购</a>
+          <a class="btn-link" href="products.html?cat=ELEC">对比机型 ›</a>
+        </div>
+        <div class="glyph">💻</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 推荐 ============ -->
+<section class="section" style="padding-top:0;">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">精选好物</div>
+      <h2>推荐 <span class="text-blue">给你。</span></h2>
+      <div class="lede">基于编辑团队与热销榜单。</div>
+    </div>
+    <div class="product-grid" id="featuredGrid"></div>
+  </div>
+</section>
+
+<!-- ============ 服务 ============ -->
+<section class="services">
+  <div class="container">
+    <ul>
+      <li><b>正品保障</b>AUTHENTIC</li>
+      <li><b>全国包邮</b>FREE SHIP</li>
+      <li><b>7 天无理由</b>7D RETURN</li>
+      <li><b>顺丰速运</b>SF EXPRESS</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ 引言 ============ -->
+<section class="quote">
+  <div class="container">
+    <blockquote>
+      "好物不是昂贵的堆砌。<br>
+      而是让日常，<br>
+      多一点从容。"
+    </blockquote>
+    <cite>— Pure 商城 · 主理人手记</cite>
+  </div>
+</section>
+
+<!-- ============ Footer ============ -->
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-top">
+      <div class="footer-col">
+        <h4>选购</h4>
+        <ul>
+          <li><a href="products.html?cat=ELEC">电子</a></li>
+          <li><a href="products.html?cat=HOME">家居</a></li>
+          <li><a href="products.html?cat=STYLE">服饰</a></li>
+          <li><a href="products.html?cat=BEAUTY">美妆</a></li>
+          <li><a href="products.html?cat=FOOD">食品</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>服务</h4>
+        <ul>
+          <li><a href="#">配送说明</a></li>
+          <li><a href="#">退换政策</a></li>
+          <li><a href="#">订单查询</a></li>
+          <li><a href="#">客服中心</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>账户</h4>
+        <ul>
+          <li><a href="user.html">登录账户</a></li>
+          <li><a href="user.html">注册</a></li>
+          <li><a href="user.html">我的订单</a></li>
+          <li><a href="user.html">优惠券</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>关于</h4>
+        <ul>
+          <li><a href="#">品牌故事</a></li>
+          <li><a href="#">招贤纳士</a></li>
+          <li><a href="#">媒体 kit</a></li>
+          <li><a href="#">隐私政策</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>联系</h4>
+        <ul>
+          <li><a href="#">客服热线</a></li>
+          <li><a href="#">门店地址</a></li>
+          <li><a href="#">投诉建议</a></li>
+          <li><a href="#">商务合作</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>Copyright © 2026 Pure 商城 Inc. 保留所有权利。</span>
+      <div class="links">
+        <a href="#">隐私政策</a>
+        <a href="#">使用条款</a>
+        <a href="#">销售政策</a>
+        <a href="#">法律</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/data.js"></script>
+<script src="js/pure.js"></script>
+</body>
+</html>

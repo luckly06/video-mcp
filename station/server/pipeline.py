@@ -155,9 +155,13 @@ def list_assets():
     return items
 
 
-def probe_video(path):
-    """用 ffprobe 读取视频关键信息。🔒 F3.3：src 必须落在 VIDEO_DIR 白名单内。"""
-    p = _resolve_safe(path, VIDEO_DIR, must_exist=True)
+def probe_video(path, base_dir=None):
+    """用 ffprobe 读取视频关键信息。🔒 F3.3：path 必须落在 base_dir 白名单内。
+
+    base_dir 缺省 VIDEO_DIR（素材只读）；探测产出文件时由调用方传 OUTPUT_DIR。
+    """
+    base = base_dir if base_dir is not None else VIDEO_DIR
+    p = _resolve_safe(path, base, must_exist=True)
 
     if not FFPROBE.exists():
         raise PipelineError(f"ffprobe 未找到: {FFPROBE}")
@@ -574,7 +578,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     if rc != 0:
         raise PipelineError(f"ffmpeg 去重失败:\n{err[-2000:]}")
 
-    out_info = probe_video(str(out_path))
+    out_info = probe_video(str(out_path), base_dir=OUTPUT_DIR)
 
     # --- 自检升级 ---
     # duration_close：启用时序维度时用「范围口径」（预期时长 ±3%），否则沿用 |Δ|<1.0s
@@ -619,7 +623,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     }
 
 
-def batch_fission(src, count=3, params=None,
+def batch_fission(src, count=5, params=None,
                   level=None, dimensions=None, flip_mode=None):
     """裂变：同一素材生成 count 个不同参数的变体（本期增量：档位/维度透传 + 距离矩阵）。
 
@@ -688,11 +692,14 @@ def batch_fission(src, count=3, params=None,
                 "时间错位已铺开但仍不达标 → 可裁窗口偏小；"
                 "追加杠杆：给各变体指定不同 flip_mode（h/v/90）。")
 
+    all_unique = len(set(md5s)) == len(md5s)
+    delivery_ready = all_unique and matrix.get("all_pass") is True
     return {
         "src": base_info["name"],
         "count": count,
         "variants": results,
-        "all_unique": len(set(md5s)) == len(md5s),
+        "all_unique": all_unique,
+        "delivery_ready": delivery_ready,
         "matrix": matrix,
         "separation": separation,
     }

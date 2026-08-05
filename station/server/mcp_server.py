@@ -22,10 +22,13 @@ import sys
 import json
 import uuid
 import base64
+import hashlib
+import hmac
 import socket
 import subprocess
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pipeline as P  # noqa: E402
@@ -40,6 +43,10 @@ _LOGS = _STATION / "logs"
 # 长任务 handle 存储（stateless 协议 + 显式 handle 应用状态）
 # key: job_id -> {status, result, ...}。文件持久化，任意进程可读。
 _JOBS_FILE = _LOGS / "jobs.json"
+
+# requestState 是客户端可见的无状态确认句柄。进程内随机密钥用于给
+# name + arguments 签名，防止第二阶段请求替换用户已确认的参数。
+_REQUEST_STATE_KEY = os.urandom(32)
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +72,35 @@ def _new_job(kind, meta):
     jobs[jid] = {"job_id": jid, "kind": kind, "status": "completed", "meta": meta}
     _save_jobs(jobs)
     return jid
+
+
+def _request_state(name, args):
+    """生成绑定当前工具名和参数的无状态确认令牌。"""
+    payload = json.dumps(
+        {"name": name, "arguments": args},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    body = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    signature = hmac.new(_REQUEST_STATE_KEY, body.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{body}.{signature}"
+
+
+def _valid_request_state(state, name, args):
+    """验证 requestState 未被篡改，且仍绑定当前 name + arguments。"""
+    if not isinstance(state, str) or "." not in state:
+        return False
+    body, signature = state.rsplit(".", 1)
+    expected = hmac.new(_REQUEST_STATE_KEY, body.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return False
+    try:
+        padded = body + "=" * (-len(body) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    except Exception:
+        return False
+    return decoded == {"name": name, "arguments": args}
 
 
 # ---------------------------------------------------------------------------
@@ -171,20 +207,38 @@ TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
 # Hook 调用（Agent 无法绕开：tools/call 路径独占，hook 是唯一道闸）
 # ---------------------------------------------------------------------------
 def _run_hook(script, payload):
-    """执行 hook 脚本，stdin 传 JSON，stdout 收结构化控制字段。"""
+    """执行 hook；PreToolUse 故障拒绝执行，PostToolUse 故障仅报告。"""
+    fail_closed = script == "pre_tool_guard.py"
+
+    def failed(reason):
+        return {
+            "continue": not fail_closed,
+            "permissionDecision": "deny" if fail_closed else "allow",
+            "reason": reason,
+            "hook_error": reason,
+        }
+
     path = _HOOKS / script
     if not path.exists():
-        return {"continue": True}
+        return failed(f"Hook 缺失: {path}")
     try:
         proc = subprocess.run(
             [sys.executable, str(path)],
             input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
         )
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode("utf-8", "replace").strip()
+            return failed(f"Hook 退出码 {proc.returncode}: {stderr or script}")
         out = proc.stdout.decode("utf-8", "replace").strip()
-        return json.loads(out) if out else {"continue": True}
+        if not out:
+            return failed(f"Hook 无结构化输出: {script}")
+        result = json.loads(out)
+        if not isinstance(result, dict) or not isinstance(result.get("continue"), bool):
+            return failed(f"Hook 输出无效: {script}")
+        return result
     except Exception as e:
-        return {"continue": True, "hook_error": str(e)}
+        return failed(f"Hook 执行异常: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +331,7 @@ def handle_rpc(req, headers):
         # 若客户端未带确认，warned/blocked 工具返回 InputRequiredResult
         input_responses = params.get("inputResponses")
         if tool["_tier"] in ("warned", "blocked") and not input_responses:
-            state = base64.b64encode(json.dumps({"name": name, "arguments": args}).encode()).decode()
+            state = _request_state(name, args)
             tier_msg = "⚠️ 高风险操作" if tool["_tier"] == "warned" else "🛑 不可逆删除"
             return _ok(rpc_id, {
                 "resultType": "input_required",
@@ -290,9 +344,18 @@ def handle_rpc(req, headers):
                 },
                 "requestState": state,
             })
-        # 若带了确认但为否，中止
+        # 若带了确认但为否，中止；确认执行必须携带与原调用绑定的 requestState。
         if input_responses and input_responses.get("confirm") is False:
             return _ok(rpc_id, _content(f"用户取消了 {name}。"))
+        if tool["_tier"] in ("warned", "blocked"):
+            if not isinstance(input_responses, dict) or input_responses.get("confirm") is not True:
+                return _ok(rpc_id, _content(
+                    "❌ 人工确认响应无效：confirm 必须为 true。", is_error=True))
+            if not _valid_request_state(params.get("requestState"), name, args):
+                return _ok(rpc_id, _content(
+                    "❌ 人工确认状态无效或与当前参数不匹配，请重新发起操作并确认。",
+                    is_error=True,
+                ))
 
         # F3.2 镜像：tier 求值器只读 body.get(field) 顶层；dimensions.flip 嵌套
         # 不被 rules.json tier2（field=flip, value=true）命中。必须在这里镜像到
@@ -334,6 +397,50 @@ def handle_rpc(req, headers):
     return _err(rpc_id, -32601, f"未知方法: {method}")
 
 
+def _allowed_host(host):
+    """仅允许浏览器或客户端访问本机监听地址。"""
+    if not isinstance(host, str) or not host:
+        return False
+    value = host.strip().lower()
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing < 0 or value[:closing + 1] != "[::1]":
+            return False
+        suffix = value[closing + 1:]
+        return suffix == "" or (suffix.startswith(":") and suffix[1:].isdigit())
+    if ":" in value:
+        hostname, port = value.rsplit(":", 1)
+        if not port.isdigit():
+            return False
+    else:
+        hostname = value
+    return hostname in ("127.0.0.1", "localhost")
+
+
+def _allowed_origin(origin):
+    """允许非浏览器请求、file:// 的 null Origin 与本机网页。"""
+    if origin in (None, "", "null"):
+        return True
+    try:
+        parsed = urlsplit(origin)
+    except Exception:
+        return False
+    return parsed.scheme in ("http", "https") and parsed.hostname in ("127.0.0.1", "localhost")
+
+
+def _open_output_folder():
+    """在本机文件管理器中打开固定的项目 output 目录，不接受客户端路径。"""
+    output_dir = P.OUTPUT_DIR.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        os.startfile(str(output_dir))
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(output_dir)])
+    else:
+        subprocess.Popen(["xdg-open", str(output_dir)])
+    return output_dir
+
+
 def _summary(name, result):
     if name == "dedup_video":
         checks = result.get("checks") or {}
@@ -362,6 +469,7 @@ def _summary(name, result):
             "count": result.get("count"),
             "all_unique": result.get("all_unique"),
             "all_pass": wrapper.get("all_pass") if isinstance(wrapper, dict) else None,
+            "delivery_ready": result.get("delivery_ready"),
             "off_diagonal_mean": round(sum(off) / len(off), 3) if off else None,
             "off_diagonal_min": round(min(off), 3) if off else None,
         }
@@ -388,16 +496,40 @@ class Handler(BaseHTTPRequestHandler):
         pass  # 静默默认日志
 
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin")
+        if origin == "null":
+            self.send_header("Access-Control-Allow-Origin", "null")
+        elif origin and _allowed_origin(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name")
 
+    def _request_allowed(self):
+        return (_allowed_host(self.headers.get("Host"))
+                and _allowed_origin(self.headers.get("Origin")))
+
     def do_OPTIONS(self):
+        if not self._request_allowed():
+            self.send_response(403)
+            self.end_headers()
+            return
         self.send_response(204)
         self._cors()
         self.end_headers()
 
     def do_POST(self):
+        if not self._request_allowed():
+            self.send_response(403)
+            self.end_headers()
+            return
+        if self.path.rstrip("/") == "/local/open-output":
+            try:
+                output_dir = _open_output_folder()
+            except Exception as exc:
+                self._respond_http(500, {"ok": False, "message": f"无法打开输出文件夹: {exc}"})
+                return
+            self._respond_http(200, {"ok": True, "path": str(output_dir)})
+            return
         if self.path.rstrip("/") not in ("/mcp", ""):
             self.send_response(404)
             self._cors()
@@ -419,14 +551,17 @@ class Handler(BaseHTTPRequestHandler):
         resp = handle_rpc(req, headers)
         self._respond(resp)
 
-    def _respond(self, obj):
+    def _respond_http(self, status, obj):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self._cors()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _respond(self, obj):
+        self._respond_http(200, obj)
 
 
 def _port_in_use(host, port):

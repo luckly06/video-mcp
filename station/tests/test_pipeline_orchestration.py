@@ -14,6 +14,7 @@ test_pipeline_orchestration.py — 模块二（管线编排）单测
 test_pipeline_e2e.py。
 """
 
+import inspect
 import random
 import sys
 from pathlib import Path
@@ -233,6 +234,50 @@ def test_clamp_speed_allows_slowdown_always():
     factor, note = P._clamp_speed_for_floor(0.9, 4.0)
     assert factor == 0.9
     assert note is None
+
+
+# ---------------------------------------------------------------------------
+# Feature 2.4 — batch_fission 公开默认值
+# ---------------------------------------------------------------------------
+def test_batch_fission_default_count_matches_prd():
+    """PRD D-04、rules auto_fill 与 Web 控件统一默认生成 5 个变体。"""
+    default = inspect.signature(P.batch_fission).parameters["count"].default
+    assert default == 5
+
+
+@pytest.mark.parametrize("md5s,matrix_pass,expected", [
+    (["a", "b"], True, True),
+    (["a", "a"], True, False),
+    (["a", "b"], False, False),
+    (["a", "b"], None, False),
+])
+def test_batch_fission_delivery_ready_requires_both_gates(
+        monkeypatch, md5s, matrix_pass, expected):
+    """只有 MD5 全唯一且矩阵明确通过时才允许交付。"""
+    monkeypatch.setattr(P, "probe_video", lambda _src: {
+        "name": "x.mp4", "duration": 10.0,
+    })
+    calls = {"i": 0}
+
+    def fake_dedup(*_args, **_kwargs):
+        i = calls["i"]
+        calls["i"] += 1
+        return {
+            "output_path": f"x_{i}.mp4",
+            "output": {"md5": md5s[i]},
+            "applied_params": {"trim_skipped": False},
+            "checks": {"all_passed": True},
+        }
+
+    monkeypatch.setattr(P, "dedup_video", fake_dedup)
+    monkeypatch.setattr(P.M, "distance_matrix", lambda _paths: {
+        "count": 2, "all_pass": matrix_pass,
+        "matrix": [[None, 15], [15, None]],
+        "too_close_pairs": [], "min_pair": None,
+    })
+    result = P.batch_fission("x.mp4", count=2)
+    assert result["all_unique"] is (len(set(md5s)) == len(md5s))
+    assert result["delivery_ready"] is expected
 
 
 # ---------------------------------------------------------------------------

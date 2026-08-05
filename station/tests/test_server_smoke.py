@@ -12,9 +12,13 @@
   - _summary dedup_video 包含 phash_passed 和 applied_level
 """
 
+import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -91,6 +95,7 @@ class _StubPipeline:
             "src": src,
             "count": n,
             "all_unique": True,
+            "delivery_ready": True,
             "variants": [{"index": i + 1, "output_path": f"/tmp/x_v{i+1}.mp4",
                           "md5": f"m{i}", "applied_params": {}, "checks": {}}
                          for i in range(n)],
@@ -125,14 +130,26 @@ class _StubPipeline:
 
 
 @pytest.fixture
-def stub(monkeypatch):
+def stub(monkeypatch, tmp_path):
     sp = _StubPipeline()
     monkeypatch.setattr(S, "P", sp)
+    monkeypatch.setattr(S, "_LOGS", tmp_path)
+    monkeypatch.setattr(S, "_JOBS_FILE", tmp_path / "jobs.json")
     return sp
 
 
 def _req(method, **kw):
     return {"jsonrpc": "2.0", "id": 1, "method": method, "params": kw}
+
+
+def _confirmed_req(name, arguments):
+    return _req(
+        "tools/call",
+        name=name,
+        arguments=arguments,
+        inputResponses={"confirm": True},
+        requestState=S._request_state(name, arguments),
+    )
 
 
 def _bypass_hook(monkeypatch, captured=None):
@@ -142,6 +159,149 @@ def _bypass_hook(monkeypatch, captured=None):
             captured["body"] = dict(payload.get("tool_input") or {})
         return {"continue": True}
     monkeypatch.setattr(S, "_run_hook", fake_hook)
+
+
+# ----------------- 人工确认状态绑定 -----------------
+def test_warned_tool_returns_bound_request_state(stub, monkeypatch):
+    _bypass_hook(monkeypatch)
+    args = {"src": "x.mp4", "dimensions": {"picture": True}}
+    first = S.handle_rpc(_req(
+        "tools/call", name="dedup_video", arguments=args), {})
+    result = first["result"]
+    assert result["resultType"] == "input_required"
+    assert S._valid_request_state(result["requestState"], "dedup_video", args) is True
+
+
+def test_confirm_without_request_state_is_rejected(stub, monkeypatch):
+    _bypass_hook(monkeypatch)
+    response = S.handle_rpc(_req(
+        "tools/call",
+        name="dedup_video",
+        arguments={"src": "x.mp4"},
+        inputResponses={"confirm": True},
+    ), {})
+    assert response["result"]["isError"] is True
+    assert "确认状态无效" in response["result"]["content"][0]["text"]
+    assert stub.calls == []
+
+
+def test_confirm_state_rejects_changed_arguments(stub, monkeypatch):
+    _bypass_hook(monkeypatch)
+    confirmed = {"src": "x.mp4", "level": "light"}
+    changed = {"src": "x.mp4", "level": "heavy"}
+    response = S.handle_rpc(_req(
+        "tools/call",
+        name="dedup_video",
+        arguments=changed,
+        inputResponses={"confirm": True},
+        requestState=S._request_state("dedup_video", confirmed),
+    ), {})
+    assert response["result"]["isError"] is True
+    assert stub.calls == []
+
+
+def test_confirm_state_rejects_tampered_signature(stub, monkeypatch):
+    _bypass_hook(monkeypatch)
+    args = {"src": "x.mp4"}
+    state = S._request_state("dedup_video", args)
+    response = S.handle_rpc(_req(
+        "tools/call",
+        name="dedup_video",
+        arguments=args,
+        inputResponses={"confirm": True},
+        requestState=state[:-1] + ("0" if state[-1] != "0" else "1"),
+    ), {})
+    assert response["result"]["isError"] is True
+    assert stub.calls == []
+
+
+# ----------------- Hook / 本地来源安全门 -----------------
+def test_pre_hook_failure_is_fail_closed(monkeypatch, tmp_path):
+    monkeypatch.setattr(S, "_HOOKS", tmp_path)
+    result = S._run_hook("pre_tool_guard.py", {"tool_name": "dedup_video"})
+    assert result["continue"] is False
+    assert result["permissionDecision"] == "deny"
+
+
+def test_post_hook_failure_does_not_retroactively_fail_operation(monkeypatch, tmp_path):
+    monkeypatch.setattr(S, "_HOOKS", tmp_path)
+    result = S._run_hook("post_tool_audit.py", {"tool_name": "probe_video"})
+    assert result["continue"] is True
+    assert result["hook_error"]
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8765", "localhost:8765", "[::1]:8765"])
+def test_local_hosts_are_allowed(host):
+    assert S._allowed_host(host) is True
+
+
+@pytest.mark.parametrize("host", [
+    "", "evil.example:8765", "127.0.0.1.evil.example",
+    "[::1].evil:8765", "localhost:not-a-port",
+])
+def test_non_local_hosts_are_rejected(host):
+    assert S._allowed_host(host) is False
+
+
+@pytest.mark.parametrize("origin", [None, "null", "http://127.0.0.1:8080", "https://localhost"])
+def test_local_origins_are_allowed(origin):
+    assert S._allowed_origin(origin) is True
+
+
+@pytest.mark.parametrize("origin", ["https://evil.example", "file://evil/path", "javascript:alert(1)"])
+def test_non_local_origins_are_rejected(origin):
+    assert S._allowed_origin(origin) is False
+
+
+@pytest.fixture
+def local_http_server():
+    server = S.ThreadingHTTPServer(("127.0.0.1", 0), S.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_open_output_endpoint_opens_fixed_directory(local_http_server, monkeypatch, tmp_path):
+    opened = tmp_path / "output"
+    monkeypatch.setattr(S, "_open_output_folder", lambda: opened)
+    request = Request(
+        local_http_server + "/local/open-output",
+        data=b"",
+        method="POST",
+        headers={"Origin": "http://127.0.0.1:8080"},
+    )
+    with urlopen(request, timeout=3) as response:
+        body = json.loads(response.read().decode("utf-8"))
+        assert response.status == 200
+        assert response.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:8080"
+    assert body == {"ok": True, "path": str(opened)}
+
+
+def test_open_output_endpoint_rejects_non_local_origin(local_http_server, monkeypatch):
+    called = False
+
+    def fake_open():
+        nonlocal called
+        called = True
+        return Path("output")
+
+    monkeypatch.setattr(S, "_open_output_folder", fake_open)
+    request = Request(
+        local_http_server + "/local/open-output",
+        data=b"",
+        method="POST",
+        headers={"Origin": "https://evil.example"},
+    )
+    with pytest.raises(HTTPError) as exc_info:
+        urlopen(request, timeout=3)
+    assert exc_info.value.code == 403
+    assert called is False
 
 
 # ----------------- schema -----------------
@@ -166,12 +326,8 @@ def test_flip_dimension_is_mirrored_to_top_level(stub, monkeypatch):
     captured = {}
     _bypass_hook(monkeypatch, captured)
 
-    S.handle_rpc(_req(
-        "tools/call",
-        name="dedup_video",
-        arguments={"src": "x.mp4", "dimensions": {"flip": True}},
-        inputResponses={"confirm": True},
-    ), {})
+    args = {"src": "x.mp4", "dimensions": {"flip": True}}
+    S.handle_rpc(_confirmed_req("dedup_video", args), {})
 
     assert captured["body"].get("flip") is True, \
         f"dimensions.flip 未镜像到顶层 args['flip']，hook tier2 无法命中：{captured}"
@@ -181,12 +337,8 @@ def test_no_flip_dimension_means_no_top_level_flip(stub, monkeypatch):
     captured = {}
     _bypass_hook(monkeypatch, captured)
 
-    S.handle_rpc(_req(
-        "tools/call",
-        name="dedup_video",
-        arguments={"src": "x.mp4", "dimensions": {"rotate": False}},
-        inputResponses={"confirm": True},
-    ), {})
+    args = {"src": "x.mp4", "dimensions": {"rotate": False}}
+    S.handle_rpc(_confirmed_req("dedup_video", args), {})
 
     assert "flip" not in captured["body"], \
         f"无 flip 时不应注入顶层 flip 字段：{captured}"
@@ -196,16 +348,12 @@ def test_no_flip_dimension_means_no_top_level_flip(stub, monkeypatch):
 def test_dedup_video_passes_level_seed_dimensions_flip_mode(stub, monkeypatch):
     _bypass_hook(monkeypatch)
 
-    S.handle_rpc(_req(
-        "tools/call",
-        name="dedup_video",
-        arguments={
-            "src": "x.mp4", "level": "heavy", "seed": 42,
-            "dimensions": {"crop": False, "speed": False},
-            "flip_mode": "h",
-        },
-        inputResponses={"confirm": True},
-    ), {})
+    args = {
+        "src": "x.mp4", "level": "heavy", "seed": 42,
+        "dimensions": {"crop": False, "speed": False},
+        "flip_mode": "h",
+    }
+    S.handle_rpc(_confirmed_req("dedup_video", args), {})
 
     c = stub.calls[-1]
     assert c["fn"] == "dedup_video"
@@ -218,15 +366,11 @@ def test_dedup_video_passes_level_seed_dimensions_flip_mode(stub, monkeypatch):
 def test_batch_fission_passes_level_dimensions_flip_mode_count(stub, monkeypatch):
     _bypass_hook(monkeypatch)
 
-    S.handle_rpc(_req(
-        "tools/call",
-        name="batch_fission",
-        arguments={
-            "src": "x.mp4", "count": 4, "level": "light",
-            "dimensions": {"flip": True}, "flip_mode": "v",
-        },
-        inputResponses={"confirm": True},
-    ), {})
+    args = {
+        "src": "x.mp4", "count": 4, "level": "light",
+        "dimensions": {"flip": True}, "flip_mode": "v",
+    }
+    S.handle_rpc(_confirmed_req("batch_fission", args), {})
 
     c = stub.calls[-1]
     assert c["fn"] == "batch_fission"
@@ -256,10 +400,22 @@ def test_summary_batch_fission_computes_off_diagonal_min_avg():
             "min_pair": None, "too_close_pairs": [],
         },
     }
+    result["delivery_ready"] = True
     s = S._summary("batch_fission", result)
     assert s["all_pass"] is True
+    assert s["delivery_ready"] is True
     assert s["off_diagonal_min"] == 15
     assert s["off_diagonal_mean"] == round((15 + 16 + 15 + 17 + 16 + 17) / 6, 3)
+
+
+def test_summary_batch_fission_delivery_not_ready_when_matrix_fails():
+    result = {
+        "count": 2, "all_unique": True, "delivery_ready": False,
+        "matrix": {"count": 2, "all_pass": False,
+                   "matrix": [[None, 8], [8, None]],
+                   "min_pair": None, "too_close_pairs": []},
+    }
+    assert S._summary("batch_fission", result)["delivery_ready"] is False
 
 
 def test_summary_batch_fission_empty_matrix():

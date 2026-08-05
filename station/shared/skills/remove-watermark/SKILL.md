@@ -1,7 +1,7 @@
 ---
 name: remove-watermark
 description: 需要按平台模板去除视频水印（抖音/腾讯/西瓜等固定坐标水印）时使用本 skill。
-tools: [list_watermark_templates, probe_video, remove_watermark, get_job]
+tools: [list_watermark_templates, probe_video, remove_watermark]
 chain: 建议先 list_watermark_templates 选平台、probe_video 探测源，再 remove_watermark
 ---
 
@@ -26,8 +26,8 @@ flowchart TD
     C --> D{选定平台 platform?}
     D -->|平台未列出| Z[中止: 无匹配模板<br/>向人报告]
     D -->|已选定| E[remove_watermark&#40;src, platform&#41;<br/>warned: 弹窗确认平台]
-    E --> F[拿到输出与 job_id]
-    F --> G[get_job&#40;job_id&#41; / 人工验片]
+    E --> F[拿到 output_path 与 output_md5]
+    F --> G[按 output_path 人工验片]
     G --> H{水印区域已清除?}
     H -->|否, 位置不对| I[诊断: 平台选错或模板坐标不符<br/>换 platform 重试]
     I --> E
@@ -42,11 +42,11 @@ flowchart TD
 | 2 探测 | `probe_video{src}` | 确认源素材分辨率——模板坐标与分辨率相关。 |
 | 3 选平台 | —（人工） | 根据素材来源选定 `platform`。 |
 | 4 去水印 | `remove_watermark{src, platform, out_name?}` | warned 工具：弹窗确认平台后执行 delogo。 |
-| 5 验片 | `get_job{job_id}` / 人工 | 检查水印区域是否已清除。 |
+| 5 验片 | —（人工） | 使用本次返回的 `output_path` 检查水印区域是否已清除；`remove_watermark` 不创建 `job_id`。 |
 
 ## 失败处理
 
 - **目标平台不在模板列表**：无匹配坐标模板，中止并向人报告，勿盲选其他平台。
 - **水印未清除干净或位置不对**：多为 `platform` 选错（模板坐标与实际水印位置不符）。换正确 `platform` 后回到步骤 4 重试。
 
-相关：处理完可接 [[dedup-video]] 进一步去重，或 [[batch-fission]] 批量分发。
+相关：若还要接 [[dedup-video]] 或 [[batch-fission]]，必须先把 `output_path` 受控复制回 `station/assets/`，再以新素材名执行 `probe_video`；当前工具协议不支持把 `output_path` 直接作为后续 `src`。

@@ -10,7 +10,7 @@ metrics.py — 感知度量域（🆕 本期新增，对齐 PRD D-01 / DD 模块
     使裁剪/变速变体（时长/构图变了）仍能按「同一相对时刻」比对内容差异，
     而非被时序错位污染。
   - 反向用阈值（判「足够不同」）：距离越大越好。
-    达标 = phash_avg >= 12 且 phash_min >= 8（PRD D-01；Q-01 校验后仅改常量）。
+    达标 = phash_avg >= 12 且 weak_frame_ratio <= 0.10；phash_min 仅展示，不参与判定。
   - 降级兜底：无 imagehash/Pillow 时走 ffmpeg signature，只给 pass/fail 二值。
 
 依赖：imagehash（依赖 Pillow）为主；缺失时自动降级。ffmpeg 复用 pipeline 常量。
@@ -18,6 +18,7 @@ metrics.py — 感知度量域（🆕 本期新增，对齐 PRD D-01 / DD 模块
 """
 
 import os
+import json
 import shutil
 import tempfile
 import subprocess
@@ -50,6 +51,27 @@ SAMPLE_FRAMES = 16    # 默认抽帧数
 
 
 # ---------------------------------------------------------------------------
+# 轻量 ffprobe 取时长（metrics 内部用，不走白名单校验；路径安全由 pipeline 保证）
+# ---------------------------------------------------------------------------
+def _probe_duration(video_path):
+    """ffprobe 读 format.duration。失败返回 0.0。"""
+    if not P.FFPROBE.exists():
+        raise P.PipelineError(f"ffprobe 未找到: {P.FFPROBE}")
+    cmd = [
+        str(P.FFPROBE), "-v", "quiet", "-print_format", "json",
+        "-show_format", str(video_path),
+    ]
+    rc, out, err = P._run(cmd, timeout=60)
+    if rc != 0:
+        return 0.0
+    try:
+        data = json.loads(out)
+        return float(data.get("format", {}).get("duration") or 0.0)
+    except Exception:
+        return 0.0
+
+
+# ---------------------------------------------------------------------------
 # backend 探测：imagehash/Pillow 是否可用，决定主路径 or signature 兜底
 # ---------------------------------------------------------------------------
 def has_phash_backend():
@@ -77,8 +99,9 @@ def _extract_frames(video_path, n=SAMPLE_FRAMES, tmpdir=None):
     if not P.FFMPEG.exists():
         raise P.PipelineError(f"ffmpeg 未找到: {P.FFMPEG}")
 
-    info = P.probe_video(str(video_path))
-    duration = float(info.get("duration") or 0.0)
+    # 轻量 ffprobe 取时长：metrics 职责是度量，路径安全由 pipeline 调用方保证
+    # （不走 P.probe_video，避免对 OUTPUT_DIR 下产出文件误用 VIDEO_DIR 白名单）
+    duration = _probe_duration(video_path)
     if duration <= 0:
         raise P.PipelineError(f"无法获取时长，抽帧中止: {video_path}")
 

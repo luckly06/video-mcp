@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>结算 / Pure · 商城</title>
+  <link rel="stylesheet" href="css/pure.css">
+  <style>
+    .checkout-grid {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: var(--sp-5);
+    }
+    .checkout-grid .left { display: flex; flex-direction: column; gap: var(--sp-4); }
+    .checkout-grid .right { position: sticky; top: 80px; align-self: start; }
+    .block {
+      padding: var(--sp-4);
+      background: var(--color-bg);
+      border: 1px solid var(--color-line);
+      border-radius: var(--r-md);
+    }
+    .block-title {
+      font-size: var(--fs-lg);
+      font-weight: 600;
+      letter-spacing: -.01em;
+      padding-bottom: var(--sp-3);
+      border-bottom: 1px solid var(--color-line);
+      margin-bottom: var(--sp-3);
+    }
+
+    .addr-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+    .addr-card {
+      display: flex; gap: var(--sp-3); align-items: flex-start;
+      padding: var(--sp-3);
+      background: var(--color-bg-soft);
+      border: 1px solid var(--color-line);
+      border-radius: var(--r-md);
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    .addr-card:hover { border-color: var(--color-blue); }
+    .addr-card input { margin-top: 4px; accent-color: var(--color-blue); }
+    .addr-card.active {
+      border-color: var(--color-blue);
+      background: var(--color-bg);
+      box-shadow: 0 0 0 1px var(--color-blue);
+    }
+    .addr-card .top {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 4px;
+    }
+    .addr-card .top b { font-size: var(--fs-base); font-weight: 600; }
+    .addr-card .top span {
+      font-size: var(--fs-sm);
+      color: var(--color-text-2);
+    }
+    .tag-default {
+      font-size: var(--fs-xs);
+      padding: 2px 8px;
+      background: var(--color-blue);
+      color: #fff;
+      border-radius: var(--r-pill);
+    }
+    .addr-detail {
+      font-size: var(--fs-sm);
+      color: var(--color-text-2);
+    }
+
+    .pay-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: var(--sp-2);
+    }
+    .pay-opt {
+      padding: var(--sp-3);
+      background: var(--color-bg-soft);
+      border: 1px solid var(--color-line);
+      border-radius: var(--r-md);
+      cursor: pointer;
+      display: flex; align-items: center;
+      gap: 10px;
+      font-size: var(--fs-base);
+      transition: border-color .15s, background .15s;
+    }
+    .pay-opt input { accent-color: var(--color-blue); }
+    .pay-opt:hover { border-color: var(--color-blue); }
+    .pay-opt.active {
+      border-color: var(--color-blue);
+      background: var(--color-bg);
+      box-shadow: 0 0 0 1px var(--color-blue);
+    }
+
+    .co-items { display: flex; flex-direction: column; gap: var(--sp-2); }
+    .co-item {
+      display: grid;
+      grid-template-columns: 60px 1fr auto auto;
+      gap: var(--sp-3);
+      align-items: center;
+      padding: var(--sp-2) var(--sp-3);
+      background: var(--color-bg-soft);
+      border-radius: var(--r-md);
+    }
+    .co-item .thumb {
+      width: 56px; height: 56px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 36px;
+      background: var(--color-bg);
+      border-radius: var(--r-md);
+    }
+    .co-item .name { font-size: var(--fs-base); font-weight: 500; margin-bottom: 4px; }
+    .co-item .spec { font-size: var(--fs-sm); color: var(--color-text-2); }
+    .co-item .qty { font-size: var(--fs-sm); color: var(--color-text-2); }
+    .co-item .price {
+      font-size: var(--fs-base);
+      font-weight: 600;
+    }
+
+    .summary .sum-row {
+      display: flex; justify-content: space-between;
+      padding: 8px 0;
+      font-size: var(--fs-base);
+      color: var(--color-text-2);
+    }
+    .summary .sum-row b { color: var(--color-text); font-weight: 500; }
+    .summary .sum-row.big {
+      margin: var(--sp-3) 0;
+      padding: var(--sp-3) 0;
+      border-top: 1px solid var(--color-line);
+      border-bottom: 1px solid var(--color-line);
+    }
+    .summary .sum-row.big b {
+      font-size: var(--fs-2xl);
+      font-weight: 600;
+      letter-spacing: -.01em;
+    }
+
+    @media (max-width: 1024px) {
+      .checkout-grid { grid-template-columns: 1fr; }
+      .checkout-grid .right { position: static; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="top-bar" id="marqueeTrack"></div>
+
+<header class="site-header">
+  <div class="container">
+    <a href="index.html" class="site-logo">Pure<span class="light"> · Mall</span></a>
+    <nav class="site-nav">
+      <a href="index.html">首页</a>
+      <a href="products.html">商店</a>
+      <a href="cart.html">购物车</a>
+      <a href="checkout.html" class="active">结算</a>
+      <a href="user.html">账户</a>
+    </nav>
+    <div class="site-header-actions">
+      <a href="user.html">搜索</a>
+      <a href="user.html">账户</a>
+      <a href="cart.html" class="cart-link">购物车<span class="count">0</span></a>
+    </div>
+  </div>
+</header>
+
+<section class="section" style="padding-top: var(--sp-5);">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">FINAL REVIEW</div>
+      <h2>结算。</h2>
+      <div class="lede">请审慎确认订单信息。</div>
+    </div>
+    <div id="checkoutRoot"></div>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-bottom" style="border-top:none;">
+      <span>Copyright © 2026 Pure 商城 Inc.</span>
+      <div class="links">
+        <a href="#">隐私政策</a>
+        <a href="#">使用条款</a>
+        <a href="#">销售政策</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="../js/data.js"></script>
+<script src="js/pure.js"></script>
+</body>
+</html>

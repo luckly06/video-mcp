@@ -24,13 +24,19 @@
 
 ### 0.2 pHash 达标口径（依据 PRD D-01，§8.2/§11）
 
-- **达标 = `phash_avg ≥ 12` 且 `phash_min ≥ 8`**（逐帧 64 位 pHash 汉明距离的平均与最小）。
-- 反向用阈值（判「足够不同」）：距离越大越好。阈值待 Q-01 用真实素材标定后固化，DD 以此为基线常量。
+> ⚠️ **口径已校准（Q-01 实测后变更，2026-08-03 落地，超出 PRD §16.2「constants only」既成事实）**：原 DD 写「`phash_avg ≥ 12` 且 `phash_min ≥ 8`」，实测发现 `phash_min` 是极值统计量，对抽帧数 n 单调不增（同素材 n=8→min=6 / n=32→min=2 / n=48→min=4），200 次重抽样 n=16 时 min 跨度达 6，不可作门。**改为 `phash_avg ≥ 12` 且 `weak_frame_ratio ≤ 0.10`**（弱帧 = 单帧距离 < 8，弱帧占比 = 弱帧数 / 比对帧数；占比是比例估计量，跨 n=8/12/16/24 稳定在 0.103–0.106）。`phash_min` 保留输出**仅作展示，不参与 passed 判定**。归因与错题本见 [../eval/沉淀失败原因.md#historical_lessons](../eval/沉淀失败原因.md)。
+
+- **达标 = `phash_avg ≥ PHASH_AVG_MIN(=12)` 且 `weak_frame_ratio ≤ WEAK_FRAME_MAX_RATIO(=0.10)`**（逐帧 64 位 pHash 汉明距离平均 + 弱帧占比门）。
+- `phash_min` 保留输出，仅展示，不参与 passed 判定（`threshold.min_min_enforced=false`）。
+- 反向用阈值（判「足够不同」）：距离越大越好；弱帧越少越好。
 
 ### 0.3 最短时长保护（依据 PRD §6/§12）
 
-- 成片时长 **<7s 禁再截**；变速/去头尾后成片**至少保留 5s**（硬下限）。
-- 掐头去尾总量 **> 原时长 10%** → 拒绝或钳制到安全下限。
+实测落地拆为**两个独立常量**，语义不可混淆：
+
+- **`MIN_DURATION_TRIM = 7.0`**：**trim 跳过闸**。原时长 <7s 时 `_calc_trim` 直接 `skipped=True` 不裁（属「素材天生不适合去头尾」，非裁剪越界，**不抛错**）；裁后 <7s 时把总裁剪量收到成片恰好 7s。
+- **`MIN_DURATION_HARD = 5.0`**：**成片硬下限事后校验**。dedup_video 产出后 `checks.min_duration_ok` 校验；原素材本身 ≥5s 时成片必须 ≥5s，原素材天生 <5s 则不要求（素材问题非管线越界）。变速由 `_clamp_speed_for_floor` 在事前钳制 factor 上限，避免加速后跌破 5s。
+- **掐头去尾总量 ≤ 原时长 × `MAX_TRIM_RATIO(=0.10)`**：超则按比例钳制到 10% 上限，不抛错。
 
 ### 0.4 安全基线（对齐 SAD §10.3，DD 落到字段级）
 
@@ -59,46 +65,59 @@
 | 归一化对齐 | 两视频按**时间比例**抽帧（非绝对帧号），使裁剪/变速变体可对齐比对（D-01 要求） |
 | 逐帧 pHash | 每帧 64 位 pHash（imagehash.phash），得两序列 |
 | 汉明距离 | 对齐帧两两求汉明距离，得 `phash_avg`（平均）、`phash_min`（最小） |
-| 达标判定 | `phash_avg ≥ 12 且 phash_min ≥ 8` → 达标 |
+| 达标判定 | `phash_avg ≥ 12 且 weak_frame_ratio ≤ 0.10` → 达标；`phash_min` 仅展示 |
 | 距离矩阵 | 一组视频两两计算，返回矩阵 + 是否存在过近对 |
 | 降级兜底 | 无 Pillow/imagehash 时走 ffmpeg `signature`，返回 pass/fail 二值（不给数值） |
 
 ### 1.3 数据设计
 
-**单对度量结果 `PhashResult`**
+**单对度量结果 `PhashResult`**（与 `metrics._result` 实际返回对齐，Q-01 校准后字段结构）
 ```
 {
-  "phash_avg": float,     # 逐帧汉明距离平均
-  "phash_min": int,       # 逐帧汉明距离最小
-  "frames_compared": int, # 实际对齐比对的帧数
-  "passed": bool,         # phash_avg>=12 且 phash_min>=8
-  "method": "phash" | "signature",  # 实际使用的度量方法
-  "threshold": {"avg_min": 12, "min_min": 8}
+  "phash_avg": float,                # 逐帧汉明距离平均（参与判定）
+  "phash_min": int,                  # 逐帧汉明距离最小（仅展示，不参与判定）
+  "weak_frame_ratio": float | None,  # 弱帧占比 = 弱帧数/比对帧数（参与判定）；signature 兜底时为 None（不适用）
+  "weak_frame_count": int | None,    # 弱帧数（< WEAK_FRAME_DIST 的帧数）；signature 兜底时为 None
+  "frames_compared": int,            # 实际对齐比对的帧数
+  "passed": bool,                    # phash_avg>=12 且 weak_frame_ratio<=0.10（signature 路径由签名匹配直接给）
+  "method": "phash" | "signature",   # 实际使用的度量方法
+  "threshold": {
+     "avg_min": 12,
+     "weak_frame_dist": 8,
+     "weak_frame_max_ratio": 0.10,
+     "min_min": 8,                   # 仅展示，不参与判定
+     "min_min_enforced": false,      # 显式标注 min 不参与判定
+     "applied": false                # signature 路径独有：不套数值门，passed 由签名匹配直接给
+  }
 }
 ```
 
-**距离矩阵结果 `MatrixResult`**
+**距离矩阵结果 `MatrixResult`**（与 `metrics.distance_matrix` 实际返回对齐）
 ```
 {
   "count": int,
   "matrix": [[null|float,...],...],  # 对角线为 null，[i][j]=变体i与j的 phash_avg
-  "min_pair": {"i": int, "j": int, "phash_avg": float, "phash_min": int},
-  "all_pass": bool,                   # 所有对 avg>=12 且 min>=8
-  "too_close_pairs": [{"i":int,"j":int,"phash_avg":float,"phash_min":int}]
+  "min_pair": {"i": int, "j": int, "phash_avg": float, "phash_min": int,
+               "weak_frame_ratio": float|None, "passed": bool},
+  "all_pass": bool,                   # 所有对 passed=true 且 count>=2（口径复用 compare_videos，避免二次漂移）
+  "too_close_pairs": [{"i":int,"j":int,"phash_avg":float,"phash_min":int,
+                       "weak_frame_ratio":float|None,"passed":bool}]
 }
 ```
+> pair 增带 `weak_frame_ratio`/`passed`：新口径下「过近」可能因均值不足、也可能因弱帧过多（如 avg=12.25 但弱帧 31% 仍被拒），只报 avg 会让人看不出被拒原因。
 
 ### 1.4 类/函数设计
 
 | 名称 | 签名 | 职责 |
 |---|---|---|
-| 常量 | `PHASH_AVG_MIN=12`, `PHASH_MIN_MIN=8`, `SAMPLE_FRAMES=16` | 达标阈值与抽帧数（Q-01 校验后仅改此处） |
+| 常量 | `PHASH_AVG_MIN=12`, `WEAK_FRAME_DIST=8`, `WEAK_FRAME_MAX_RATIO=0.10`, `PHASH_MIN_MIN=8`(仅展示), `SAMPLE_FRAMES=16` | 达标阈值与抽帧数。⚠️ `PHASH_MIN_MIN` 已退出判定（Q-01 实测，见 §0.2），仅保留兼容口径 |
 | `_extract_frames` | `(video_path, n=16, tmpdir) -> List[Path]` | ffmpeg 按时间比例均匀抽 n 帧为 PNG；列表式传参 |
 | `_phash_sequence` | `(frame_paths) -> List[imagehash.ImageHash]` | 逐帧 pHash |
-| `compare_videos` | `(video_a, video_b, n=16) -> PhashResult` | 两视频对齐抽帧→逐帧汉明距离→统计→达标 |
-| `distance_matrix` | `(video_paths, n=16) -> MatrixResult` | 两两 compare，聚合矩阵与过近对 |
-| `_signature_fallback` | `(video_a, video_b) -> PhashResult` | 无 imagehash 时 ffmpeg signature 兜底（method=signature，仅 passed） |
-| `has_phash_backend` | `() -> bool` | 探测 imagehash/Pillow 是否可用，决定主/兜底路径 |
+| `_result` | `(phash_avg, phash_min, frames_compared, method, dists=None) -> PhashResult` | 组装结果。`dists` 给齐时算 `weak_frame_ratio=弱帧数/len(dists)`；缺省时退化为 `phash_min>=WEAK_FRAME_DIST ? 0.0 : 1.0`（signature 等无逐帧数据路径用 None） |
+| `compare_videos` | `(video_a, video_b, n=16) -> PhashResult` | 两视频对齐抽帧→逐帧汉明距离→统计→达标；无 backend 时自动转 `_signature_fallback` |
+| `distance_matrix` | `(video_paths, n=16) -> MatrixResult` | 两两 compare，聚合矩阵与过近对；`all_pass` 复用 `compare_videos.passed`，不二次复算阈值 |
+| `_signature_fallback` | `(video_a, video_b) -> PhashResult` | 无 imagehash 时 ffmpeg signature 兜底（`method="signature"`，`passed` 由签名匹配反用给出，`weak_frame_ratio=None` 表不适用，数值字段给占位 0 保持同构） |
+| `has_phash_backend` | `() -> bool` | 探测 imagehash + Pillow 是否可用，决定主/兜底路径 |
 
 ### 1.5 核心算法：时间比例归一化抽帧对齐
 
@@ -118,11 +137,13 @@ phash_avg = mean(dist_k) ; phash_min = min(dist_k)
 | 异常 | 处理 |
 |---|---|
 | ffmpeg 抽帧失败 | 抛 `PipelineError`，附 ffmpeg stderr 尾部 |
-| imagehash/Pillow 缺失 | `has_phash_backend()=False` → 自动走 `_signature_fallback`，`method="signature"` |
-| 帧数不足（极短视频） | 按实际可抽帧数降 n，`frames_compared` 反映真实值；<2 帧则 passed=false 并提示 |
+| imagehash/Pillow 缺失 | `has_phash_backend()=False` → 自动走 `_signature_fallback`：`method="signature"`，`passed` 由签名匹配反用给出，`weak_frame_ratio=None`/`weak_frame_count=None`（表「不适用」，非 0），数值字段给占位 0 保持与主路径同构（消费方无需分支判断字段是否存在） |
+| 帧数不足（极短视频） | 按实际可抽帧数降 n，`frames_compared` 反映真实值；<2 帧则 `passed=false`（走 `_result(0.0, 0, m, "phash")` 默认 `weak_frame_ratio=1.0`，不抛错交由上层展示） |
 | 临时帧清理 | `finally` 删临时目录，失败不影响结果返回 |
 
 ### 1.7 Feature 与 AI 执行订单（模块一）
+
+> **落地状态**：F1.1 / F1.2 已 DONE（112 passed in 27.99s）。下方订单保留「设计当下」原貌；实际落地口径以 §0.2 / §1.3 / §1.4 为准（Q-01 校准后改用 `weak_frame_ratio` 门，`PHASH_MIN_MIN` 退出判定），错题本见 [../eval/沉淀失败原因.md](../eval/沉淀失败原因.md)。
 
 **骨干闭环顺序**：`has_phash_backend` → `_extract_frames` → `_phash_sequence` → `compare_videos` → `distance_matrix` → `_signature_fallback`。（先打通单对度量，再叠矩阵与兜底。）
 
@@ -176,40 +197,60 @@ phash_avg = mean(dist_k) ; phash_min = min(dist_k)
   "flip_mode": "h"|"v"|"90",           # 仅 flip 开时用，默认 "h"
   "seed": int,                          # 可选，缺省随机并回填
   "out_name": str,                      # 可选
-  "params": { ... }                     # 可选，逐维精细覆盖（高级），优先级高于 level
+  "params": { ... },                    # 可选，逐维精细覆盖（高级），优先级高于 level
+  "trim_phase": float                   # 🆕 F2.4 内部参数，∈[0,1]，裂变专用；client 不暴露（见 §2.5d）
 }
 ```
 
-**dedup_video 出参 `checks`（升级后）**
+**dedup_video 出参 `checks`（升级后，与 pipeline.dedup_video 实际返回对齐）**
 ```
 "checks": {
   "md5_changed": bool,        # 既有
   "resolution_kept": bool,    # 既有
-  "duration_close": bool,     # 既有；trim/speed 后改为「在允许范围内」判定
-  "phash": {                  # 🆕
+  "duration_close": bool,     # 既有；启用 speed/trim 时改「范围口径」（预期 ±3%），否则 |Δ|<1.0s
+  "min_duration_ok": bool,    # 🆕 F2.x 加：5s 硬下限事后校验（原素材<5s 时恒 true，素材问题非管线越界）
+  "phash": {                  # 🆕（结构同 §1.3 PhashResult）
      "phash_avg": float, "phash_min": int,
-     "passed": bool, "method": "phash"|"signature"
+     "weak_frame_ratio": float|None, "weak_frame_count": int|None,
+     "passed": bool, "method": "phash"|"signature",
+     "threshold": {...}
   },
-  "all_passed": bool          # 🆕 上述全过（duration_close 采用范围口径）
+  "all_passed": bool          # 🆕 md5_changed & resolution_kept & duration_close & min_duration_ok & phash.passed
 }
 ```
 
-**applied_params（回填实际用值，含 seed 与各维度落点）**：在既有基础上增 `crop_ratio`/`flip_mode`/`speed_factor`/`trim_head`/`trim_tail`/`seed`/`level`。
+**applied_params（回填实际用值）**：在既有基础上增 `crop_ratio`/`flip_mode`/`speed_factor`/`trim_head`/`trim_tail`/`seed`/`level`；trim 跳过时增 `trim_skipped=true` + `trim_skip_reason`；裂变场景增 `trim_phase`（四舍五入到 4 位）。
 
-**batch_fission 出参增**：`variants[].checks.phash`（各变体 vs 原素材）+ 顶层 `matrix`（`metrics.distance_matrix` 结果）+ `all_unique`（既有 MD5 维度保留）。
+**batch_fission 出参（与 pipeline.batch_fission 实际返回对齐）**
+```
+{
+  "src": str, "count": int,
+  "variants": [{index, output_path, md5, applied_params, checks}, ...],
+  "all_unique": bool,                  # MD5 维度（既有保留）
+  "delivery_ready": bool,              # all_unique && matrix.all_pass（唯一交付门）
+  "matrix": MatrixResult,              # metrics.distance_matrix 结果（结构同 §1.3）
+  "separation": {                      # 🆕 F2.4 加：分离度诊断，指明卡哪条腿
+     "time_leg": "present"|"absent",   # absent = 所有变体 trim 都被 MIN_DURATION_TRIM 跳过
+     "flip_spread": bool,              # true = 各变体 flip_mode 不全相同
+     "hint": str                       # 仅 all_pass=false 且 flip_spread=false 时给出（PRD 人工决策点，不自动开 flip）
+  }
+}
+```
+> **设计依据**（实测，见 [../eval/沉淀失败原因.md#root_cause](../eval/沉淀失败原因.md)）：变体间只有两条有效腿——时间错位（δ≥1s → avg 29）与 flip（→ avg 33）；speed/rotate/crop 的变体间差分实测仅 1.9 / 4.1 / 7.5，全部够不到阈值 12（speed 在归一化抽帧口径下恒等）。故 F2.4 起 trim 头尾配比按 phase 确定性铺开（§2.5d），而非 iid 随机。
 
 ### 2.4 类/函数设计（增量）
 
 | 名称 | 签名 | 职责 |
 |---|---|---|
-| 常量 | `LEVELS = {light/medium/heavy: {crop, speed, trim}}` | §0.1 区间表编码 |
-| `_resolve_level` | `(level, dimensions, params) -> resolved_params` | 档位展开为各维度具体区间，`params` 覆盖优先 |
+| 常量 | `LEVELS = {light/medium/heavy: {crop, speed, trim}}`, `MIN_DURATION_TRIM=7.0`, `MIN_DURATION_HARD=5.0`, `MAX_TRIM_RATIO=0.10`, `ATEMPO_MIN=0.5`, `ATEMPO_MAX=2.0` | §0.1 区间表 + §0.3 时长保护常量 |
+| `_resolve_safe` | `(path, base_dir, must_exist=True) -> Path` | 🔒 规范化 + 白名单前缀校验（安全基线 §0.4，F2.1 落地，F3.3 第二道闸） |
+| `_resolve_level` | `(level=None, dimensions=None, params=None, seed=None) -> (resolved, seed)` | 档位展开为各维度具体区间（含 `_trim_band`/`_speed_band` 等），`params` 覆盖优先；`level` 非法时回退 medium 并标 `_level_note`；`seed` 缺省回填 `random.randint` |
 | `build_filter` | 扩展现签名，接 `resolved` | 追加 crop/flip 滤镜节点（在 eq/rotate 之后、scale 保分辨率） |
-| `_apply_speed` | `(cmd_parts, factor) -> (vf_add, af_add)` | 生成 `setpts`/`atempo` 片段，校验 factor∈[0.5,2.0] |
-| `_calc_trim` | `(duration, level, seed) -> (ss, out_dur)` | 算头尾裁剪，套 §0.3 最短时长保护，越界抛错 |
-| `_resolve_safe` | `(path, base_dir) -> Path` | 🔒 规范化 + 白名单前缀校验（安全基线 §0.4） |
-| `dedup_video` | 扩展 | 编排各维度→拼 ffmpeg→产出→调 `metrics` 升级自检 |
-| `batch_fission` | 扩展 | 每变体不同 seed→产出→`metrics.distance_matrix` |
+| `_apply_speed` | `(factor) -> (setpts_node, atempo_node, clamped_factor)` | 生成 `setpts=PTS/factor`/`atempo=factor` 片段；factor 越界钳制到 `[ATEMPO_MIN, ATEMPO_MAX]`（不抛错，回填 clamped 值） |
+| `_clamp_speed_for_floor` | `(factor, base_dur) -> (clamped_factor, note)` | 🆕 F2.3 加：变速因子钳到不会让成片跌破 `MIN_DURATION_HARD=5.0` 的范围（`max_factor = base_dur/MIN_DURATION_HARD`，且 ≥1.0）；原素材已 <5s 时只保证「不再加速」。`note` 为 None 表示未钳制 |
+| `_calc_trim` | `(duration, band, seed=None, phase=None) -> dict{ss, out_dur, head, tail, skipped, reason}` | 🆕 F2.4 改签名+返回 dict：算头尾裁剪并套 §0.3 三道保护（总量≤10% / 原时长<7s 跳过 / 裁后<7s 收回）。`phase=None` 走原 iid 随机行为（保留向后兼容）；`phase∈[0,1]` 走确定性铺开（§2.5d）。`skipped=True` 时不抛错，由上层据 `applied_params.trim_skipped` 处理 |
+| `dedup_video` | `(src, params=None, out_name=None, seed=None, level=None, dimensions=None, flip_mode=None, trim_phase=None)` | 🆕 增 `trim_phase`（裂变专用，client 不暴露）；编排各维度→拼 ffmpeg→产出→调 `metrics` 升级自检；返回结构含 §2.3 `checks`（含 `min_duration_ok`/`phash`/`all_passed`）与 `applied_params`（含 `trim_skipped`/`trim_phase`） |
+| `batch_fission` | `(src, count=5, params=None, level=None, dimensions=None, flip_mode=None)` | 🆕 透传 level/dimensions/flip_mode；每变体 `phase=i/(count-1)` 确定性铺开 trim_head；产出后调 `metrics.distance_matrix`；返回结构含 `separation`（§2.3）。默认 5、上限 20，与 PRD D-04 / rules / Web 一致 |
 
 ### 2.5 核心算法/实现方案
 
@@ -232,29 +273,51 @@ factor = 1 ± LEVELS[level]["speed"]   # 如 0.95 / 1.05
 
 **(c) trim 去头尾（时序）**
 ```
-head = rand(LEVELS[level]["trim"]) ; tail = 同档
-total_cut = head + tail
-断言 total_cut <= duration*0.10 且 (duration-total_cut) >= 7   # §0.3
-否则钳制到安全下限或抛错并提示
-ffmpeg: -ss head -i src -t (duration-total_cut)
+band = LEVELS[level]["trim"]            # (lo, hi) 单侧裁剪秒数区间
+trim = _calc_trim(duration, band, seed=seed, phase=trim_phase)  # 返回 dict
+# 内部三道保护（§0.3）：
+#   1) total_cut ≤ duration * MAX_TRIM_RATIO(0.10)，超则按比例钳
+#   2) duration < MIN_DURATION_TRIM(7.0) → skipped=True，不裁（素材天生短，非越界）
+#   3) out_dur < MIN_DURATION_TRIM → 把 total 收回到成片恰好 7s
+# trim.skipped=True 时上层不传 -ss/-t（不裁），applied_params 标 trim_skipped + reason
+ffmpeg（⚠️ -ss/-t 均在 -i 之前，输入侧选项，必守）:
+   ffmpeg -y [-ss head] [-t out_dur] -i src -vf ... -c:v libx264 ...
+# ⚠️ 不要写成 `-ss head -i src -t out_dur`（-t 在 -i 之后 = 输出侧选项）：
+#    输出侧 -t 是在 setpts 变速【之后】度量的，变速会先把流压短，使 -t 阈值大于
+#    实际流长而不发生截断 → 去尾被静默吞掉，applied_params.trim_tail 成假报告。
+#    实测复现：15.184s 素材 heavy 档，旧写法 trim_tail 失效，duration_close 假绿。
+#    错题本见 ../eval/沉淀失败原因.md#historical_lessons。
+# 放到输入侧后 trim 与 speed 正交：读 out_dur 秒源 → 变速压成 out_dur/factor。
 ```
 
-**(d) 维度编排与 seed**
+**(d) 维度编排与 seed + trim_phase 铺开（F2.4 增量）**
 ```
 if seed is None: seed = random.randint(1, 10**9)   # 回填
 random.seed(seed)
 按 dimensions 开关，仅对开启维度采样区间内随机值
-多维随机受同一 seed 控制 → 裂变时不同 seed 保证变体互异
+多维随机受同一 seed 控制 → 裂变时不同 seed 保证变体与原素材互异
+
+# ⚠️ 但「不同 seed」不足以保证【变体两两互异】（F2.4 实测证伪）：
+#    iid 从同一窄区间采样 → 8s 素材 heavy 档 head 差 ≤0.16s，对应 avg 仅 3.5（远低 12）。
+#    故裂变时 batch_fission 给每变体传 trim_phase = i/(count-1)：
+#      budget = min(2*hi, duration*MAX_TRIM_RATIO, duration-MIN_DURATION_TRIM)
+#      head_i = budget * phase_i    # 端到端撑满 [0,1]，head 跨度 = budget = 最大可达错位
+#      tail_i = budget - head_i     # 各变体成片时长恒等（=duration-budget），duration_close 不受影响
+#    实测：8s 素材 worst pair 3.5 → 18.5（all_pass=true）。
+#    单条 dedup_video 调用 trim_phase 缺省 None = iid 行为，向后兼容。
 ```
 
-**(e) 自检升级（时长范围口径）**
+**(e) 自检升级（时长范围口径 + 5s 硬下限）**
 ```
 既有 md5_changed / resolution_kept 不变
 duration_close 升级为「范围口径」:
-   若启用 speed/trim → 预期时长 = f(原时长, factor, cut)，实测在 [预期*0.97, 预期*1.03] 内为 true
+   若启用 speed/trim → 预期时长 = f(原时长, factor, cut)，实测 |Δ| ≤ max(0.5, 预期*0.03) 为 true
    若未启用时序维度 → 沿用 |Δ|<1.0s
-phash = metrics.compare_videos(src_path, out_path)
-all_passed = md5_changed & resolution_kept & duration_close & phash.passed
+min_duration_ok（🆕 5s 硬下限事后校验，§0.3）:
+   原素材 ≥ MIN_DURATION_HARD(5.0) → 要求成片 ≥ 5.0
+   原素材 < 5.0 → 恒 true（素材问题非管线越界，与 _calc_trim 短素材语义一致）
+phash = metrics.compare_videos(src_path, out_path)   # 含 weak_frame_ratio，口径见 §0.2
+all_passed = md5_changed & resolution_kept & duration_close & min_duration_ok & phash.passed
 ```
 
 ### 2.6 业务流程（时序，单条去重）
@@ -283,13 +346,19 @@ sequenceDiagram
 | 异常 | 处理 | 用户提示（PRD §12 兜底） |
 |---|---|---|
 | 路径越界 | `_resolve_safe` 抛 `PipelineError` | 素材/产物须在白名单目录 |
-| speed factor 越界 | 钳制到 [0.5,2.0] 或拒绝 | 变速超安全区间，已钳制/请调整 |
-| trim 成片过短 | `_calc_trim` 拒绝或钳到 ≥5s | 变速/截取超安全区间，至少保留 5s |
-| ffmpeg 非零退出 | 抛错，不落半成品 | 报错原因（stderr 尾部） |
+| speed factor 越界 | `_apply_speed` 钳制到 `[ATEMPO_MIN, ATEMPO_MAX]`（不抛错，回填 clamped 值） | 变速超安全区间，已钳制 |
+| speed 加速后成片会跌破 5s | `_clamp_speed_for_floor` 事前钳 factor 上限（`base_dur/MIN_DURATION_HARD`，且 ≥1.0） | 已钳制变速幅度，避免成片跌破 5s |
+| 原素材 <7s（不适合去头尾） | `_calc_trim` 返 `skipped=True`（不抛错），`applied_params.trim_skipped=true` + `trim_skip_reason` | 原时长过短，跳过去头尾 |
+| 掐头去尾总量 >10% | `_calc_trim` 按比例钳到 10% 上限（不抛错） | 已钳制裁剪总量到 10% |
+| 裁后 <7s | `_calc_trim` 把总裁剪量收到成片恰好 7s（不抛错） | 已收回裁剪量，保证成片 ≥7s |
+| ffmpeg 非零退出 | 抛 `PipelineError`，不落半成品 | 报错原因（stderr 尾部） |
 | phash 未达标 | 不抛错，`phash.passed=false` + `all_passed=false` | 变体与原素材过于相似，建议加维度/调参/换 seed |
+| 裂变矩阵不达标 | 不抛错，`matrix.all_pass=false` + `separation.hint` 指明卡哪条腿（时间错位/flip） | 变体间过近，hint 给出唯一有效杠杆（如短素材只能靠 flip） |
 | resolution 变了 | `resolution_kept=false` | 分辨率未保持 |
 
 ### 2.8 Feature 与 AI 执行订单（模块二）
+
+> **落地状态**：F2.1 / F2.2 / F2.3 / F2.4 已 DONE（112 passed in 27.99s）。下方订单保留「设计当下」原貌；实际落地偏差以 §2.3 / §2.4 / §2.5 / §2.7 为准（`_calc_trim` 改 dict 返回、增 `_clamp_speed_for_floor`、`dedup_video` 增 `trim_phase`、`batch_fission` 增 `separation`、-ss/-t 移到 -i 前），错题本见 [../eval/沉淀失败原因.md](../eval/沉淀失败原因.md)。
 
 **骨干闭环顺序**：`_resolve_safe` → `LEVELS`+`_resolve_level` → `build_filter`(crop/flip) → `_apply_speed`/`_calc_trim`(保护) → `dedup_video` 编排+自检升级 → `batch_fission` 矩阵。（先安全与档位，再构图维度，再时序维度，最后自检与裂变。）
 
@@ -315,7 +384,7 @@ sequenceDiagram
 
 - **输入**：模块一 `metrics.compare_videos`/`distance_matrix`；Feature 2.1–2.3。
 - **核心逻辑**：`dedup_video` 产出后调 `metrics.compare_videos(src_path, out_path)`，把结果并入 `checks.phash`；`duration_close` 改范围口径（§2.5e）；计算 `checks.all_passed`。`batch_fission` 每变体不同 seed 产出后，收集所有产物路径调 `metrics.distance_matrix`，并入顶层 `matrix`；保留既有 `all_unique`（MD5）。phash 未达标不抛错，仅置 `passed=false`。
-- **预期产出**：修改 `pipeline.py` `dedup_video`/`batch_fission`。`test_pipeline_orchestration.py` 增：`dedup_video` 返回含 `checks.phash.passed` 与 `checks.all_passed`；`batch_fission(count=3)` 返回含 `matrix.count==3` 与 `too_close_pairs` 字段。pytest 通过。
+- **预期产出**：修改 `pipeline.py` `dedup_video`/`batch_fission`。`test_pipeline_orchestration.py` 锁定纯函数与默认值语义；`test_pipeline_e2e.py` 用真实素材和 ffmpeg 验证输出及五项 `checks` 契约；`batch_fission(count=5)` 返回含 `matrix.count==5` 与 `too_close_pairs` 字段。pytest 通过。
 
 ---
 
@@ -338,16 +407,20 @@ sequenceDiagram
 
 - `dedup_video.inputSchema.properties` 增 `level`(enum)、`dimensions`(object)、`flip_mode`(enum)、`seed`(integer)，`description` 更新为含构图/时序维度。
 - `batch_fission.inputSchema` `count.description` 改「1-20」。
-- `_summary("dedup_video")` 增 `phash` 摘要；`_summary("batch_fission")` 增 `matrix.all_pass`。
+- `_summary("dedup_video")` 增 `phash` 摘要；`_summary("batch_fission")` 增 `matrix.all_pass` 与 `delivery_ready`。
 - `_exec_tool` 透传新参数给 `pipeline.dedup_video(...)`（`level/dimensions/flip_mode/seed`）。
 
-> **契约稳定性**：`input_required`/`requestState`/`inputResponses.confirm` 于 params 顶层的既有约定**不变**（PRD §14 US-07、记忆锚点一致）。
+> **契约稳定性**：`input_required`/`requestState`/`inputResponses.confirm` 于 params 顶层的既有约定**不变**（PRD §14 US-07、记忆锚点一致）。`requestState` 实际落地为 HMAC 签名的无状态句柄，绑定首次请求的 `name + arguments`；确认重发若省略/篡改句柄或替换参数，Server 拒绝且不执行工具。
 
 ### 3.4 权限与安全设计（字段级）
 
 - `delete_output` 维持 **blocked** 硬阻断（PRD US-08）。
-- flip 为高破坏维度：分级不变（仍在 warned 的 dedup 内），但通过 `body_check` 要求显式 `flip_mode` + 决策门二次确认，实现「默认关、需人工开」（PRD §6/§13）。
-- Hook 路径白名单：`pre_tool_guard` 增补对 `src`/`name` 的白名单前缀校验（与 pipeline `_resolve_safe` 双保险），越界 → deny。
+- flip 为高破坏维度：分级不变（仍在 warned 的 dedup 内），但通过 `body_check` 要求显式 `flip_mode` + 决策门二次确认，实现「默认关、需人工开」（PRD §6/§13）。⚠️ 实际落地：`common._matches_tier_condition` 只读顶层字段，故 server 透传时镜像 `dimensions.flip → args.flip` 顶层让 tier2 命中（详见 §3.6 F3.x 落地校准）。
+- 路径白名单双保险（F3.3 实际落地分层）：
+  - **第一道（hook 层）**：`pre_tool_guard._check_path_shape` 做**形态校验**（拒 `/` 开头、`\` 开头、Windows 盘符、`..` 段）；`common.is_path_allowed(path, base_dir)` 提供纯函数。hook 跑在 subprocess 里拿不到 VIDEO_DIR/OUTPUT_DIR 绝对路径，只能校形态。
+  - **第二道（pipeline 层）**：`pipeline._resolve_safe(path, base_dir, must_exist=True)` 在 `probe_video`/`remove_watermark`/`dedup_video` 写出/`delete_output` 都改用，做 resolve + `relative_to` **绝对归属校验**，越界抛 `PipelineError`。
+  - 越界路径在 hook 层即 deny（形态层）；PreToolUse hook 缺失、异常、非零退出、空/非法输出均 fail-closed。pipeline 第二道闸继续作为纵深防御。
+- 本地驱动来源门：HTTP 只接受 `Host=127.0.0.1|localhost|[::1]`，浏览器 `Origin` 仅允许本机 HTTP(S) 或 `file://` 对应的 `null`；其余返回 403，CORS 不使用通配 `*`。
 
 ### 3.5 异常处理
 
@@ -359,6 +432,8 @@ sequenceDiagram
 | 未 probe 直连 | 既有强制走链 deny（不变） |
 
 ### 3.6 Feature 与 AI 执行订单（模块三）
+
+> **落地状态**：F3.1 / F3.2 / F3.3 已 DONE（112 passed in 27.99s）。下方订单保留「设计当下」原貌；实际落地偏差以本节末「F3.x 落地校准」为准（flip 校验走 server 镜像而非 pipeline 兜底；F3.3 拆为 hook 形态校验 + pipeline 归属校验双保险两层）。
 
 **骨干闭环顺序**：rules.json 增量 → mcp_server inputSchema/summary/透传 → pre_tool_guard 路径白名单。（先外化规则，再暴露参数，最后补安全校验。）
 
@@ -380,6 +455,15 @@ sequenceDiagram
 - **输入**：既有 `hooks/pre_tool_guard.py`/`common.py`；`pipeline._resolve_safe` 白名单逻辑。
 - **核心逻辑**：在 `common.py` 增 `is_path_allowed(tool_name, body, rules)`（对 `src`/`name` 做规范化 + assets/output 前缀校验），`pre_tool_guard.guard` 在字段校验后、warned 分支前调用，越界返回 `continue:false, deny`。白名单基址从 `pipeline` 常量或 rules 配置读。
 - **预期产出**：修改 `hooks/common.py`+`hooks/pre_tool_guard.py`。`test_rules.py` 增：构造 `src="../../etc/x"` 断言 `guard` 返回 deny；正常 `assets/` 内文件放行。pytest 通过。
+
+**F3.x 落地校准**（实际实现与上述订单的偏差，2026-08-04 落地）
+
+- **F3.1 flip 校验路径变更**：原订单写「DD 采用 pipeline 兜底为主」。实测发现 `pipeline.build_filter` 静默默认 `flip_mode='h'`（既不抛错也不要求显式声明），pipeline 兜底形同虚设。实际落地改为 **server 层镜像方案**：`mcp_server.handle_rpc` 在 `_run_hook` 之前，若 `args.dimensions.flip=true` 则在 `args` 顶层镜像 `args["flip"]=True`，让 rules.json tier2（field=`flip`, value=`true` → required `flip_mode`）能命中（`common._matches_tier_condition` 只读顶层字段，故必须镜像到顶层）。`hooks/common.py` 求值器未改（守住 §3 红线「不改 tier 求值器」）。
+- **F3.3 双保险分层变更**：原订单写 `common.is_path_allowed(tool_name, body, rules)` 单点。实际拆为两层：
+  - **第一道（hook 层，形态校验）**：`hooks/common.py` 加 `is_path_allowed(path, base_dir) -> (ok, reason)` 纯函数（`Path.resolve` + `relative_to`）；`hooks/pre_tool_guard.py` 加 `_check_path_shape`（拒绝 `/` 开头、`\` 开头、Windows 盘符、`..` 段），`guard()` step 4 之后插 step 4.5 调用。**hook 跑在 subprocess 里拿不到 VIDEO_DIR/OUTPUT_DIR 绝对路径，只能做形态校验**。
+  - **第二道（pipeline 层，归属校验）**：`pipeline._resolve_safe(path, base_dir, must_exist=True)` 在 `probe_video`/`remove_watermark`/`dedup_video` 写出/`delete_output` 都改用，做 resolve + `relative_to` 绝对归属判定，越界抛 `PipelineError`。
+  - 第三处 bug 顺手堵：`mcp_server.delete_output` 改用 `_resolve_safe(args['name'], OUTPUT_DIR, must_exist=True)`，原写法 `OUTPUT_DIR / args["name"]` 在 Windows 上实测可让 `target.unlink()` 跨出 OUTPUT_DIR（攻击面被 tier=blocked 拦截，但路径遍历 bug 本身存在）。
+  - **运行时安全收口（2026-08-04）**：`_run_hook` 对 PreToolUse 改为 fail-closed（缺失/异常/非零退出/空或非法输出均 deny）；PostToolUse 仅审计，故障只报告，避免反向覆盖已完成业务结果。另补 HMAC `requestState` 请求绑定与 HTTP 本地 `Host/Origin` 校验。
 
 ---
 
@@ -419,9 +503,9 @@ flowchart TD
     C -->|是| D[doDedup 组装 args]
     D --> E[callToolWithConfirm 决策门]
     E -->|确认| F[渲染 checks + phash 行]
-    F --> G{phash.passed?}
-    G -->|否| H[高亮+建议再生成]
-    G -->|是| I[人工决策交付]
+    F --> G{checks.all_passed?}
+    G -->|否| H[高亮+禁用交付+建议再生成]
+    G -->|是| I[启用人工决策交付]
 ```
 
 ### 4.6 异常处理
@@ -430,6 +514,8 @@ flowchart TD
 |---|---|
 | 全未勾维度 | toast「至少启用一个维度」，不发请求 |
 | phash method=signature | 展示「兜底度量（无数值）」，只显 passed |
+| `checks.all_passed=false` | `确认交付` 禁用并有点击保护，提示当前不可交付 |
+| 裂变双门任一失败 | `delivery_ready=false`，使用 warning toast，不得显示交付成功 |
 | 后端返回 text（拦截/取消/失败） | 沿用既有 addMemory + toast |
 | 恶意文件名渲染 | escapeHtml 转义（禁 innerHTML 拼未转义数据） |
 
@@ -447,7 +533,7 @@ flowchart TD
 
 - **输入**：Feature 4.1；§2.3 出参 `checks.phash`/`matrix`。
 - **核心逻辑**：`renderDedup` 增 phash 行（avg/min/达标标记/method），未达标加 `fail` 样式 + 建议文案；`renderFission` 增矩阵表格（对角灰、过近对红），读 `d.matrix.too_close_pairs` 高亮。所有值经 `escapeHtml`/`textContent`。`addMemory` 摘要补 phash 达标。
-- **预期产出**：修改 `web/app.js`+`web/style.css`。手动验证：跑一次 dedup 看到 phash 行；跑 `batch_fission(count=3)` 看到 3×3 矩阵且过近对高亮。README 手测清单更新。
+- **预期产出**：修改 `web/app.js`+`web/style.css`。手动验证：跑一次 dedup 看到 phash 行；跑 `batch_fission(count=5)` 看到 5×5 矩阵且过近对高亮。验收步骤固化在 `station/web/README-手测清单.md`。
 
 ---
 
@@ -477,25 +563,28 @@ flowchart TD
 **Feature 5.1 — dedup/fission SKILL 补维度与 phash 诊断**（边界：SOP 图含新自检与回退闭环）
 
 - **输入**：既有 `station/shared/skills/dedup-video/SKILL.md`、`batch-fission/SKILL.md`、`README.md`；PRD §12 Badcase 口径。
-- **核心逻辑**：dedup-video SKILL：步骤详解增「选强度档/勾维度」；Mermaid 自检判断节点增 `phash_avg<12 或 phash_min<8` → 诊断「加维度/换 seed/升档」→ 回 dedup 节点；`可调 params` 段补 level/dimensions/flip_mode/seed。batch-fission SKILL：SOP 增矩阵校验节点 + 过近对回退。README 索引表更新走链描述。
+- **核心逻辑**：dedup-video SKILL：步骤详解增「选强度档/勾维度」；Mermaid 自检判断节点按 `phash_avg<12 或 weak_frame_ratio>0.10` → 诊断「加维度/换 seed/升档」→ 回 dedup 节点；`phash_min` 仅展示；`可调 params` 段补 level/dimensions/flip_mode/seed。batch-fission SKILL：SOP 增矩阵校验节点 + 过近对回退。README 索引表更新走链描述。
 - **预期产出**：修改上述 3 个 Markdown。人工核对：两张 Mermaid 图均含 phash 分支且失败回指重试节点（闭环无断头）。无自动化测试。
 
 ---
 
 ## 附录 A：本期交付物清单（物理路径）
 
-| 类型 | 路径 | 动作 |
-|---|---|---|
-| 新增 | `station/server/metrics.py` | 感知度量域 |
-| 修改 | `station/server/pipeline.py` | 4 维度 + 编排 + 自检升级 + 路径安全 |
-| 修改 | `station/server/mcp_server.py` | inputSchema/summary/透传 |
-| 修改 | `station/shared/rules.json` | 分级/走链/校验/auto_fill 增量 |
-| 修改 | `station/hooks/common.py` `pre_tool_guard.py` | 路径白名单双保险 |
-| 修改 | `station/web/index.html` `app.js` `style.css` | 维度/档位 UI + phash/矩阵渲染 |
-| 修改 | `station/shared/skills/dedup-video/SKILL.md` `batch-fission/SKILL.md` `README.md` | SOP + 诊断分支 |
-| 新增 | `station/requirements.txt` | `imagehash`（依赖 Pillow） |
-| 新增 | `station/tests/test_metrics.py` `test_pipeline_orchestration.py` `test_rules.py` `test_server_smoke.py` | 单测 |
-| 修改 | `station/README.md` | 依赖安装 + 手测清单 |
+> 落地状态截至 2026-08-04（112 passed in 27.99s）。✅ = 已落地；浏览器步骤 5–7 已有实现侧报告，独立 QA 签字仍待补，不计入独立验收通过。
+
+| 类型 | 路径 | 动作 | 状态 |
+|---|---|---|---|
+| 新增 | `station/server/metrics.py` | 感知度量域（含 `_result` 带 `weak_frame_ratio`，Q-01 校准） | ✅ F1.1/F1.2 |
+| 修改 | `station/server/pipeline.py` | 4 维度 + 编排 + 自检升级 + 路径安全 + `_calc_trim` phase + `_clamp_speed_for_floor` + 裂变 `delivery_ready` 双门 | ✅ F2.1–F2.4 |
+| 修改 | `station/server/mcp_server.py` | inputSchema/summary/透传 + flip 镜像 + `delete_output` 白名单 + requestState 绑定 + Pre Hook fail-closed + 本地来源门 | ✅ F3.2/F3.3/运行时安全收口 |
+| 修改 | `station/shared/rules.json` | 分级/走链/校验/auto_fill 增量（mtime 2026-08-03 23:34, 5019B） | ✅ F3.1 |
+| 修改 | `station/hooks/common.py` `pre_tool_guard.py` | hook 形态校验（`is_path_allowed` + `_check_path_shape`）；pipeline `_resolve_safe` 第二道归属校验 | ✅ F3.3 |
+| 修改 | `station/web/index.html` `app.js` `style.css` | 维度/档位 UI + phash/矩阵渲染 + 单条/裂变交付门；裂变默认 5 | ✅ F4.1/F4.2（浏览器步骤 5–7 待独立 QA 签字） |
+| 新增 | `station/web/README-手测清单.md` | Web 步骤 1–7、pHash 主/兜底口径、裂变矩阵与独立 QA 签字模板 | ✅ F4 验收资产 |
+| 新增/修改 | `station/shared/skills/SKILL.md`、`dedup-video/SKILL.md`、`batch-fission/SKILL.md`、`remove-watermark/SKILL.md`、`README.md` | 目录级契约索引 + SOP + 诊断分支 | ✅ F5.1 |
+| 新增 | `station/requirements.txt` | `imagehash`（依赖 Pillow） | ✅ |
+| 新增 | `station/tests/test_metrics.py` `test_pipeline_orchestration.py` `test_pipeline_e2e.py` `test_rules.py` `test_server_smoke.py` | 单测 + 真实 ffmpeg 轻量集成测试 | ✅ 五份齐 |
+| 修改 | `station/README.md` | 启动、依赖与验收边界 | ✅（独立 QA 报告待补） |
 
 ## 附录 B：骨干闭环总顺序（单人开发最快跑通核心业务流）
 
@@ -506,13 +595,15 @@ flowchart TD
   →  模块四 F4.1 控件  →  F4.2 渲染  →  模块五 F5.1 SKILL
 ```
 > 理由：先打通「度量 + 单条去重升级」这条最短闭环（F1.1→F2.4），即可端到端验证一条素材的新维度去重与 phash 自检；再补治理暴露、前端展示、技能规程。
+>
+> **进度**：F1.1 → F5.1 及 DD 运行时安全收口已全部落地（112 passed in 27.99s）；实现侧浏览器步骤 5–7 已执行并形成报告，当前仅待独立 QA 成员按 `station/web/README-手测清单.md` 复核或重跑并签字。QA 执行失败不视为测试通过，也不视为实现补充。
 
 ## 附录 C：待确认项对设计的影响（承 PRD §16.2，需人工在开发阶段拍板）
 
-| 编号 | 待校验 | 对本 DD 的影响面 | 处理约定 |
-|---|---|---|---|
-| Q-01 | phash 阈值(12/8)与平台真实判重对齐度 | `metrics.PHASH_AVG_MIN/PHASH_MIN_MIN` 常量、`checks.phash.passed` 口径 | 首轮用 `assets/` 标定后**仅改常量**，结构不动 |
-| Q-02 | crop/trim/flip 百分比工程推荐值 | `pipeline.LEVELS` 常量 | A/B 校验后**仅改常量表** |
-| Q-03 | 长/音乐类素材变速漂移 | speed 是否对长视频限档 | 若限档，`_resolve_level` 增时长条件分支（设计已预留位置） |
+| 编号 | 待校验 | 对本 DD 的影响面 | 处理约定 | 实际状态 |
+|---|---|---|---|---|
+| Q-01 | phash 阈值(12/8)与平台真实判重对齐度 | `metrics.PHASH_AVG_MIN/PHASH_MIN_MIN` 常量、`checks.phash.passed` 口径 | 首轮用 `assets/` 标定后**仅改常量**，结构不动 | ⚠️ **已超出原约定**：实测发现 `phash_min` 是极值统计量随抽帧数漂移不可作门，已改用 `weak_frame_ratio≤0.10` 门并增字段（`weak_frame_ratio`/`weak_frame_count`/`threshold.min_min_enforced` 等），属结构改动（超出 PRD §16.2「constants only」）。既成事实，已在本 DD §0.2/§1.3/§1.4 落地，错题本见 [../eval/沉淀失败原因.md](../eval/沉淀失败原因.md)。后续若需再调口径，须回 PRD 确认 |
+| Q-02 | crop/trim/flip 百分比工程推荐值 | `pipeline.LEVELS` 常量 | A/B 校验后**仅改常量表** | 8.0s / 15.2s / 49.5s 工程素材已验证保护、分离度与五项自检，未发现需改常量的代码证据；平台真实判重与观感仍需上线后人工回收，故常量冻结、不宣称平台校准完成 |
+| Q-03 | 长/音乐类素材变速漂移 | speed 是否对长视频限档 | 若限档，`_resolve_level` 增时长条件分支（设计已预留位置） | ✅ 客观同步验证已完成：`test_pipeline_e2e.py` 合成 31s 每秒节拍音轨，强制 heavy 1.10x 后 `duration_close=true`，音频/视频流时长差 ≤0.10s；未发现需加长视频限档分支的工程证据。主观听感/平台分发观感仍由人工观察，不作为代码门 |
 
-> 以上均为「常量/局部分支」级可调项，不影响模块边界与接口契约。若校验结果要求**改变达标口径的字段结构或维度语义**，属需求变更，须回 PRD 确认后再改 DD。
+> 以上均为「常量/局部分支」级可调项，不影响模块边界与接口契约。若校验结果要求**改变达标口径的字段结构或维度语义**，属需求变更，须回 PRD 确认后再改 DD。Q-01 已触发此情形，按此规则落地并标注。
