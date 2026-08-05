@@ -17,7 +17,7 @@ sys.path.insert(0, str(_STATION / "server"))
 import pipeline as P  # noqa: E402
 
 
-ASSET = P.VIDEO_DIR / "微笑.mp4"
+ASSET = _STATION / "assets" / "微笑.mp4"
 
 pytestmark = pytest.mark.skipif(
     not (ASSET.exists() and P.FFMPEG.exists() and P.FFPROBE.exists()),
@@ -27,6 +27,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_dedup_real_asset_runs_ffmpeg_and_returns_five_checks(monkeypatch, tmp_path):
     """真实跑一次 ffmpeg，并验证 DD F2.4 的输出与五项 checks 契约。"""
+    monkeypatch.setattr(P, "VIDEO_DIR", ASSET.parent)
     monkeypatch.setattr(P, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(
         P.M,

@@ -2,6 +2,8 @@
 CRVideoMate/
 station/vendor/
 station/assets/**/*.mp4
+input/*
+!input/.gitkeep
 output/*
 !output/.gitkeep
 station/logs/*

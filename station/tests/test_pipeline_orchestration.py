@@ -30,6 +30,11 @@ import pipeline as P  # noqa: E402
 # ---------------------------------------------------------------------------
 # Feature 2.1 — 路径穿越防护
 # ---------------------------------------------------------------------------
+def test_default_video_dir_is_project_input():
+    project_dir = _STATION.parent
+    assert P.VIDEO_DIR.resolve() == (project_dir / "input").resolve()
+
+
 @pytest.mark.parametrize("bad", [
     "../../etc/passwd",
     "..\\..\\x.mp4",
@@ -43,7 +48,7 @@ def test_resolve_safe_blocks_traversal(bad):
 
 
 def test_resolve_safe_allows_subdir_asset():
-    """assets/ 子目录内的素材是合法的（assets/test/ 下有测试素材）。"""
+    """input/ 子目录内的素材路径仍属于白名单。"""
     p = P._resolve_safe("test", P.VIDEO_DIR, must_exist=False)
     assert p == (Path(P.VIDEO_DIR).resolve() / "test")
 
@@ -243,6 +248,33 @@ def test_batch_fission_default_count_matches_prd():
     """PRD D-04、rules auto_fill 与 Web 控件统一默认生成 5 个变体。"""
     default = inspect.signature(P.batch_fission).parameters["count"].default
     assert default == 5
+
+
+def test_batch_fission_rotates_flip_modes_between_variants(monkeypatch):
+    """批量开启 flip 时应自动轮换 h/v/90，避免所有变体使用同一方向。"""
+    monkeypatch.setattr(P, "probe_video", lambda _src: {
+        "name": "x.mp4", "duration": 10.0,
+    })
+    seen_modes = []
+
+    def fake_dedup(*_args, **kwargs):
+        seen_modes.append(kwargs.get("flip_mode"))
+        i = len(seen_modes)
+        return {
+            "output_path": f"x_{i}.mp4",
+            "output": {"md5": str(i)},
+            "applied_params": {"trim_skipped": False, "flip_mode": kwargs.get("flip_mode")},
+            "checks": {"all_passed": True},
+        }
+
+    monkeypatch.setattr(P, "dedup_video", fake_dedup)
+    monkeypatch.setattr(P.M, "distance_matrix", lambda _paths: {
+        "count": 5, "all_pass": True, "matrix": [],
+        "too_close_pairs": [], "min_pair": None,
+    })
+    result = P.batch_fission("x.mp4", count=5, dimensions={"flip": True}, flip_mode="h")
+    assert seen_modes == ["h", "v", "90", "h", "v"]
+    assert result["separation"]["flip_spread"] is True
 
 
 @pytest.mark.parametrize("md5s,matrix_pass,expected", [

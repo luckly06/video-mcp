@@ -55,7 +55,7 @@
         <div class="section-eyebrow">安全边界</div>
         <h2 id="permission-title">本机权限摘要</h2>
         <div class="permission-list">
-          <div class="permission-item is-allowed"><span class="permission-symbol">✓</span><code>assets/</code><span>素材只读</span></div>
+          <div class="permission-item is-allowed"><span class="permission-symbol">✓</span><code>input/</code><span>素材只读</span></div>
           <div class="permission-item is-allowed"><span class="permission-symbol">✓</span><code>output/</code><span>产物写入</span></div>
           <div class="permission-item is-denied"><span class="permission-symbol">×</span><code>其他目录</code><span>拒绝</span></div>
           <div class="permission-item is-denied"><span class="permission-symbol">×</span><code>delete_output</code><span>硬阻断</span></div>
@@ -140,7 +140,7 @@
           <select id="flip-mode" class="wb-select compact" disabled>
             <option value="h">水平翻转</option><option value="v">垂直翻转</option><option value="90">旋转 90°</option>
           </select>
-          <span class="field-help">启用翻转后必须选择方向。</span>
+          <span class="field-help">单条按所选方向处理；批量裂变会自动轮换水平、垂直和旋转 90°。</span>
         </div>
       </section>
 
@@ -149,7 +149,12 @@
           <div><span class="step-kicker">步骤 3–4</span><h3 id="dedup-title">单条生成与自检</h3><p>执行前需要人工确认；五项检查全部通过后才能交付。</p></div>
           <button id="btn-dedup" class="btn btn-primary btn-large" type="button">开始单条去重</button>
         </div>
-        <div id="dedup-card" class="result-card hidden" aria-live="polite">
+          <div id="dedup-progress" class="processing-progress hidden" role="status" aria-live="polite">
+            <div class="progress-row"><strong id="dedup-progress-label">正在生成单条变体</strong><span id="dedup-progress-time">正在估算</span></div>
+            <div class="orb-loader"><div class="orb-path"><div class="orb-globe" tabindex="0" role="slider" aria-label="等待互动球，可左右拖动" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="orb-wrapper"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div></div>
+            <p>按住彩球可左右拖动；松手后继续自动往返。预计时间会动态校准，预测超时不会中断处理。</p>
+          </div>
+          <div id="dedup-card" class="result-card hidden" aria-live="polite">
           <div class="result-head"><div><span class="result-eyebrow">dedup_video</span><h4>单条自检报告</h4></div><span class="tier-chip tier-warned">人工确认执行</span></div>
           <div class="checks">
             <div class="check-item" id="chk-md5"><span class="check-mark">—</span><span class="check-text"><b>MD5 已改变</b><small>输出与源文件指纹不同</small></span></div>
@@ -178,14 +183,20 @@
             <button id="btn-fission" class="btn btn-primary" type="button">开始裂变</button>
           </div>
         </div>
+        <div id="fission-progress" class="processing-progress hidden" role="status" aria-live="polite">
+          <div class="progress-row"><strong id="fission-progress-label">正在准备批量裂变</strong><span id="fission-progress-time">正在估算</span></div>
+          <div class="orb-loader"><div class="orb-path"><div class="orb-globe" tabindex="0" role="slider" aria-label="等待互动球，可左右拖动" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="orb-wrapper"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div></div>
+          <p>按住彩球可左右拖动；松手后继续自动往返。预计时间会动态校准，预测超时不会中断处理。</p>
+        </div>
         <div id="fission-card" class="result-card hidden" aria-live="polite">
           <div class="result-head"><div><span class="result-eyebrow">batch_fission</span><h4>裂变结果与距离矩阵</h4></div><span class="tier-chip tier-warned">人工确认执行</span></div>
           <div id="fission-summary" class="fission-summary"></div>
+          <div id="fission-explainer" class="fission-explainer"></div>
           <div id="fission-separation" class="fission-separation hidden"></div>
           <div id="fission-matrix-wrap" class="fission-matrix-wrap hidden">
             <div class="matrix-title">变体距离矩阵（pHash avg，对角线为自身）</div>
             <div id="fission-matrix" class="fission-matrix"></div>
-            <div class="matrix-legend"><span class="ml-cell ok">≥12 通过</span><span class="ml-cell warn">&lt;12 过近</span><span class="ml-cell diag">自身</span></div>
+            <div class="matrix-legend"><span class="ml-cell ok">绿色：通过</span><span class="ml-cell warn">红色：未通过</span><span class="ml-cell diag">自身</span></div>
           </div>
           <div id="fission-list" class="fission-list"></div>
           <div class="result-actions"><button id="btn-open-output-fission" class="btn btn-secondary" type="button">打开输出文件夹</button></div>
@@ -194,16 +205,47 @@
     </main>
 
     <aside id="audit-panel" class="audit-sidebar">
-      <section class="audit-card">
+      <section class="audit-card audit-log-card">
         <div class="audit-heading"><div><div class="section-eyebrow">验收记录</div><h2>最近操作</h2></div><span id="memory-count" class="memory-count">0 条记录</span></div>
-        <div id="timeline" class="timeline"><div class="tl-empty">暂无操作记录。完成探测或生成后，这里会记录关键步骤。</div></div>
+        <div class="audit-search" aria-label="筛选验收记录">
+          <label class="audit-search-field" for="memory-date"><span>会话</span><input id="memory-date" type="date" aria-label="按日期筛选会话" /></label>
+          <label class="audit-search-field" for="memory-search"><span>状态</span><input id="memory-search" type="search" placeholder="状态、工具或摘要" autocomplete="off" aria-label="按文字筛选状态、工具或摘要" /></label>
+        </div>
+        <div class="audit-log-layout">
+          <div class="audit-arc-panel">
+            <svg id="memory-arc" class="memory-arc" viewBox="0 0 190 340" role="img" aria-labelledby="memory-arc-title memory-arc-desc">
+              <title id="memory-arc-title">操作记录右半圆时间轴</title>
+              <desc id="memory-arc-desc">所选会话的操作从上到下按时间排列。</desc>
+            </svg>
+            <div id="memory-unit" class="memory-unit">单位：自动</div>
+          </div>
+          <div id="timeline" class="timeline"><div class="tl-empty">暂无操作记录。完成探测或生成后，这里会记录关键步骤。</div></div>
+        </div>
         <button id="btn-clear-memory" class="btn btn-text" type="button">清空本机会话记录</button>
       </section>
 
       <section class="audit-card tool-card-panel">
-        <div class="audit-heading"><div><div class="section-eyebrow">工具与分级</div><h2>服务能力</h2></div></div>
-        <div class="tier-legend"><span class="tier-chip tier-audit">审计</span><span class="tier-chip tier-warned">需确认</span><span class="tier-chip tier-blocked">阻断</span><span class="tier-chip tier-pass">放行</span></div>
-        <div id="tools-list" class="tools-list"><div class="loading">加载工具中…</div></div>
+        <div class="audit-heading"><div><div class="section-eyebrow">工具与分级</div><h2>服务能力</h2></div><span id="tools-count" class="memory-count">0 个工具</span></div>
+        <div id="tool-filters" class="tool-filters" role="group" aria-label="按安全等级筛选工具">
+          <button class="tool-filter active" type="button" data-tool-filter="all" aria-pressed="true">全部 0</button>
+          <button class="tool-filter" type="button" data-tool-filter="audit" aria-pressed="false">审计 0</button>
+          <button class="tool-filter" type="button" data-tool-filter="warned" aria-pressed="false">需确认 0</button>
+          <button class="tool-filter" type="button" data-tool-filter="blocked" aria-pressed="false">阻断 0</button>
+          <button class="tool-filter" type="button" data-tool-filter="pass" aria-pressed="false">放行 0</button>
+        </div>
+        <div class="tool-axis-layout">
+          <div class="tool-axis-panel">
+            <svg id="tool-axis" class="tool-axis" viewBox="0 0 220 330" role="img" aria-labelledby="tool-axis-title tool-axis-desc">
+              <title id="tool-axis-title">工具与安全分级右半圆</title>
+              <desc id="tool-axis-desc">服务工具按安全等级着色并沿右半圆等宽排列。</desc>
+            </svg>
+            <div id="tool-axis-note" class="tool-axis-note">单位：1 个色段 = 1 个工具</div>
+          </div>
+          <div>
+            <div id="tools-list" class="tools-list"><div class="loading">加载工具中…</div></div>
+            <div id="tool-detail" class="tool-detail"><strong>等待工具清单</strong><p>连接服务后可查看工具等级、用途和调用边界。</p></div>
+          </div>
+        </div>
       </section>
     </aside>
   </div>

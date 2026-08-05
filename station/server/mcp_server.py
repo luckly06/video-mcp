@@ -109,7 +109,7 @@ def _valid_request_state(state, name, args):
 TOOLS = [
     {
         "name": "list_assets",
-        "description": "列出 video/ 目录下可处理的视频素材（名称/大小）。",
+        "description": "列出工程根 input/ 目录下可处理的视频素材（名称/大小）。",
         "inputSchema": {"type": "object", "properties": {}},
         "_tier": "audit",
     },

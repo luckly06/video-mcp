@@ -5,7 +5,7 @@
 ## 前置条件
 
 - [ ] 从 `station/` 启动 `python run.py`，页面显示 MCP 已连接。
-- [ ] `station/assets/` 至少有一个可处理视频。
+- [ ] 项目根目录 `input/` 至少有一个可处理视频。
 - [ ] 数值 pHash 主路径需安装 `requirements.txt`；未安装时允许走 `signature` 兜底，但必须明确区分两种口径。
 
 ## 步骤 1-4：连接、控件与确认协议

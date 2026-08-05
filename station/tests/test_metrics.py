@@ -21,12 +21,13 @@ sys.path.insert(0, str(_SERVER))
 import metrics as M          # noqa: E402
 import pipeline as P         # noqa: E402
 
-VID_A = P.VIDEO_DIR / "下班来接我.mp4"
-VID_B = P.VIDEO_DIR / "微笑.mp4"
+FIXTURES_DIR = Path(__file__).resolve().parent.parent / "assets"
+VID_A = FIXTURES_DIR / "下班来接我.mp4"
+VID_B = FIXTURES_DIR / "微笑.mp4"
 
 pytestmark = pytest.mark.skipif(
     not (VID_A.exists() and VID_B.exists()),
-    reason="测试素材缺失（assets/下班来接我.mp4 或 微笑.mp4）",
+    reason="测试素材缺失（station/assets/下班来接我.mp4 或 微笑.mp4）",
 )
 
 

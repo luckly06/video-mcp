@@ -27,7 +27,20 @@ function tierOf(name) {
   if (name.startsWith("list_") || name.startsWith("probe") || name === "get_job") return "audit";
   return "audit";
 }
-const TIER_LABEL = { audit: "audit", warned: "warned", blocked: "blocked", pass: "pass" };
+const TIER_LABEL = { audit: "审计", warned: "需确认", blocked: "阻断", pass: "放行" };
+const TIER_ORDER = ["audit", "warned", "blocked", "pass"];
+const TOOL_AXIS_COLORS = {
+  audit: { fill: "#B9E3CF", stroke: "#16845B" },
+  warned: { fill: "#F8D894", stroke: "#A96700" },
+  blocked: { fill: "#F2B6B6", stroke: "#C73535" },
+  pass: { fill: "#D8DEE7", stroke: "#64748B" },
+};
+const TOOL_CONFIRMATION = {
+  audit: "无需确认，可直接读取或查询。",
+  warned: "执行前必须经过人工确认。",
+  blocked: "危险操作，当前策略硬阻断。",
+  pass: "无需确认，策略允许直接执行。",
+};
 
 /* ---------------------------------------------------------------------------
    DOM 引用
@@ -45,6 +58,11 @@ const el = {
 
   whitelist: $("whitelist"),
   toolsList: $("tools-list"),
+  toolsCount: $("tools-count"),
+  toolFilters: $("tool-filters"),
+  toolAxis: $("tool-axis"),
+  toolAxisNote: $("tool-axis-note"),
+  toolDetail: $("tool-detail"),
 
   assetSelect: $("asset-select"),
   btnRefreshAssets: $("btn-refresh-assets"),
@@ -70,19 +88,30 @@ const el = {
   btnDeliver: $("btn-deliver"),
   btnRegen: $("btn-regen"),
   btnOpenOutput: $("btn-open-output"),
+  dedupProgress: $("dedup-progress"),
+  dedupProgressLabel: $("dedup-progress-label"),
+  dedupProgressTime: $("dedup-progress-time"),
 
   fissionCount: $("fission-count"),
   btnFission: $("btn-fission"),
   fissionCard: $("fission-card"),
   fissionSummary: $("fission-summary"),
+  fissionExplainer: $("fission-explainer"),
   fissionSeparation: $("fission-separation"),
   fissionMatrixWrap: $("fission-matrix-wrap"),
   fissionMatrix: $("fission-matrix"),
   fissionList: $("fission-list"),
   btnOpenOutputFission: $("btn-open-output-fission"),
+  fissionProgress: $("fission-progress"),
+  fissionProgressLabel: $("fission-progress-label"),
+  fissionProgressTime: $("fission-progress-time"),
 
   timeline: $("timeline"),
   memoryCount: $("memory-count"),
+  memoryDate: $("memory-date"),
+  memorySearch: $("memory-search"),
+  memoryArc: $("memory-arc"),
+  memoryUnit: $("memory-unit"),
   btnClearMemory: $("btn-clear-memory"),
 
   modalOverlay: $("modal-overlay"),
@@ -95,9 +124,198 @@ const el = {
 
 /* 记住最近一次 probe 的素材名和当前去重交付门状态 */
 let lastProbedAsset = null;
+let lastProbeInfo = null;
 let dedupDeliveryReady = false;
 let currentWorkflowStep = 1;
 let lastModalTrigger = null;
+let activeProgress = new Map();
+
+const PROGRESS_HISTORY_KEY = "video-dedup-progress-history-v1";
+const PROGRESS_SAMPLE_LIMIT = 8;
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.ceil(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(secs).padStart(2, "0");
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function taskWorkUnits(kind, context) {
+  const duration = Math.max(1, Number(context.duration) || 10);
+  const count = kind === "fission" ? Math.max(1, Number(context.count) || 1) : 1;
+  const enabled = Object.values(context.dimensions || {}).filter(Boolean).length;
+  const levelFactor = { light: 0.9, medium: 1, heavy: 1.18 }[context.level] || 1;
+  const dimensionFactor = 0.82 + Math.min(enabled, 6) * 0.06;
+  return duration * count * levelFactor * dimensionFactor;
+}
+
+function readProgressHistory() {
+  try {
+    const value = JSON.parse(localStorage.getItem(PROGRESS_HISTORY_KEY) || "{}");
+    return value && typeof value === "object" ? value : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function estimateProgress(kind, context) {
+  const units = taskWorkUnits(kind, context);
+  const history = readProgressHistory();
+  const samples = Array.isArray(history[kind]) ? history[kind] : [];
+  let secondsPerUnit = 0.72;
+  let calibrated = false;
+  if (samples.length) {
+    const recent = samples.slice(-PROGRESS_SAMPLE_LIMIT);
+    const weighted = recent.reduce((sum, sample, index) => {
+      const weight = index + 1;
+      return { total: sum.total + sample.rate * weight, weight: sum.weight + weight };
+    }, { total: 0, weight: 0 });
+    secondsPerUnit = weighted.total / weighted.weight;
+    calibrated = true;
+  }
+  const count = Math.max(1, Number(context.count) || 1);
+  const overhead = kind === "fission" ? Math.max(2, count * (count - 1) * 0.225) : 3;
+  const seconds = Math.max(8, Math.min(21600, units * secondsPerUnit + overhead));
+  return { seconds, units, overhead, calibrated };
+}
+
+function setupOrbInteraction(box) {
+  const path = box.querySelector(".orb-path");
+  const globe = box.querySelector(".orb-globe");
+  if (!path || !globe) return null;
+  const state = {
+    position: 0,
+    direction: 1,
+    dragging: false,
+    pointerId: null,
+    lastFrame: performance.now(),
+    frame: 0,
+  };
+
+  function pathScale() {
+    return path.getBoundingClientRect().width / path.offsetWidth || 1;
+  }
+  function maxPosition() {
+    return Math.max(0, path.clientWidth - globe.offsetWidth - 4);
+  }
+  function renderPosition() {
+    const max = maxPosition();
+    state.position = Math.max(0, Math.min(max, state.position));
+    globe.style.transform = `translateX(${state.position}px)`;
+    globe.setAttribute("aria-valuenow", max ? String(Math.round(state.position / max * 100)) : "0");
+  }
+  function animate(now) {
+    const max = maxPosition();
+    if (!state.dragging && max > 0) {
+      const delta = Math.min(40, now - state.lastFrame);
+      state.position += state.direction * delta * max / 2000;
+      if (state.position >= max) { state.position = max; state.direction = -1; }
+      if (state.position <= 0) { state.position = 0; state.direction = 1; }
+      renderPosition();
+    }
+    state.lastFrame = now;
+    if (!box.classList.contains("hidden")) state.frame = requestAnimationFrame(animate);
+  }
+  function beginDrag(event) {
+    if (event.button != null && event.button !== 0) return;
+    state.dragging = true;
+    state.pointerId = event.pointerId;
+    state.lastClientX = event.clientX;
+    globe.classList.add("is-dragging");
+    path.classList.add("is-dragging");
+    try { globe.setPointerCapture?.(event.pointerId); } catch (_) { /* 合成事件或旧浏览器无需捕获 */ }
+    event.preventDefault();
+  }
+  function moveDrag(event) {
+    if (!state.dragging || event.pointerId !== state.pointerId) return;
+    state.position += (event.clientX - state.lastClientX) / pathScale();
+    state.lastClientX = event.clientX;
+    renderPosition();
+    event.preventDefault();
+  }
+  function endDrag(event) {
+    if (!state.dragging || event.pointerId !== state.pointerId) return;
+    const max = maxPosition();
+    state.direction = state.position >= max / 2 ? -1 : 1;
+    state.dragging = false;
+    state.pointerId = null;
+    globe.classList.remove("is-dragging");
+    path.classList.remove("is-dragging");
+    try { globe.releasePointerCapture?.(event.pointerId); } catch (_) { /* 未捕获时无需释放 */ }
+  }
+  function moveByKeyboard(event) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    state.position += event.key === "ArrowRight" ? 14 : -14;
+    state.direction = event.key === "ArrowRight" ? 1 : -1;
+    renderPosition();
+    event.preventDefault();
+  }
+  globe.addEventListener("pointerdown", beginDrag);
+  globe.addEventListener("pointermove", moveDrag);
+  globe.addEventListener("pointerup", endDrag);
+  globe.addEventListener("pointercancel", endDrag);
+  globe.addEventListener("keydown", moveByKeyboard);
+  renderPosition();
+  state.frame = requestAnimationFrame(animate);
+  return () => {
+    cancelAnimationFrame(state.frame);
+    globe.removeEventListener("pointerdown", beginDrag);
+    globe.removeEventListener("pointermove", moveDrag);
+    globe.removeEventListener("pointerup", endDrag);
+    globe.removeEventListener("pointercancel", endDrag);
+    globe.removeEventListener("keydown", moveByKeyboard);
+    globe.classList.remove("is-dragging");
+    path.classList.remove("is-dragging");
+  };
+}
+
+function startProgress(kind, label, context) {
+  if (activeProgress.has(kind)) stopProgress(kind);
+  const isFission = kind === "fission";
+  const box = isFission ? el.fissionProgress : el.dedupProgress;
+  const labelNode = isFission ? el.fissionProgressLabel : el.dedupProgressLabel;
+  const timeNode = isFission ? el.fissionProgressTime : el.dedupProgressTime;
+  const estimate = estimateProgress(kind, context || {});
+  const startedAt = Date.now();
+  labelNode.textContent = label;
+  timeNode.textContent = "预计剩余 " + formatDuration(estimate.seconds);
+  timeNode.title = estimate.calibrated ? "已参考本机近期同类任务耗时" : "暂无历史样本，使用素材与参数估算";
+  box.classList.remove("hidden");
+  const cleanupOrb = setupOrbInteraction(box);
+  const timer = setInterval(() => {
+    const elapsed = (Date.now() - startedAt) / 1000;
+    const remaining = estimate.seconds - elapsed;
+    timeNode.textContent = remaining > 0 ? "预计剩余 " + formatDuration(remaining) : "已超预计，仍在处理";
+    if (elapsed >= estimate.seconds * 0.78) {
+      labelNode.textContent = isFission ? "正在完成变体并计算距离矩阵" : "正在完成输出并执行五项自检";
+    }
+  }, 500);
+  activeProgress.set(kind, { box, timer, startedAt, units: estimate.units, overhead: estimate.overhead, cleanupOrb });
+}
+
+function learnProgressDuration(kind) {
+  const current = activeProgress.get(kind);
+  if (!current || !current.units) return;
+  const elapsed = Math.max(1, (Date.now() - current.startedAt) / 1000);
+  const rate = Math.max(0.01, elapsed - current.overhead) / current.units;
+  if (!Number.isFinite(rate) || rate <= 0 || rate > 60) return;
+  const history = readProgressHistory();
+  const samples = Array.isArray(history[kind]) ? history[kind] : [];
+  history[kind] = samples.concat({ rate, at: Date.now() }).slice(-PROGRESS_SAMPLE_LIMIT);
+  try { localStorage.setItem(PROGRESS_HISTORY_KEY, JSON.stringify(history)); } catch (_) { /* 本地存储不可用时跳过校准 */ }
+}
+
+function stopProgress(kind) {
+  const current = activeProgress.get(kind);
+  if (!current) return;
+  clearInterval(current.timer);
+  if (typeof current.cleanupOrb === "function") current.cleanupOrb();
+  current.box.classList.add("hidden");
+  activeProgress.delete(kind);
+}
 
 function setWorkflowStep(step, failedStep = null) {
   currentWorkflowStep = Math.max(1, Math.min(4, step));
@@ -122,6 +340,7 @@ function setServiceState(state, text) {
 
 function resetResultsForAssetChange() {
   lastProbedAsset = null;
+  lastProbeInfo = null;
   dedupDeliveryReady = false;
   el.btnDeliver.disabled = true;
   el.probeCard.classList.add("hidden");
@@ -193,7 +412,7 @@ async function callTool(name, args, opts = {}) {
 
 /* 走完整人工决策流的工具调用：首次触发 input_required 时弹模态框，
    用户确认后带 inputResponses 重发。返回最终归一化结果或 {kind:"cancelled"}。 */
-async function callToolWithConfirm(name, args) {
+async function callToolWithConfirm(name, args, onExecute) {
   let res = await callTool(name, args);
   if (res.kind !== "input_required") return res;
 
@@ -204,6 +423,7 @@ async function callToolWithConfirm(name, args) {
     return { kind: "cancelled" };
   }
   addMemory(name, "human", "人工确认决策点：批准执行。");
+  if (typeof onExecute === "function") onExecute();
   res = await callTool(name, args, { confirmed: true, requestState: res.requestState });
   return res;
 }
@@ -261,7 +481,9 @@ async function connectAndBootstrap() {
     showConnError("请先启动 MCP Server（python server/mcp_server.py，监听 127.0.0.1:8765）。若已启动，可能是 file:// 跨域 —— 该 server 已开放 CORS，直接刷新重试即可。");
     // 连接失败时把清单/素材区标为不可用
     el.whitelist.innerHTML = '<span class="wl-hint">未连接，无法拉取工具白名单</span>';
+    renderTools([]);
     el.toolsList.innerHTML = '<div class="loading">未连接 Server，无法加载工具清单。</div>';
+    el.toolDetail.innerHTML = "<strong>服务未连接</strong><p>恢复连接后会自动加载能力清单。</p>";
     el.assetSelect.innerHTML = '<option value="">未连接 Server</option>';
     return;
   }
@@ -280,28 +502,172 @@ async function loadTools() {
     renderTools(tools);
     renderWhitelist(tools);
   } catch (e) {
+    renderTools([]);
     el.toolsList.innerHTML = '<div class="loading">工具清单加载失败：' + escapeHtml(e.message) + "</div>";
+    el.toolDetail.innerHTML = "<strong>工具清单加载失败</strong><p>请检查服务连接后重试。</p>";
   }
 }
 
+let currentTools = [];
+let activeToolFilter = "all";
+
 function renderTools(tools) {
-  if (!tools.length) {
+  currentTools = tools
+    .map((tool, sourceIndex) => ({ ...tool, tier: tierOf(tool.name), sourceIndex }))
+    .sort((a, b) => TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) || a.sourceIndex - b.sourceIndex);
+  if (!currentTools.length) {
+    el.toolsCount.textContent = "0 个工具";
     el.toolsList.innerHTML = '<div class="loading">Server 未暴露任何工具。</div>';
+    el.toolDetail.innerHTML = "<strong>暂无服务能力</strong><p>当前 Server 没有返回可调用工具。</p>";
+    renderToolAxis([]);
+    updateToolFilters();
     return;
   }
-  el.toolsList.innerHTML = "";
-  tools.forEach((t) => {
-    const tier = tierOf(t.name);
-    const card = document.createElement("div");
-    card.className = "tool-card t-" + tier;
-    card.innerHTML =
-      '<div class="tool-card-head">' +
-        '<span class="tool-name">' + escapeHtml(t.name) + "</span>" +
-        '<span class="tool-tier tier-' + tier + '">' + TIER_LABEL[tier] + "</span>" +
-      "</div>" +
-      '<div class="tool-desc">' + escapeHtml(t.description || "") + "</div>";
-    el.toolsList.appendChild(card);
+  el.toolsList.innerHTML = currentTools.map((tool, index) => {
+    const colors = TOOL_AXIS_COLORS[tool.tier];
+    return '<article class="tool-axis-item" data-tool-id="' + index + '" data-tool-tier="' + tool.tier + '" tabindex="0" ' +
+      'style="--tool-tier:' + colors.stroke + ";--tool-fill:" + colors.fill + '">' +
+      '<span class="tool-axis-index">' + (index + 1) + "</span>" +
+      '<div><div class="tool-name">' + escapeHtml(tool.name) + '</div><div class="tool-desc">' + escapeHtml(tool.description || "暂无说明") + "</div></div>" +
+      '<span class="tool-axis-tag">' + TIER_LABEL[tool.tier] + "</span>" +
+    "</article>";
+  }).join("");
+  renderToolAxis(currentTools);
+  updateToolFilters();
+  if (activeToolFilter !== "all" && !currentTools.some((tool) => tool.tier === activeToolFilter)) activeToolFilter = "all";
+  applyToolFilter(activeToolFilter, false);
+}
+
+function renderToolAxis(tools) {
+  const svg = el.toolAxis;
+  svg.replaceChildren();
+  const title = toolAxisNode("title");
+  title.textContent = "工具与安全分级右半圆";
+  svg.appendChild(title);
+  const desc = toolAxisNode("desc");
+  desc.textContent = tools.length ? tools.length + " 个工具按安全等级着色并等宽排列。" : "当前没有可展示工具。";
+  svg.appendChild(desc);
+  const center = { x: 17, y: 165 };
+  const outer = 140;
+  const bandOuter = 128;
+  const bandInner = 91;
+  const labelRadius = 109;
+  const point = (radius, ratio) => {
+    const angle = -Math.PI / 2 + ratio * Math.PI;
+    return { x: center.x + radius * Math.cos(angle), y: center.y + radius * Math.sin(angle) };
+  };
+  const arcPath = (radius) => {
+    const start = point(radius, 0);
+    const end = point(radius, 1);
+    return "M " + start.x + " " + start.y + " A " + radius + " " + radius + " 0 0 1 " + end.x + " " + end.y;
+  };
+  const bandPath = (from, to) => {
+    const a = point(bandOuter, from);
+    const b = point(bandOuter, to);
+    const c = point(bandInner, to);
+    const d = point(bandInner, from);
+    return "M " + a.x + " " + a.y + " A " + bandOuter + " " + bandOuter + " 0 0 1 " + b.x + " " + b.y +
+      " L " + c.x + " " + c.y + " A " + bandInner + " " + bandInner + " 0 0 0 " + d.x + " " + d.y + " Z";
+  };
+  svg.appendChild(toolAxisNode("path", { d: arcPath(outer), class: "tool-axis-track" }));
+  svg.appendChild(toolAxisNode("path", { d: arcPath(66), class: "tool-axis-guide" }));
+  if (!tools.length) {
+    const empty = toolAxisNode("text", { x: 81, y: 168, class: "tool-axis-center" });
+    empty.textContent = "等待工具清单";
+    svg.appendChild(empty);
+    return;
+  }
+  tools.forEach((tool, index) => {
+    const from = index / tools.length;
+    const to = (index + 1) / tools.length;
+    const colors = TOOL_AXIS_COLORS[tool.tier];
+    const boundary = point(bandInner, from);
+    svg.appendChild(toolAxisNode("line", { x1: center.x, y1: center.y, x2: boundary.x, y2: boundary.y, class: "tool-axis-boundary" }));
+    svg.appendChild(toolAxisNode("path", {
+      d: bandPath(from, to), fill: colors.fill, stroke: colors.stroke, "stroke-width": 1,
+      class: "tool-axis-segment", tabindex: 0, "data-tool-id": index, "data-tool-tier": tool.tier,
+      "aria-label": (index + 1) + "，" + tool.name + "，" + TIER_LABEL[tool.tier],
+    }));
+    const labelPoint = point(labelRadius, (from + to) / 2);
+    const number = toolAxisNode("text", { x: labelPoint.x, y: labelPoint.y + 3, fill: colors.stroke, class: "tool-axis-number", "data-tool-id": index, "data-tool-tier": tool.tier });
+    number.textContent = index + 1;
+    svg.appendChild(number);
   });
+  const end = point(bandInner, 1);
+  svg.appendChild(toolAxisNode("line", { x1: center.x, y1: center.y, x2: end.x, y2: end.y, class: "tool-axis-boundary" }));
+  svg.appendChild(toolAxisNode("circle", { cx: center.x, cy: center.y, r: 3, fill: "#64748B" }));
+  const centerTitle = toolAxisNode("text", { x: 79, y: 160, class: "tool-axis-center" });
+  centerTitle.textContent = "全部工具";
+  svg.appendChild(centerTitle);
+  const centerCount = toolAxisNode("text", { x: 79, y: 174, class: "tool-axis-center tool-axis-center-count" });
+  centerCount.textContent = tools.length + " 个";
+  svg.appendChild(centerCount);
+  let start = 0;
+  TIER_ORDER.forEach((tier) => {
+    const count = tools.filter((tool) => tool.tier === tier).length;
+    if (!count) return;
+    const ratio = (start + count / 2) / tools.length;
+    const p = point(151, ratio);
+    const label = toolAxisNode("text", { x: p.x, y: p.y + 3, fill: TOOL_AXIS_COLORS[tier].stroke, class: "tool-axis-group" });
+    label.textContent = TIER_LABEL[tier] + " · " + count;
+    svg.appendChild(label);
+    start += count;
+  });
+}
+
+function toolAxisNode(tag, attrs = {}) {
+  const node = document.createElementNS(MEMORY_ARC_NS, tag);
+  Object.entries(attrs).forEach(([name, value]) => node.setAttribute(name, value));
+  return node;
+}
+
+function updateToolFilters() {
+  const counts = { all: currentTools.length, audit: 0, warned: 0, blocked: 0, pass: 0 };
+  currentTools.forEach((tool) => { counts[tool.tier] += 1; });
+  el.toolFilters.querySelectorAll("[data-tool-filter]").forEach((button) => {
+    const tier = button.getAttribute("data-tool-filter");
+    button.textContent = (tier === "all" ? "全部" : TIER_LABEL[tier]) + " " + counts[tier];
+    button.hidden = tier !== "all" && counts[tier] === 0;
+  });
+}
+
+function applyToolFilter(tier, focus = true) {
+  activeToolFilter = tier;
+  const visible = currentTools.filter((tool) => tier === "all" || tool.tier === tier);
+  el.toolsCount.textContent = visible.length === currentTools.length ? currentTools.length + " 个工具" : visible.length + " / " + currentTools.length + " 个";
+  el.toolFilters.querySelectorAll("[data-tool-filter]").forEach((button) => {
+    const active = button.getAttribute("data-tool-filter") === tier;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-tool-tier]").forEach((node) => {
+    const hidden = tier !== "all" && node.getAttribute("data-tool-tier") !== tier;
+    if (node.classList.contains("tool-axis-item")) node.classList.toggle("hidden", hidden);
+    else node.classList.toggle("is-dimmed", hidden);
+    node.classList.remove("is-active");
+  });
+  el.toolAxis.querySelectorAll(".tool-axis-center").forEach((node, index) => {
+    node.textContent = index === 0 ? (tier === "all" ? "全部工具" : TIER_LABEL[tier]) : visible.length + " 个";
+  });
+  el.toolDetail.innerHTML = '<strong>' + (tier === "all" ? "全部工具" : TIER_LABEL[tier]) + " · " + visible.length + "</strong><p>点击半圆色段或工具列表，可查看调用边界并筛选上方验收记录。</p>";
+  if (focus) el.toolAxis.focus({ preventScroll: true });
+}
+
+function selectTool(toolId) {
+  const index = Number(toolId);
+  const tool = currentTools[index];
+  if (!tool) return;
+  document.querySelectorAll("[data-tool-id]").forEach((node) => {
+    const active = Number(node.getAttribute("data-tool-id")) === index;
+    node.classList.toggle("is-active", active);
+    if (node.classList.contains("tool-axis-segment") || node.classList.contains("tool-axis-number")) node.classList.toggle("is-dimmed", !active);
+  });
+  const colors = TOOL_AXIS_COLORS[tool.tier];
+  el.toolDetail.innerHTML = '<div class="tool-detail-title"><span class="tool-axis-index" style="--tool-tier:' + colors.stroke + ";--tool-fill:" + colors.fill + '">' + (index + 1) + "</span>" + escapeHtml(tool.name) + " · " + TIER_LABEL[tool.tier] + '</div><p>' + escapeHtml(tool.description || "暂无说明") + "<br>" + TOOL_CONFIRMATION[tool.tier] + "<br>已联动筛选上方验收记录。</p>";
+  el.memorySearch.value = tool.name;
+  renderMemory();
+  const item = el.toolsList.querySelector('[data-tool-id="' + index + '"]');
+  if (item) item.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function renderWhitelist(tools) {
@@ -331,7 +697,7 @@ async function loadAssets() {
   }
   const assets = (res.data && res.data.assets) || [];
   if (!assets.length) {
-    el.assetSelect.innerHTML = '<option value="">video/ 下暂无素材</option>';
+    el.assetSelect.innerHTML = '<option value="">input/ 下暂无素材，请先放入视频</option>';
     return;
   }
   el.assetSelect.innerHTML = "";
@@ -366,6 +732,7 @@ async function doProbe() {
     if (res.kind !== "ok") return;
     const p = res.data;
     lastProbedAsset = src;
+    lastProbeInfo = p;
     setWorkflowStep(2);
     renderProbe(p);
     addMemory("probe_video", "audit",
@@ -436,31 +803,42 @@ async function doDedup() {
   const args = { src, level, dimensions };
   if (flip_mode) args.flip_mode = flip_mode;
   setWorkflowStep(3);
-  withBusy(el.btnDedup, "开始单条去重", async () => {
-    const res = await callToolWithConfirm("dedup_video", args);
-    if (res.kind === "cancelled") {
-      setWorkflowStep(2);
-      return;
-    }
-    if (res.kind === "text") {
-      setWorkflowStep(3, 3);
-      addMemory("dedup_video", "error", res.text);
-      toast("去重失败：" + res.text, "err");
-      return;
-    }
-    if (res.kind !== "ok") return;
-    setWorkflowStep(4);
-    renderDedup(res.data);
-    const c = res.data.checks || {};
-    const ph = c.phash || {};
-    addMemory("dedup_video", "warned",
-      `去重完成 → ${baseName(res.data.output_path)} · MD5${mark(c.md5_changed)} 分辨率${mark(c.resolution_kept)} 时长${mark(c.duration_close)} 5s${mark(c.min_duration_ok)} phash${mark(ph.passed)}`);
-    if (c.all_passed === true) {
-      toast("去重自检通过，请人工决策是否交付。", "ok");
-    } else {
-      toast("去重已生成，但自检未全部通过，当前不可交付。", "warn");
-    }
-  });
+  try {
+    await withBusy(el.btnDedup, "开始单条去重", async () => {
+      const res = await callToolWithConfirm("dedup_video", args, () => {
+        startProgress("dedup", "正在生成单条变体并执行五项自检", {
+          duration: lastProbeInfo && lastProbeInfo.duration,
+          level,
+          dimensions,
+        });
+      });
+      if (res.kind === "cancelled") {
+        setWorkflowStep(2);
+        return;
+      }
+      if (res.kind === "text") {
+        setWorkflowStep(3, 3);
+        addMemory("dedup_video", "error", res.text);
+        toast("去重失败：" + res.text, "err");
+        return;
+      }
+      if (res.kind !== "ok") return;
+      learnProgressDuration("dedup");
+      setWorkflowStep(4);
+      renderDedup(res.data);
+      const c = res.data.checks || {};
+      const ph = c.phash || {};
+      addMemory("dedup_video", "warned",
+        `去重完成 → ${baseName(res.data.output_path)} · MD5${mark(c.md5_changed)} 分辨率${mark(c.resolution_kept)} 时长${mark(c.duration_close)} 5s${mark(c.min_duration_ok)} phash${mark(ph.passed)}`);
+      if (c.all_passed === true) {
+        toast("去重自检通过，请人工决策是否交付。", "ok");
+      } else {
+        toast("去重已生成，但自检未全部通过，当前不可交付。", "warn");
+      }
+    });
+  } finally {
+    stopProgress("dedup");
+  }
 }
 
 function renderDedup(d) {
@@ -548,31 +926,43 @@ async function doFission() {
   const args = { src, count, level, dimensions };
   if (flip_mode) args.flip_mode = flip_mode;
   setWorkflowStep(3);
-  withBusy(el.btnFission, "开始裂变", async () => {
-    const res = await callToolWithConfirm("batch_fission", args);
-    if (res.kind === "cancelled") {
-      setWorkflowStep(2);
-      return;
-    }
-    if (res.kind === "text") {
-      setWorkflowStep(3, 3);
-      addMemory("batch_fission", "error", res.text);
-      toast("裂变失败：" + res.text, "err");
-      return;
-    }
-    if (res.kind !== "ok") return;
-    setWorkflowStep(4);
-    renderFission(res.data);
-    const allPass = res.data.matrix && res.data.matrix.all_pass;
-    const deliveryReady = res.data.delivery_ready === true;
-    addMemory("batch_fission", "warned",
-      `裂变 ${res.data.count} 个变体 · MD5唯一${mark(res.data.all_unique)} · 矩阵${mark(allPass)} · 交付门${mark(deliveryReady)}（源：${res.data.src}）`);
-    if (deliveryReady) {
-      toast("裂变完成且双门通过：生成 " + res.data.count + " 个变体。", "ok");
-    } else {
-      toast("裂变已生成，但 MD5 唯一性或距离矩阵未通过，当前不可交付。", "warn");
-    }
-  });
+  try {
+    await withBusy(el.btnFission, "开始裂变", async () => {
+      const res = await callToolWithConfirm("batch_fission", args, () => {
+        startProgress("fission", "正在逐个生成变体并计算距离矩阵", {
+          duration: lastProbeInfo && lastProbeInfo.duration,
+          count,
+          level,
+          dimensions,
+        });
+      });
+      if (res.kind === "cancelled") {
+        setWorkflowStep(2);
+        return;
+      }
+      if (res.kind === "text") {
+        setWorkflowStep(3, 3);
+        addMemory("batch_fission", "error", res.text);
+        toast("裂变失败：" + res.text, "err");
+        return;
+      }
+      if (res.kind !== "ok") return;
+      learnProgressDuration("fission");
+      setWorkflowStep(4);
+      renderFission(res.data);
+      const allPass = res.data.matrix && res.data.matrix.all_pass;
+      const deliveryReady = res.data.delivery_ready === true;
+      addMemory("batch_fission", "warned",
+        `裂变 ${res.data.count} 个变体 · MD5唯一${mark(res.data.all_unique)} · 矩阵${mark(allPass)} · 交付门${mark(deliveryReady)}（源：${res.data.src}）`);
+      if (deliveryReady) {
+        toast("裂变完成且双门通过：生成 " + res.data.count + " 个变体。", "ok");
+      } else {
+        toast("裂变已生成，但 MD5 唯一性或距离矩阵未通过，当前不可交付。", "warn");
+      }
+    });
+  } finally {
+    stopProgress("fission");
+  }
 }
 
 function renderFission(d) {
@@ -594,6 +984,7 @@ function renderFission(d) {
 
   // separation 诊断（all_pass=false 时展示卡哪条腿）
   renderSeparation(d.separation, allPass);
+  renderFissionExplainer(d, allPass);
 
   // 距离矩阵表格
   if (matrix && Array.isArray(matrix.matrix) && matrix.count > 1) {
@@ -612,6 +1003,54 @@ function renderFission(d) {
     "</div>"
   ).join("");
   el.fissionCard.classList.remove("hidden");
+}
+
+function renderFissionExplainer(d, allPass) {
+  const matrix = d.matrix || {};
+  const sep = d.separation || {};
+  const tooClose = Array.isArray(matrix.too_close_pairs) ? matrix.too_close_pairs : [];
+  const pairCount = tooClose.length;
+  const minPair = matrix.min_pair || null;
+  const minDistance = minPair && minPair.phash_avg != null ? (+minPair.phash_avg).toFixed(1) : null;
+  const ready = d.delivery_ready === true;
+
+  let statusTitle = "这批变体可以交付";
+  let statusText = "MD5 已区分文件，任意两个变体的 pHash 平均距离也都达到 12。";
+  let statusClass = "is-pass";
+  if (!ready) {
+    statusTitle = "这批变体暂不建议交付";
+    statusClass = "is-warn";
+    if (!d.all_unique && !allPass) {
+      statusText = "既有重复文件，也有画面过近的变体，需要重新生成。";
+    } else if (!d.all_unique) {
+      statusText = "至少两个输出文件内容完全相同，需要重新生成。";
+    } else {
+      const minNote = minDistance ? "，最低距离只有 " + minDistance : "";
+      statusText = "文件指纹虽然不同，但仍有 " + pairCount + " 对画面过于相似" + minNote + "。";
+    }
+  }
+
+  const actions = [];
+  if (!d.all_unique) actions.push("重新生成这批变体，确保每个输出的 MD5 都不同。");
+  if (!allPass) {
+    if (!sep.flip_spread) actions.push("勾选“翻转/旋转”后重新裂变；系统会自动在各变体间轮换水平、垂直和旋转 90°。");
+    if (sep.time_leg !== "present") actions.push("源视频可裁空间不足时，换用更长的素材，再利用不同起止点拉开时间错位。");
+    else actions.push("保留时间错位，同时提高处理强度或增加画面、裁切、旋转维度后重新裂变。");
+  }
+  if (ready) actions.push("抽查各变体播放效果后，即可打开输出文件夹交付。");
+
+  el.fissionExplainer.innerHTML =
+    '<div class="explainer-status ' + statusClass + '">' +
+      '<span class="explainer-status-mark" aria-hidden="true">' + (ready ? "✓" : "!") + "</span>" +
+      '<div><strong>' + statusTitle + '</strong><p>' + statusText + "</p></div>" +
+    "</div>" +
+    '<div class="explainer-grid">' +
+      '<div><strong>这张表怎么看</strong><p>横纵坐标 0、1、2… 代表不同变体。交叉格数字越大，两个视频越不相似；同一个视频与自身用“—”表示。</p></div>' +
+      '<div><strong>通过标准</strong><p>系统会综合平均距离与弱帧占比判定。低于 12 通常表示“过近”；红色格就是未通过，即使 MD5 不同也暂不建议交付。</p></div>' +
+      '<div class="explainer-action"><strong>现在怎么做</strong><ol>' +
+        actions.map((item) => "<li>" + escapeHtml(item) + "</li>").join("") +
+      "</ol></div>" +
+    "</div>";
 }
 
 function renderSeparation(sep, allPass) {
@@ -705,25 +1144,179 @@ function addMemory(tool, kind, summary) {
   saveMemory(list);
   renderMemory();
 }
+let memoryFiltersInitialized = false;
+const MEMORY_ARC_NS = "http://www.w3.org/2000/svg";
+const MEMORY_ARC_COLORS = {
+  audit: { fill: "#B9E3CF", stroke: "#16845B" },
+  warned: { fill: "#F8D894", stroke: "#A96700" },
+  blocked: { fill: "#F2B6B6", stroke: "#C73535" },
+  error: { fill: "#F2B6B6", stroke: "#C73535" },
+  cancel: { fill: "#D8DEE7", stroke: "#64748B" },
+  human: { fill: "#AFE2DF", stroke: "#248E87" },
+};
+
+function memoryDateKey(t) {
+  const d = new Date(t);
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+}
+function memoryMatches(r) {
+  const date = el.memoryDate.value;
+  const query = el.memorySearch.value.trim().toLocaleLowerCase("zh-CN");
+  const text = [r.tool, r.summary, kindLabel(r.kind), r.kind].join(" ").toLocaleLowerCase("zh-CN");
+  return (!date || memoryDateKey(r.t) === date) && (!query || text.includes(query));
+}
 function renderMemory() {
   const list = loadMemory();
-  el.memoryCount.textContent = list.length + " 条记录";
-  if (!list.length) {
-    el.timeline.innerHTML = '<div class="tl-empty">暂无操作记录。发起探测 / 去重后，这里会记录你的每一步。</div>';
+  if (!memoryFiltersInitialized) {
+    if (list.length) el.memoryDate.value = memoryDateKey(list[0].t);
+    memoryFiltersInitialized = true;
+  }
+  const visible = list
+    .map((record, sourceIndex) => ({ record, sourceIndex }))
+    .filter((item) => memoryMatches(item.record))
+    .sort((a, b) => a.record.t - b.record.t);
+  el.memoryCount.textContent = visible.length === list.length
+    ? list.length + " 条记录"
+    : visible.length + " / " + list.length + " 条";
+  const dateContext = list
+    .map((record, sourceIndex) => ({ record, sourceIndex }))
+    .filter((item) => !el.memoryDate.value || memoryDateKey(item.record.t) === el.memoryDate.value)
+    .sort((a, b) => a.record.t - b.record.t);
+  renderMemoryArc(visible, dateContext);
+  if (!visible.length) {
+    el.timeline.innerHTML = '<div class="tl-empty">' + (list.length ? "没有符合筛选条件的操作记录。" : "暂无操作记录。完成探测或生成后，这里会记录关键步骤。") + "</div>";
     return;
   }
-  el.timeline.innerHTML = list.map((r) => {
+  el.timeline.innerHTML = visible.map((item, index) => {
+    const r = item.record;
     const cls = "t-" + (r.kind || "audit");
-    return '<div class="tl-item ' + cls + '">' +
-      '<span class="tl-dot"></span>' +
-      '<div class="tl-head">' +
-        '<span class="tl-tool">' + escapeHtml(r.tool || "?") + "</span>" +
-        '<span class="tl-time">' + fmtTime(r.t) + "</span>" +
-      "</div>" +
-      '<div class="tl-summary"><span class="tl-tag">' + kindLabel(r.kind) + "</span>" +
-      escapeHtml(r.summary || "") + "</div>" +
+    const memoryId = r.t + "-" + item.sourceIndex;
+    return '<div class="tl-item ' + cls + '" data-memory-id="' + memoryId + '" tabindex="0">' +
+      '<div class="tl-head"><span class="tl-tool"><span class="tl-index">' + (index + 1) + "</span>" + escapeHtml(r.tool || "?") + "</span>" +
+        '<span class="tl-time">' + fmtTime(r.t) + "</span></div>" +
+      '<div class="tl-summary"><span class="tl-tag">' + kindLabel(r.kind) + "</span>" + escapeHtml(r.summary || "") + "</div>" +
     "</div>";
   }).join("");
+}
+function renderMemoryArc(visible, dateContext = visible) {
+  const svg = el.memoryArc;
+  svg.replaceChildren();
+  const title = memoryArcNode("title");
+  title.textContent = "操作记录右半圆时间轴";
+  svg.appendChild(title);
+  const desc = memoryArcNode("desc");
+  desc.textContent = "所选会话的操作从上到下按时间排列。";
+  svg.appendChild(desc);
+  const center = { x: 18, y: 170 };
+  const outerR = 142;
+  const bandOuter = 130;
+  const bandInner = 92;
+  const labelR = 151;
+  const context = visible.length ? visible : dateContext;
+  const placeholderStart = memoryPlaceholderStart();
+  const firstTime = context.length ? context[0].record.t : placeholderStart;
+  const lastTime = context.length ? context[context.length - 1].record.t : placeholderStart + 40 * 60000;
+  const elapsedMinutes = Math.max(0, (lastTime - firstTime) / 60000);
+  const unit = [5, 15, 60, 360, 1440, 10080].find((candidate) => elapsedMinutes / candidate <= 12) || 10080;
+  const start = Math.floor(firstTime / (unit * 60000)) * unit * 60000;
+  const naturalEnd = Math.ceil(lastTime / (unit * 60000)) * unit * 60000 + unit * 60000;
+  const end = Math.max(naturalEnd, start + unit * 8 * 60000);
+  const span = end - start;
+  const point = (radius, timestamp) => {
+    const ratio = Math.max(0, Math.min(1, (timestamp - start) / span));
+    const angle = -Math.PI / 2 + ratio * Math.PI;
+    return { x: center.x + radius * Math.cos(angle), y: center.y + radius * Math.sin(angle) };
+  };
+  const arcPath = (radius, from, to) => {
+    const a = point(radius, from);
+    const b = point(radius, to);
+    return "M " + a.x + " " + a.y + " A " + radius + " " + radius + " 0 0 1 " + b.x + " " + b.y;
+  };
+  const bandPath = (from, to) => {
+    const a = point(bandOuter, from);
+    const b = point(bandOuter, to);
+    const c = point(bandInner, to);
+    const d = point(bandInner, from);
+    return "M " + a.x + " " + a.y + " A " + bandOuter + " " + bandOuter + " 0 0 1 " + b.x + " " + b.y +
+      " L " + c.x + " " + c.y + " A " + bandInner + " " + bandInner + " 0 0 0 " + d.x + " " + d.y + " Z";
+  };
+  svg.appendChild(memoryArcNode("path", { d: arcPath(outerR, start, end), class: "memory-arc-track" }));
+  svg.appendChild(memoryArcNode("path", { d: arcPath(65, start, end), class: "memory-arc-guide" }));
+  const boundaries = visible.map((item, index) => {
+    if (index === 0) return start;
+    return (visible[index - 1].record.t + item.record.t) / 2;
+  });
+  boundaries.push(end);
+  visible.forEach((item, index) => {
+    const r = item.record;
+    const colors = MEMORY_ARC_COLORS[r.kind] || MEMORY_ARC_COLORS.audit;
+    const from = boundaries[index];
+    const to = boundaries[index + 1];
+    const memoryId = r.t + "-" + item.sourceIndex;
+    const boundary = point(bandInner, from);
+    svg.appendChild(memoryArcNode("line", { x1: center.x, y1: center.y, x2: boundary.x, y2: boundary.y, class: "memory-arc-boundary" }));
+    svg.appendChild(memoryArcNode("path", { d: bandPath(from, to), fill: colors.fill, stroke: colors.stroke, "stroke-width": 1, class: "memory-arc-segment", tabindex: 0, "data-memory-id": memoryId }));
+    const labelPoint = point((bandOuter + bandInner) / 2, (from + to) / 2);
+    const label = memoryArcNode("text", { x: labelPoint.x, y: labelPoint.y + 3, fill: colors.stroke, class: "memory-arc-label", "data-memory-id": memoryId });
+    label.textContent = index + 1;
+    svg.appendChild(label);
+  });
+  const lastBoundary = point(bandInner, end);
+  svg.appendChild(memoryArcNode("line", { x1: center.x, y1: center.y, x2: lastBoundary.x, y2: lastBoundary.y, class: "memory-arc-boundary" }));
+  for (let t = start; t <= end; t += unit * 60000) {
+    const a = point(outerR, t);
+    const b = point(outerR - 8, t);
+    svg.appendChild(memoryArcNode("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: "#64748B", "stroke-width": 0.8 }));
+    const lp = point(labelR, t);
+    const label = memoryArcNode("text", { x: lp.x, y: lp.y + 3, "text-anchor": "middle", class: "memory-arc-tick" });
+    label.textContent = fmtHourMinute(t);
+    svg.appendChild(label);
+  }
+  svg.appendChild(memoryArcNode("circle", { cx: center.x, cy: center.y, r: 3, fill: "#64748B" }));
+  const sessionLabel = memoryArcNode("text", { x: 76, y: 166, class: "memory-arc-center" });
+  sessionLabel.textContent = visible.length ? "当前会话" : (dateContext.length ? "无匹配记录" : "等待操作记录");
+  svg.appendChild(sessionLabel);
+  const rangeLabel = memoryArcNode("text", { x: 76, y: 178, class: "memory-arc-center" });
+  rangeLabel.textContent = fmtHourMinute(start) + "–" + fmtHourMinute(end);
+  svg.appendChild(rangeLabel);
+  el.memoryUnit.textContent = "单位：每格 " + memoryUnitLabel(unit);
+}
+function memoryPlaceholderStart() {
+  const selected = el.memoryDate.value;
+  const d = selected ? new Date(selected + "T00:00:00") : new Date();
+  const now = new Date();
+  if (!selected || memoryDateKey(now.getTime()) === selected) {
+    d.setHours(now.getHours(), Math.floor(now.getMinutes() / 5) * 5, 0, 0);
+  } else {
+    d.setHours(9, 0, 0, 0);
+  }
+  return d.getTime();
+}
+function memoryUnitLabel(minutes) {
+  if (minutes < 60) return minutes + " 分钟";
+  if (minutes < 1440) return (minutes / 60) + " 小时";
+  if (minutes < 10080) return (minutes / 1440) + " 天";
+  return (minutes / 10080) + " 周";
+}
+function memoryArcNode(tag, attrs = {}) {
+  const node = document.createElementNS(MEMORY_ARC_NS, tag);
+  Object.entries(attrs).forEach(([name, value]) => node.setAttribute(name, value));
+  return node;
+}
+function selectMemory(memoryId) {
+  document.querySelectorAll("[data-memory-id]").forEach((node) => {
+    const active = node.getAttribute("data-memory-id") === memoryId;
+    node.classList.toggle("is-active", active);
+    if (node.classList.contains("memory-arc-segment") || node.classList.contains("memory-arc-label")) {
+      node.classList.toggle("is-dimmed", !active);
+    }
+  });
+  const row = el.timeline.querySelector('[data-memory-id="' + memoryId + '"]');
+  if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function clearMemorySelection() {
+  document.querySelectorAll("[data-memory-id]").forEach((node) => node.classList.remove("is-active", "is-dimmed"));
 }
 function kindLabel(k) {
   return { audit: "审计", warned: "确认执行", blocked: "阻断", error: "错误", cancel: "已取消", human: "人工决策" }[k] || "记录";
@@ -748,6 +1341,11 @@ function fmtTime(t) {
   const d = new Date(t);
   const p = (n) => String(n).padStart(2, "0");
   return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+function fmtHourMinute(t) {
+  const d = new Date(t);
+  const p = (n) => String(n).padStart(2, "0");
+  return p(d.getHours()) + ":" + p(d.getMinutes());
 }
 function toast(msg, kind) {
   let wrap = document.querySelector(".toast-wrap");
@@ -787,6 +1385,39 @@ el.btnOpenOutputTop.addEventListener("click", () => openOutputFolder(el.btnOpenO
 el.btnOpenOutput.addEventListener("click", () => openOutputFolder(el.btnOpenOutput));
 el.btnOpenOutputFission.addEventListener("click", () => openOutputFolder(el.btnOpenOutputFission));
 el.btnClearMemory.addEventListener("click", clearMemory);
+el.memoryDate.addEventListener("input", renderMemory);
+el.memorySearch.addEventListener("input", renderMemory);
+el.toolFilters.addEventListener("click", (e) => {
+  const button = e.target.closest("[data-tool-filter]");
+  if (button) applyToolFilter(button.getAttribute("data-tool-filter"));
+});
+[el.toolsList, el.toolAxis].forEach((container) => container.addEventListener("click", (e) => {
+  const item = e.target.closest("[data-tool-id]");
+  if (item) selectTool(item.getAttribute("data-tool-id"));
+}));
+[el.toolsList, el.toolAxis].forEach((container) => container.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const item = e.target.closest("[data-tool-id]");
+  if (!item) return;
+  e.preventDefault();
+  selectTool(item.getAttribute("data-tool-id"));
+}));
+el.timeline.addEventListener("click", (e) => {
+  const item = e.target.closest("[data-memory-id]");
+  if (item) selectMemory(item.getAttribute("data-memory-id"));
+});
+el.memoryArc.addEventListener("click", (e) => {
+  const item = e.target.closest("[data-memory-id]");
+  if (item) selectMemory(item.getAttribute("data-memory-id"));
+  else clearMemorySelection();
+});
+[el.timeline, el.memoryArc].forEach((container) => container.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const item = e.target.closest("[data-memory-id]");
+  if (!item) return;
+  e.preventDefault();
+  selectMemory(item.getAttribute("data-memory-id"));
+}));
 
 /* F4.1 参数控件交互 */
 // 强度档单选切换

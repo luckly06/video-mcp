@@ -30,7 +30,7 @@ import metrics as M  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 路径锚定：本文件位于 video-uniqueness/station/server/pipeline.py（自包含版）
-# ffmpeg / watermarks 已拷进工程内 vendor/，素材放 assets/，彻底脱离中文路径
+# ffmpeg / watermarks 已拷进工程内 vendor/，用户素材统一放工程根 input/。
 # 均可用环境变量覆盖（VU_FFMPEG / VU_FFPROBE / VU_WATERMARKS / VU_ASSETS / VU_OUTPUT）
 # 全部为 __file__ 相对锚定，push 到 GitHub 后 clone 即用，无任何硬编码绝对路径
 # ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ FFMPEG = Path(os.environ.get("VU_FFMPEG",  _VENDOR / "ffmpeg" / "ffmpeg.exe"))
 FFPROBE = Path(os.environ.get("VU_FFPROBE", _VENDOR / "ffmpeg" / "ffprobe.exe"))
 WATERMARKS_DIR = Path(os.environ.get("VU_WATERMARKS", _VENDOR / "watermarks"))
 
-VIDEO_DIR = Path(os.environ.get("VU_ASSETS", STATION_DIR / "assets"))   # 素材目录
+VIDEO_DIR = Path(os.environ.get("VU_ASSETS", PROJECT_DIR / "input"))   # 用户素材只读目录
 # 输出目录：提到工程根 video-uniqueness/output（相对锚定 = PROJECT_DIR/output）
 OUTPUT_DIR = Path(os.environ.get("VU_OUTPUT", PROJECT_DIR / "output"))
 
@@ -139,7 +139,7 @@ def check_env():
 
 
 def list_assets():
-    """列出 video/ 目录下可处理的视频素材。"""
+    """列出工程根 input/ 目录下可处理的视频素材。"""
     if not VIDEO_DIR.exists():
         return []
     exts = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts", ".webm"}
@@ -627,8 +627,9 @@ def batch_fission(src, count=5, params=None,
                   level=None, dimensions=None, flip_mode=None):
     """裂变：同一素材生成 count 个不同参数的变体（本期增量：档位/维度透传 + 距离矩阵）。
 
-    每变体用不同 seed 保证互异；产出后调 metrics.distance_matrix 计算两两感知哈希距离，
-    并入顶层 matrix。既有 all_unique（MD5 维度）保留。count 上限 20（PRD D-04）。
+    每变体用不同 seed 保证互异；开启 flip 后自动轮换 h/v/90；产出后调
+    metrics.distance_matrix 计算两两感知哈希距离，并入顶层 matrix。
+    既有 all_unique（MD5 维度）保留。count 上限 20（PRD D-04）。
 
     ⚠️ 变体间分离度靠【时间错位】而非参数随机性（实测依据见
     docs/eval/沉淀失败原因.md F2.4-01）：speed/rotate/crop 的变体间差分在
@@ -642,13 +643,18 @@ def batch_fission(src, count=5, params=None,
     stem = Path(base_info["name"]).stem
 
     results = []
+    flip_enabled = bool(dimensions and dimensions.get("flip"))
+    flip_cycle = ("h", "v", "90")
     for i in range(count):
         out_name = f"{stem}_变体{i + 1}.mp4"
         # phase 均匀铺开：count=1 时取 0.0（无对照需求）；count>1 时端到端撑满 [0,1]
         phase = 0.0 if count == 1 else i / (count - 1)
+        # 批量裂变开启 flip 后自动轮换方向，保证页面上的单个方向选择不会让
+        # 所有变体使用同一 flip_mode，从而失去有效的变体间分离杠杆。
+        variant_flip_mode = flip_cycle[i % len(flip_cycle)] if flip_enabled else flip_mode
         r = dedup_video(src, params=params, out_name=out_name,
                         seed=random.randint(1, 10 ** 9),
-                        level=level, dimensions=dimensions, flip_mode=flip_mode,
+                        level=level, dimensions=dimensions, flip_mode=variant_flip_mode,
                         trim_phase=phase)
         results.append({
             "index": i + 1,
