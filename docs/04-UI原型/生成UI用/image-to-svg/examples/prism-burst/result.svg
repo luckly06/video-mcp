@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 536 709" role="img" aria-labelledby="title">
+  <title id="title">Prismatic burst logo reconstructed from raster</title>
+  <defs>
+    <linearGradient id="g-left" x1="40" y1="230" x2="260" y2="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00d7d4"/><stop offset=".45" stop-color="#0797f1"/><stop offset="1" stop-color="#2838c9"/>
+    </linearGradient>
+    <linearGradient id="g-right" x1="470" y1="220" x2="290" y2="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffb52f"/><stop offset=".45" stop-color="#ff5364"/><stop offset="1" stop-color="#c624a7"/>
+    </linearGradient>
+    <linearGradient id="g-center" x1="268" y1="420" x2="268" y2="709" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#bd4cc8" stop-opacity=".88"/><stop offset="1" stop-color="#8a35d5"/>
+    </linearGradient>
+    <linearGradient id="g-yellow" x1="268" y1="0" x2="268" y2="313" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffc20a"/><stop offset="1" stop-color="#ff9707"/>
+    </linearGradient>
+  </defs>
+  <path id="left-gem" fill="url(#g-left)" d="M31 225C16 274 0 391 0 445c0 20 7 33 22 47l246 217L31 225Z"/>
+  <path id="right-gem" fill="url(#g-right)" d="M505 225c15 49 31 166 31 220 0 20-7 33-22 47L268 709l237-484Z"/>
+  <path id="left-light-face" fill="#72e3db" opacity=".76" d="M31 225 268 427l-97 82Z"/>
+  <path id="right-light-face" fill="#ff9e67" opacity=".72" d="m505 225-237 202 97 82Z"/>
+  <path id="center-face" fill="url(#g-center)" d="m268 427 97 82-97 200-97-200Z"/>
+  <path id="ray-top" fill="url(#g-yellow)" d="M268 0 292 170l-24 143-24-143Z"/>
+  <linearGradient id="g-ray-left" x1="100" y1="110" x2="245" y2="320" gradientUnits="userSpaceOnUse"><stop stop-color="#62d67e"/><stop offset="1" stop-color="#21a7aa"/></linearGradient>
+  <linearGradient id="g-ray-right" x1="440" y1="110" x2="292" y2="320" gradientUnits="userSpaceOnUse"><stop stop-color="#ff9816"/><stop offset="1" stop-color="#ff5835"/></linearGradient>
+  <path id="ray-left" fill="url(#g-ray-left)" d="m92 105 100 82 53 132-94-104Z"/>
+  <path id="ray-right" fill="url(#g-ray-right)" d="m444 105-100 82-52 132 93-104Z"/>
+  <linearGradient id="g-ray-small-left" x1="120" y1="265" x2="233" y2="336" gradientUnits="userSpaceOnUse"><stop stop-color="#2ccde4"/><stop offset="1" stop-color="#2486dd"/></linearGradient>
+  <linearGradient id="g-ray-small-right" x1="416" y1="265" x2="303" y2="336" gradientUnits="userSpaceOnUse"><stop stop-color="#ff6864"/><stop offset="1" stop-color="#e93690"/></linearGradient>
+  <path id="ray-small-left" fill="url(#g-ray-small-left)" d="m120 265 31 37 82 34-53-44Z"/>
+  <path id="ray-small-right" fill="url(#g-ray-small-right)" d="m416 265-31 37-82 34 53-44Z"/>
+</svg>
