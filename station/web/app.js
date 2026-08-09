@@ -14,9 +14,15 @@
 
 "use strict";
 
-const MCP_URL = "http://127.0.0.1:8765/mcp";
-const OPEN_OUTPUT_URL = "http://127.0.0.1:8765/local/open-output";
-const CANCEL_FISSION_URL = "http://127.0.0.1:8765/local/cancel-fission";
+const API_BASE = (() => {
+  const h = window.location.hostname;
+  const p = window.location.port;
+  if (p && p !== "80" && p !== "443") return `http://${h}:${p}`;
+  return `http://${h}`;
+})();
+const MCP_URL = API_BASE + "/mcp";
+const OPEN_OUTPUT_URL = API_BASE + "/local/open-output";
+const CANCEL_FISSION_URL = API_BASE + "/local/cancel-fission";
 
 /* 工具四级安全分级（按工具名硬编码映射，与 shared/rules.json 对齐）。
    list_* / probe / get_job = audit，dedup / batch_fission / remove_watermark = warned，
@@ -511,7 +517,7 @@ async function openOutputFolder(button, filename = null) {
    --------------------------------------------------------------------------- */
 function showConnError(msg) {
   el.connBanner.classList.remove("hidden", "ok");
-  el.connText.textContent = msg || "无法连接 MCP Server，请先启动：python server/mcp_server.py（监听 127.0.0.1:8765）";
+  el.connText.textContent = msg || "无法连接 MCP Server，请检查后端是否运行并刷新页面";
   el.connRetry.classList.remove("hidden");
   setServiceState("error", "连接失败");
 }
@@ -538,7 +544,7 @@ async function connectAndBootstrap() {
     const info = await rpc("server/discover");
     showConnOk(info);
   } catch (e) {
-    showConnError("请先启动 MCP Server（python server/mcp_server.py，监听 127.0.0.1:8765）。若已启动，可能是 file:// 跨域 —— 该 server 已开放 CORS，直接刷新重试即可。");
+    showConnError("无法连接 MCP Server。请确认服务已启动，可尝试刷新页面重试。");
     // 连接失败时把清单/素材区标为不可用
     el.whitelist.innerHTML = '<span class="wl-hint">未连接，无法拉取工具白名单</span>';
     renderTools([]);

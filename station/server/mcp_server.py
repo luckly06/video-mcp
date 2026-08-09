@@ -428,34 +428,52 @@ def handle_rpc(req, headers):
 
 
 def _allowed_host(host):
-    """仅允许浏览器或客户端访问本机监听地址。"""
+    """仅允许浏览器或客户端访问已配置的监听地址。
+
+    默认白名单: 127.0.0.1 / localhost。
+    可通过环境变量 VU_ALLOWED_HOSTS（逗号分隔）追加域名/IP，
+    例如: VU_ALLOWED_HOSTS=vu.evenblue.top,124.71.209.36
+    """
     if not isinstance(host, str) or not host:
         return False
     value = host.strip().lower()
+    # IPv6
     if value.startswith("["):
         closing = value.find("]")
         if closing < 0 or value[:closing + 1] != "[::1]":
             return False
         suffix = value[closing + 1:]
         return suffix == "" or (suffix.startswith(":") and suffix[1:].isdigit())
+    # 分离 hostname 与端口
     if ":" in value:
         hostname, port = value.rsplit(":", 1)
         if not port.isdigit():
             return False
     else:
         hostname = value
-    return hostname in ("127.0.0.1", "localhost")
+    # 白名单：默认 + 环境变量
+    allowed = {"127.0.0.1", "localhost"}
+    extra = os.environ.get("VU_ALLOWED_HOSTS", "")
+    if extra:
+        allowed.update(h.strip().lower() for h in extra.split(",") if h.strip())
+    return hostname in allowed
 
 
 def _allowed_origin(origin):
-    """允许非浏览器请求、file:// 的 null Origin 与本机网页。"""
+    """允许非浏览器请求、file:// 的 null Origin 与已配置的域名/IP。"""
     if origin in (None, "", "null"):
         return True
     try:
         parsed = urlsplit(origin)
     except Exception:
         return False
-    return parsed.scheme in ("http", "https") and parsed.hostname in ("127.0.0.1", "localhost")
+    if parsed.scheme not in ("http", "https"):
+        return False
+    allowed = {"127.0.0.1", "localhost"}
+    extra = os.environ.get("VU_ALLOWED_HOSTS", "")
+    if extra:
+        allowed.update(h.strip().lower() for h in extra.split(",") if h.strip())
+    return parsed.hostname in allowed
 
 
 def _cancel_fission(task_id):
