@@ -23,6 +23,8 @@ const API_BASE = (() => {
 const MCP_URL = API_BASE + "/mcp";
 const OPEN_OUTPUT_URL = API_BASE + "/local/open-output";
 const CANCEL_FISSION_URL = API_BASE + "/local/cancel-fission";
+const UPLOAD_URL = API_BASE + "/local/upload";
+const DOWNLOAD_BASE = API_BASE + "/local/download/";
 
 /* 工具四级安全分级（按工具名硬编码映射，与 shared/rules.json 对齐）。
    list_* / probe / get_job = audit，dedup / batch_fission / remove_watermark = warned，
@@ -76,6 +78,12 @@ const el = {
   btnProbe: $("btn-probe"),
   probeCard: $("probe-card"),
   probeGrid: $("probe-grid"),
+
+  uploadZone: $("upload-zone"),
+  fileUpload: $("file-upload"),
+  uploadProgress: $("upload-progress"),
+  progressFill: $("progress-fill"),
+  progressText: $("progress-text"),
 
   levelSeg: $("level-seg"),
   dimGrid: $("dim-grid"),
@@ -489,27 +497,18 @@ async function cancelFission() {
   }
 }
 
-async function openOutputFolder(button, filename = null) {
-  const original = button.innerHTML;
-  button.disabled = true;
-  button.textContent = filename ? "正在定位..." : "正在打开...";
-  try {
-    const resp = await fetch(OPEN_OUTPUT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(filename ? { filename } : {}),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok || data.ok !== true) throw new Error(data.message || `HTTP ${resp.status}`);
-    const summary = filename ? "人工在 output/ 中定位产物：" + filename : "人工打开 output/ 文件夹查看成片。";
-    addMemory("open_output", "human", summary);
-    toast(filename ? "已在输出文件夹中定位：" + filename : "已打开输出文件夹。", "ok");
-  } catch (e) {
-    toast((filename ? "定位产物失败：" : "打开输出文件夹失败：") + (e.message || e), "warn");
-  } finally {
-    button.disabled = false;
-    button.innerHTML = original;
-  }
+function downloadArtifact(filename) {
+  if (!filename) { toast("请先生成产物。", "warn"); return; }
+  const url = DOWNLOAD_BASE + encodeURIComponent(filename);
+  // 创建隐藏 a 标签触发下载
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename.split("/").pop();
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  toast("开始下载：" + filename.split("/").pop());
+  addMemory("download", "human", "下载产物文件：" + filename);
 }
 
 /* ---------------------------------------------------------------------------
@@ -773,6 +772,83 @@ async function loadAssets() {
     opt.textContent = a.name + "  (" + (a.size_mb != null ? a.size_mb + " MB" : "?") + ")";
     el.assetSelect.appendChild(opt);
   });
+}
+
+/* ---------------------------------------------------------------------------
+   文件上传
+   --------------------------------------------------------------------------- */
+function setupUpload() {
+  const zone = el.uploadZone;
+  const input = el.fileUpload;
+
+  // 点击选择
+  input.addEventListener("change", () => {
+    if (input.files.length) uploadFile(input.files[0]);
+  });
+
+  // 拖拽
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("drag-over"); });
+  zone.addEventListener("dragleave", () => { zone.classList.remove("drag-over"); });
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("drag-over");
+    const f = e.dataTransfer.files[0];
+    if (f) uploadFile(f);
+  });
+}
+
+async function uploadFile(file) {
+  if (!file || !file.type.startsWith("video/")) {
+    toast("请选择视频文件。", "warn");
+    return;
+  }
+
+  el.uploadProgress.classList.remove("hidden");
+  el.fileUpload.disabled = true;
+  el.uploadZone.style.pointerEvents = "none";
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", UPLOAD_URL);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round(e.loaded / e.total * 100);
+        el.progressFill.style.width = pct + "%";
+        el.progressText.textContent = `上传中 ${pct}% (${(e.loaded/1024/1024).toFixed(1)} MB / ${(e.total/1024/1024).toFixed(1)} MB)`;
+      }
+    };
+
+    await new Promise((resolve, reject) => {
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          try { resolve(JSON.parse(xhr.responseText)); } catch (_) { reject(new Error("响应格式错误")); }
+        } else {
+          try { const e = JSON.parse(xhr.responseText); reject(new Error(e.message)); } catch (_) { reject(new Error("上传失败 " + xhr.status)); }
+        }
+      };
+      xhr.onerror = () => reject(new Error("网络错误"));
+      xhr.send(formData);
+    });
+
+    toast("上传成功：" + file.name);
+    // 刷新素材列表，自动选中并探测
+    await loadAssets();
+    el.assetSelect.value = file.name;
+    // 自动触发探测
+    if (file.name) doProbe();
+  } catch (err) {
+    toast("上传失败：" + err.message, "err");
+  } finally {
+    el.uploadProgress.classList.add("hidden");
+    el.progressFill.style.width = "0%";
+    el.fileUpload.disabled = false;
+    el.fileUpload.value = "";
+    el.uploadZone.style.pointerEvents = "";
+  }
 }
 
 function currentAsset() {
@@ -1498,9 +1574,9 @@ el.btnProbe.addEventListener("click", doProbe);
 el.btnDedup.addEventListener("click", doDedup);
 el.btnFission.addEventListener("click", doFission);
 el.btnCancelFission.addEventListener("click", cancelFission);
-el.btnOpenOutputTop.addEventListener("click", () => openOutputFolder(el.btnOpenOutputTop));
-el.btnOpenOutput.addEventListener("click", () => openOutputFolder(el.btnOpenOutput, currentDedupArtifact));
-el.btnOpenOutputFission.addEventListener("click", () => openOutputFolder(el.btnOpenOutputFission, selectedFissionArtifact));
+el.btnOpenOutputTop.addEventListener("click", () => downloadArtifact(currentDedupArtifact));
+el.btnOpenOutput.addEventListener("click", () => downloadArtifact(currentDedupArtifact));
+el.btnOpenOutputFission.addEventListener("click", () => downloadArtifact(selectedFissionArtifact));
 el.fissionList.addEventListener("click", (e) => {
   const item = e.target.closest("[data-artifact-name]");
   if (!item) return;
@@ -1512,6 +1588,12 @@ el.fissionList.addEventListener("click", (e) => {
   });
   el.btnOpenOutputFission.disabled = false;
 });
+// 双击裂变产物项直接下载
+el.fissionList.addEventListener("dblclick", (e) => {
+  const item = e.target.closest("[data-artifact-name]");
+  if (item) downloadArtifact(item.getAttribute("data-artifact-name"));
+});
+setupUpload();
 el.btnClearMemory.addEventListener("click", clearMemory);
 el.memoryDate.addEventListener("input", renderMemory);
 el.memorySearch.addEventListener("input", renderMemory);

@@ -19,17 +19,19 @@ Hooks 由外层框架（pre_tool_guard / post_tool_audit）在调用链路注入
 
 import os
 import sys
+import re
 import json
 import uuid
 import base64
 import hashlib
 import hmac
+import mimetypes
 import socket
 import threading
 import subprocess
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pipeline as P  # noqa: E402
@@ -563,6 +565,40 @@ def _err(rpc_id, code, message):
     return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}}
 
 
+def _parse_multipart(body, content_type):
+    """简易 multipart/form-data 解析。返回 {field_name: (filename, data_bytes)}。"""
+    if "boundary=" not in content_type:
+        raise ValueError("缺少 boundary")
+    boundary = content_type.split("boundary=", 1)[1].strip()
+    boundary = boundary.strip('"')
+    boundary_bytes = boundary.encode()
+    result = {}
+    for part in body.split(b"--" + boundary_bytes):
+        part = part.strip(b"\r\n")
+        if not part or part == b"--":
+            continue
+        header_end = part.find(b"\r\n\r\n")
+        if header_end == -1:
+            continue
+        headers_raw = part[:header_end].decode("utf-8", errors="ignore")
+        data = part[header_end + 4:]
+        if data.endswith(b"\r\n"):
+            data = data[:-2]
+        name = filename = None
+        for line in headers_raw.split("\r\n"):
+            low = line.strip().lower()
+            if low.startswith("content-disposition:"):
+                for piece in line.split(";"):
+                    piece = piece.strip()
+                    if piece.startswith("name="):
+                        name = piece[5:].strip().strip('"')
+                    elif piece.startswith("filename="):
+                        filename = piece[9:].strip().strip('"')
+        if name:
+            result[name] = (filename, data)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # HTTP 传输：POST /mcp
 # ---------------------------------------------------------------------------
@@ -604,6 +640,24 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         path = urlsplit(self.path).path
+        # ── 文件下载 ──
+        if path.startswith("/local/download/"):
+            rel = unquote(path[len("/local/download/"):])
+            try:
+                safe = P._resolve_safe(rel, P.OUTPUT_DIR, must_exist=True)
+            except Exception:
+                self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
+            body = safe.read_bytes()
+            ct, _ = mimetypes.guess_type(str(safe))
+            self.send_response(200)
+            self.send_header("Content-Type", ct or "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{safe.name}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if not head_only:
+                self.wfile.write(body)
+            return
         if path == "/favicon.ico":
             self.send_response(204)
             self.send_header("Cache-Control", "no-store")
@@ -629,6 +683,39 @@ class Handler(BaseHTTPRequestHandler):
         if not self._request_allowed():
             self.send_response(403)
             self.end_headers()
+            return
+        # ── 文件上传 ──
+        if self.path.rstrip("/") == "/local/upload":
+            ct = self.headers.get("Content-Type", "")
+            if "multipart/form-data" not in ct:
+                self._respond_http(400, {"ok": False, "message": "需要 multipart/form-data"})
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            try:
+                parts = _parse_multipart(raw, ct)
+                file_item = parts.get("file")
+                if not file_item or not file_item[0]:
+                    self._respond_http(400, {"ok": False, "message": "未收到文件"})
+                    return
+                filename, data = file_item
+                # 只允许常见视频/音频扩展名
+                safe_exts = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts", ".webm", ".m4v"}
+                ext = Path(filename).suffix.lower()
+                if ext not in safe_exts:
+                    self._respond_http(400, {"ok": False, "message": f"不支持的文件类型: {ext}"})
+                    return
+                P.VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+                dest = P.VIDEO_DIR / filename
+                dest.write_bytes(data)
+                self._respond_http(200, {
+                    "ok": True,
+                    "filename": filename,
+                    "path": str(dest),
+                    "size": len(data),
+                })
+            except Exception as exc:
+                self._respond_http(500, {"ok": False, "message": f"上传失败: {exc}"})
             return
         if self.path.rstrip("/") in ("/local/open-output", "/local/cancel-fission"):
             endpoint = self.path.rstrip("/")
