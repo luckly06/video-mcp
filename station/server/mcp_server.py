@@ -802,13 +802,35 @@ def serve(host="127.0.0.1", port=8765):
         )
         sys.exit(3)
 
+    # 清理超过 1 小时的旧上传/临时文件，避免磁盘堆积
+    _cleanup_old_temp_files()
+
     class _Server(ThreadingHTTPServer):
         # 关闭地址重用：Windows 下 SO_REUSEADDR 会允许多进程绑同端口 → 脑裂根因
         allow_reuse_address = False
 
     srv = _Server((host, port), Handler)
     print(f"[MCP 2026-07-28] video-dedup-station 无状态服务已启动: http://{host}:{port}/mcp")
+    print(f"[MCP] 临时文件目录: {P.VIDEO_DIR} (超过1h自动清理)")
     srv.serve_forever()
+
+
+def _cleanup_old_temp_files():
+    """删除 VIDEO_DIR 和 OUTPUT_DIR 中超过 1 小时的文件。"""
+    import time
+    threshold = time.time() - 3600
+    for d in (P.VIDEO_DIR, P.OUTPUT_DIR):
+        if not d.exists():
+            continue
+        for f in d.iterdir():
+            if not f.is_file():
+                continue
+            try:
+                if f.stat().st_mtime < threshold:
+                    f.unlink()
+                    print(f"[cleanup] 已删除过期文件: {f}")
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

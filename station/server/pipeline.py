@@ -45,7 +45,7 @@ FFMPEG = Path(os.environ.get("VU_FFMPEG",  _VENDOR / "ffmpeg" / "ffmpeg.exe"))
 FFPROBE = Path(os.environ.get("VU_FFPROBE", _VENDOR / "ffmpeg" / "ffprobe.exe"))
 WATERMARKS_DIR = Path(os.environ.get("VU_WATERMARKS", _VENDOR / "watermarks"))
 
-VIDEO_DIR = Path(os.environ.get("VU_ASSETS", PROJECT_DIR / "input"))   # 用户素材只读目录
+VIDEO_DIR = Path(os.environ.get("VU_ASSETS", Path(__import__("tempfile").gettempdir()) / "vu-uploads"))   # 上传素材临时目录（系统自动回收）
 # 输出目录：提到工程根 video-uniqueness/output（相对锚定 = PROJECT_DIR/output）
 OUTPUT_DIR = Path(os.environ.get("VU_OUTPUT", PROJECT_DIR / "output"))
 
