@@ -31,7 +31,7 @@ import threading
 import subprocess
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit, unquote
+from urllib.parse import urlsplit, unquote, quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pipeline as P  # noqa: E402
@@ -651,7 +651,7 @@ class Handler(BaseHTTPRequestHandler):
             ct, _ = mimetypes.guess_type(str(safe))
             self.send_response(200)
             self.send_header("Content-Type", ct or "application/octet-stream")
-            self.send_header("Content-Disposition", f'attachment; filename="{safe.name}"')
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(safe.name)}")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
