@@ -707,4 +707,6 @@ def serve(host="127.0.0.1", port=8765):
 
 
 if __name__ == "__main__":
-    serve()
+    host = os.environ.get("VU_HOST", "127.0.0.1")
+    port = int(os.environ.get("VU_PORT", "8765"))
+    serve(host, port)
