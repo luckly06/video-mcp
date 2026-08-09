@@ -17,8 +17,9 @@
 const API_BASE = (() => {
   const h = window.location.hostname;
   const p = window.location.port;
-  if (p && p !== "80" && p !== "443") return `http://${h}:${p}`;
-  return `http://${h}`;
+  const proto = window.location.protocol;
+  if (p && p !== "80" && p !== "443") return `${proto}//${h}:${p}`;
+  return `${proto}//${h}`;
 })();
 const MCP_URL = API_BASE + "/mcp";
 const OPEN_OUTPUT_URL = API_BASE + "/local/open-output";
