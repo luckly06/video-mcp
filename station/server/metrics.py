@@ -291,6 +291,108 @@ def distance_matrix(video_paths, n=SAMPLE_FRAMES):
     }
 
 
+# ---------------------------------------------------------------------------
+# SSIM 结构相似度矩阵（第三重交付门：空间域结构对比，与 pHash 频域正交）
+# ---------------------------------------------------------------------------
+SSIM_AVG_MAX = 0.92        # 平均 SSIM 高于此 → 结构太像 → 不达标
+SSIM_WEAK_FRAME = 0.95     # 单帧 SSIM 高于此 → 视为"过近帧"
+SSIM_WEAK_MAX_RATIO = 0.10  # 过近帧占比上限
+
+
+def _has_ssim_backend():
+    """探测 scikit-image 是否可用。"""
+    try:
+        import skimage.metrics  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _ssim_compare(video_a, video_b, n=SAMPLE_FRAMES):
+    """抽帧 → 逐帧 SSIM → 统计。SSIM ∈ [0,1]，1 = 完全相同。"""
+    tmpdir = tempfile.mkdtemp(prefix="vu_ssim_")
+    try:
+        from skimage.metrics import structural_similarity as ssim
+        from skimage import io
+        frames_a = _extract_frames(video_a, n=n, tmpdir=tmpdir)
+        frames_b = _extract_frames(video_b, n=n, tmpdir=tmpdir)
+        m = min(len(frames_a), len(frames_b))
+        if m < 2:
+            return {"ssim_avg": 1.0, "ssim_min": 1.0, "frames_compared": m,
+                    "weak_frame_ratio": 1.0, "passed": False,
+                    "method": "ssim", "note": "抽帧数不足，无法度量的变体对判未达标"}
+        vals = []
+        for i in range(m):
+            im_a = io.imread(str(frames_a[i]), as_gray=True)
+            im_b = io.imread(str(frames_b[i]), as_gray=True)
+            # 取两帧中较小尺寸保证 shape 一致
+            h = min(im_a.shape[0], im_b.shape[0])
+            w = min(im_a.shape[1], im_b.shape[1])
+            v = ssim(im_a[:h, :w], im_b[:h, :w], data_range=1.0)
+            vals.append(v)
+        ssim_avg = sum(vals) / len(vals)
+        ssim_min = min(vals)
+        weak_count = sum(1 for v in vals if v > SSIM_WEAK_FRAME)
+        weak_ratio = weak_count / len(vals)
+        # 达标：平均够低（够不同）且过近帧占比不过线
+        passed = (ssim_avg <= SSIM_AVG_MAX and weak_ratio <= SSIM_WEAK_MAX_RATIO)
+        return {
+            "ssim_avg": round(float(ssim_avg), 4),
+            "ssim_min": round(float(ssim_min), 4),
+            "weak_frame_ratio": round(float(weak_ratio), 4),
+            "weak_frame_count": weak_count,
+            "frames_compared": int(m),
+            "passed": passed,
+            "method": "ssim",
+            "threshold": {
+                "avg_max": SSIM_AVG_MAX,
+                "weak_frame": SSIM_WEAK_FRAME,
+                "weak_max_ratio": SSIM_WEAK_MAX_RATIO,
+            },
+        }
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def ssim_matrix(video_paths, n=SAMPLE_FRAMES):
+    """两两 SSIM 矩阵（裂变用）。如 scikit-image 不可用则返回降级标记。"""
+    if not _has_ssim_backend():
+        return {"available": False, "note": "scikit-image 未安装，SSIM 矩阵不可用"}
+    paths = list(video_paths)
+    count = len(paths)
+    matrix = [[None] * count for _ in range(count)]
+    too_close = []
+    min_pair = None  # 最相似（最高 avg ssim）
+
+    for i in range(count):
+        for j in range(i + 1, count):
+            r = _ssim_compare(paths[i], paths[j], n=n)
+            avg = r["ssim_avg"]
+            matrix[i][j] = avg
+            matrix[j][i] = avg
+            pair = {"i": i, "j": j, "ssim_avg": avg, "ssim_min": r["ssim_min"],
+                    "weak_frame_ratio": r.get("weak_frame_ratio"),
+                    "passed": r["passed"]}
+            if not r["passed"]:
+                too_close.append(pair)
+            if min_pair is None or avg > min_pair["ssim_avg"]:
+                min_pair = pair
+
+    return {
+        "available": True,
+        "count": count,
+        "matrix": matrix,
+        "min_pair": min_pair,
+        "all_pass": len(too_close) == 0 and count >= 2,
+        "too_close_pairs": too_close,
+        "threshold": {
+            "avg_max": SSIM_AVG_MAX,
+            "weak_frame": SSIM_WEAK_FRAME,
+            "weak_max_ratio": SSIM_WEAK_MAX_RATIO,
+        },
+    }
+
+
 if __name__ == "__main__":
     import pprint
     print("phash backend available:", has_phash_backend())

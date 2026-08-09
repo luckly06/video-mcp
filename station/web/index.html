@@ -214,6 +214,11 @@
             <div id="fission-matrix" class="fission-matrix"></div>
             <div class="matrix-legend"><span class="ml-cell ok">绿色：通过</span><span class="ml-cell warn">红色：未通过</span><span class="ml-cell diag">自身</span></div>
           </div>
+          <div id="ssim-matrix-wrap" class="fission-matrix-wrap hidden">
+            <div class="matrix-title">SSIM 结构相似度矩阵（越小越不同，< 0.92 为通过）</div>
+            <div id="ssim-matrix" class="fission-matrix"></div>
+            <div class="matrix-legend"><span class="ml-cell ok">绿色：通过</span><span class="ml-cell warn">红色：过近</span><span class="ml-cell diag">自身</span></div>
+          </div>
           <div class="artifact-section-head"><span>产物文件</span><small>点击文件名下载</small></div>
           <div id="fission-list" class="fission-list"></div>
           <div class="result-actions"><button id="btn-open-output-fission" class="btn btn-secondary" type="button" disabled>下载选中产物</button></div>

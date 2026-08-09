@@ -865,8 +865,11 @@ def batch_fission(src, count=5, params=None,
                 "追加杠杆：给各变体指定不同 flip_mode（h/v/90）。")
 
     all_unique = bool(results) and len(set(md5s)) == len(md5s)
+    # ── SSIM 矩阵（第三重门：空间结构）──
+    ssim = M.ssim_matrix(variant_paths) if len(results) >= 2 else {"available": False}
     delivery_ready = (not cancelled and len(results) == requested_count
-                      and all_unique and matrix.get("all_pass") is True)
+                      and all_unique and matrix.get("all_pass") is True
+                      and bool(ssim.get("all_pass")))
     return {
         "src": base_info["name"],
         "count": len(results),
@@ -876,6 +879,7 @@ def batch_fission(src, count=5, params=None,
         "all_unique": all_unique,
         "delivery_ready": delivery_ready,
         "matrix": matrix,
+        "ssim": ssim,
         "separation": separation,
     }
 

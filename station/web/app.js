@@ -119,6 +119,8 @@ const el = {
   fissionSeparation: $("fission-separation"),
   fissionMatrixWrap: $("fission-matrix-wrap"),
   fissionMatrix: $("fission-matrix"),
+  ssimMatrixWrap: $("ssim-matrix-wrap"),
+  ssimMatrix: $("ssim-matrix"),
   fissionList: $("fission-list"),
   btnOpenOutputFission: $("btn-open-output-fission"),
   fissionProgress: $("fission-progress"),
@@ -1138,8 +1140,10 @@ function renderFission(d) {
   const uniq = d.all_unique === true;
   const matrix = d.matrix || null;
   const allPass = !!(matrix && matrix.all_pass);
+  const ssim = d.ssim || null;
+  const ssimAllPass = !!(ssim && ssim.all_pass);
 
-  // 摘要：正常完成展示双门；取消任务展示实际保留数量，不把未计算矩阵误报为失败。
+  // 摘要：正常完成展示三门；取消任务展示实际保留数量
   const badges = [];
   if (cancelled) {
     badges.push('<span class="fission-badge warn">任务已取消</span>');
@@ -1149,6 +1153,10 @@ function renderFission(d) {
     if (matrix) {
       badges.push('<span class="fission-badge ' + (allPass ? "" : "warn") + '">' +
         (allPass ? "距离矩阵全部达标 ✓" : "存在过近对 ✕") + "</span>");
+    }
+    if (ssim && ssim.available !== false) {
+      badges.push('<span class="fission-badge ' + (ssimAllPass ? "" : "warn") + '">' +
+        (ssimAllPass ? "SSIM 全部达标 ✓" : "存在 SSIM 过近对 ✕") + "</span>");
     }
   }
   const countText = cancelled
@@ -1167,6 +1175,13 @@ function renderFission(d) {
     el.fissionMatrixWrap.classList.remove("hidden");
   } else {
     el.fissionMatrixWrap.classList.add("hidden");
+  }
+  // SSIM 矩阵表格
+  if (ssim && ssim.available !== false && Array.isArray(ssim.matrix) && ssim.count > 1) {
+    renderSsimMatrix(ssim);
+    el.ssimMatrixWrap.classList.remove("hidden");
+  } else {
+    el.ssimMatrixWrap.classList.add("hidden");
   }
 
   const variants = d.variants || [];
@@ -1239,7 +1254,7 @@ function renderFissionExplainer(d, allPass) {
     "</div>" +
     '<div class="explainer-grid">' +
       '<div><strong>这张表怎么看</strong><p>横纵坐标 0、1、2… 代表不同变体。交叉格数字越大，两个视频越不相似；同一个视频与自身用“—”表示。</p></div>' +
-      '<div><strong>通过标准</strong><p>系统会综合平均距离与弱帧占比判定。低于 12 通常表示“过近”；红色格就是未通过，即使 MD5 不同也暂不建议交付。</p></div>' +
+      '<div><strong>通过标准</strong><p>三重门：MD5 全部互不相同；pHash 距离矩阵 avg ≥ 12 且弱帧 ≤ 10%；SSIM 结构相似度 avg ≤ 0.92 且过近帧 ≤ 10%。任一红色格即为不达标。</p></div>' +
       '<div class="explainer-action"><strong>现在怎么做</strong><ol>' +
         actions.map((item) => "<li>" + escapeHtml(item) + "</li>").join("") +
       "</ol></div>" +
@@ -1294,6 +1309,36 @@ function renderMatrix(m) {
   }
   html += "</tbody></table>";
   el.fissionMatrix.innerHTML = html;
+}
+
+function renderSsimMatrix(m) {
+  const n = m.count || 0;
+  if (n < 2) { el.ssimMatrix.innerHTML = ""; return; }
+  const tooClose = new Set();
+  (m.too_close_pairs || []).forEach((p) => {
+    tooClose.add((p.i < p.j ? p.i : p.j) + "-" + (p.i < p.j ? p.j : p.i));
+  });
+  let html = '<table class="matrix-table"><thead><tr><th></th>';
+  for (let j = 0; j < n; j++) html += "<th>" + j + "</th>";
+  html += "</tr></thead><tbody>";
+  for (let i = 0; i < n; i++) {
+    html += "<tr><th>" + i + "</th>";
+    for (let j = 0; j < n; j++) {
+      if (i === j) {
+        html += '<td class="diag">—</td>';
+      } else {
+        const v = m.matrix[i] && m.matrix[i][j] != null ? m.matrix[i][j] : null;
+        const a = Math.min(i, j), b = Math.max(i, j);
+        const close = tooClose.has(a + "-" + b);
+        const cls = v == null ? "" : (close ? "warn" : "ok");
+        const txt = v == null ? "?" : (+v).toFixed(4);
+        html += '<td class="' + cls + '">' + escapeHtml(txt) + "</td>";
+      }
+    }
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  el.ssimMatrix.innerHTML = html;
 }
 
 /* ---------------------------------------------------------------------------
