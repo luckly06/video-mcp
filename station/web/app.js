@@ -1721,7 +1721,7 @@ el.btnDeliver.addEventListener("click", () => {
     return;
   }
   addMemory("dedup_video", "human", "人工决策：确认交付去重成品。");
-  toast("已确认交付。产出保留在 output/ 目录。", "ok");
+  toast("已确认交付。请点击\"下载产物\"保存到本地。", "ok");
 });
 el.btnRegen.addEventListener("click", () => {
   addMemory("dedup_video", "human", "人工决策：不满意，触发再生成变体。");
