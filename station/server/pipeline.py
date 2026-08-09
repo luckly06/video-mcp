@@ -18,8 +18,10 @@ CRVideoMate.exe 是闭源 GUI，无命令行接口，无法被程序驱动。
 import os
 import sys
 import json
+import time
 import random
 import hashlib
+import threading
 import subprocess
 import configparser
 from pathlib import Path
@@ -50,6 +52,30 @@ OUTPUT_DIR = Path(os.environ.get("VU_OUTPUT", PROJECT_DIR / "output"))
 
 class PipelineError(Exception):
     """管线执行错误（ffmpeg 失败、文件不存在等）。"""
+
+
+class PipelineCancelled(PipelineError):
+    """用户主动取消当前管线任务。"""
+
+
+class CancellationToken:
+    """线程安全取消令牌；批量请求及其子进程共享同一实例。"""
+
+    def __init__(self):
+        self._event = threading.Event()
+
+    def cancel(self):
+        self._event.set()
+
+    def is_cancelled(self):
+        return self._event.is_set()
+
+    def raise_if_cancelled(self):
+        if self.is_cancelled():
+            raise PipelineCancelled("用户已取消批量裂变。")
+
+
+_RUN_CONTEXT = threading.local()
 
 
 # ---------------------------------------------------------------------------
@@ -103,17 +129,55 @@ def _resolve_safe(path, base_dir, must_exist=True):
 # ---------------------------------------------------------------------------
 # 工具函数
 # ---------------------------------------------------------------------------
-def _run(cmd, timeout=600):
-    """执行命令，返回 (returncode, stdout, stderr)。二进制安全，UTF-8 解码。"""
-    proc = subprocess.run(
+def _terminate_process(proc):
+    """终止当前外部命令；Windows 优先结束整个子进程树。"""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=3)
+
+
+def _run(cmd, timeout=600, cancel_token=None):
+    """执行命令；批量上下文取消时终止子进程并抛 PipelineCancelled。"""
+    token = cancel_token or getattr(_RUN_CONTEXT, "cancel_token", None)
+    if token is not None:
+        token.raise_if_cancelled()
+    proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=timeout,
     )
-    out = proc.stdout.decode("utf-8", "replace")
-    err = proc.stderr.decode("utf-8", "replace")
-    return proc.returncode, out, err
+    started = time.monotonic()
+    while True:
+        try:
+            out, err = proc.communicate(timeout=0.2)
+            break
+        except subprocess.TimeoutExpired:
+            if token is not None and token.is_cancelled():
+                _terminate_process(proc)
+                proc.communicate()
+                raise PipelineCancelled("用户已取消批量裂变。")
+            if timeout is not None and time.monotonic() - started >= timeout:
+                _terminate_process(proc)
+                proc.communicate()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+    return (
+        proc.returncode,
+        out.decode("utf-8", "replace"),
+        err.decode("utf-8", "replace"),
+    )
 
 
 def md5_of(path):
@@ -123,6 +187,52 @@ def md5_of(path):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _reserve_output_path(out_name):
+    """在 output/ 内原子预留不冲突的文件名，已有文件自动追加序号。"""
+    requested = _resolve_safe(out_name, OUTPUT_DIR, must_exist=False)
+    for index in range(1, 10001):
+        candidate = requested if index == 1 else requested.with_name(
+            f"{requested.stem}_{index}{requested.suffix}")
+        try:
+            with candidate.open("xb"):
+                pass
+            return candidate
+        except FileExistsError:
+            continue
+        except PermissionError as exc:
+            # Windows 对“已存在且被其他进程锁定”的文件可能返回 EACCES，
+            # 而不是 FileExistsError；此时继续尝试递增名称即可。
+            if candidate.exists():
+                continue
+            raise PipelineError(
+                f"无法在 output/ 创建产物文件：{candidate.name}。"
+                "请确认输出目录可写。"
+            ) from exc
+    raise PipelineError(f"无法为产物分配可用文件名：{requested.name}")
+
+
+def _cleanup_failed_output(path):
+    """尽力清理本次 FFmpeg 失败留下的占位或残缺文件。"""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _ffmpeg_error_message(err, out_path):
+    """把冗长 FFmpeg stderr 收敛为可操作的用户提示。"""
+    text = err or ""
+    lowered = text.lower()
+    if "permission denied" in lowered or "access is denied" in lowered:
+        return (
+            f"无法写入产物 {Path(out_path).name}。文件可能正被播放器、"
+            "资源管理器预览窗格或其他程序占用；请关闭占用后重试。"
+        )
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    detail = "\n".join(lines[-8:]) if lines else "未知错误"
+    return f"ffmpeg 去重失败：\n{detail}"
 
 
 def check_env():
@@ -497,8 +607,8 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     stem = Path(src_info["name"]).stem
     if not out_name:
         out_name = f"{stem}_去重.mp4"
-    # 输出名也过白名单，防止 out_name 带 ../ 穿越写到 output 外
-    out_path = _resolve_safe(out_name, OUTPUT_DIR, must_exist=False)
+    # 先做白名单校验，实际文件预留延后到 FFmpeg 执行前，避免前置计算失败留空文件。
+    _resolve_safe(out_name, OUTPUT_DIR, must_exist=False)
 
     vf, applied = build_filter(resolved, src_info)
     fps = _pick_fps(resolved)
@@ -553,6 +663,9 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         applied["bitrate_mul"] = mul
         applied["bitrate_kbps"] = kbps
 
+    # 原子预留输出名：已有或正被另一任务预留时自动递增，避免覆盖/文件占用失败。
+    out_path = _reserve_output_path(out_name)
+
     # 组装 ffmpeg 命令（列表式传参，禁 shell 拼接）
     # ⚠️ -ss/-t 均放在 -i 【之前】作为输入侧选项，使去头尾在【源时间轴】上生效。
     #    DD §2.5c 字面写的是 `-ss head -i src -t out_dur`（-t 在 -i 之后 = 输出侧选项），
@@ -574,11 +687,20 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     cmd += ["-metadata", f"comment=processed-{random.randint(10000, 99999)}",
             "-map_metadata", "-1", str(out_path)]
 
-    rc, out, err = _run(cmd, timeout=600)
+    try:
+        rc, out, err = _run(cmd, timeout=600)
+    except Exception:
+        _cleanup_failed_output(out_path)
+        raise
     if rc != 0:
-        raise PipelineError(f"ffmpeg 去重失败:\n{err[-2000:]}")
+        _cleanup_failed_output(out_path)
+        raise PipelineError(_ffmpeg_error_message(err, out_path))
 
-    out_info = probe_video(str(out_path), base_dir=OUTPUT_DIR)
+    try:
+        out_info = probe_video(str(out_path), base_dir=OUTPUT_DIR)
+    except Exception:
+        _cleanup_failed_output(out_path)
+        raise
 
     # --- 自检升级 ---
     # duration_close：启用时序维度时用「范围口径」（预期时长 ±3%），否则沿用 |Δ|<1.0s
@@ -600,8 +722,13 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     else:
         min_duration_ok = True
 
-    # pHash：变体 vs 原素材（度量“够不够不同”）
-    phash = M.compare_videos(str(src_path), str(out_path))
+    # pHash：变体 vs 原素材（度量“够不够不同”）。批量取消发生在自检期间时，
+    # 当前变体尚未完成完整验收，清理它；此前已完成并入列表的变体不受影响。
+    try:
+        phash = M.compare_videos(str(src_path), str(out_path))
+    except PipelineCancelled:
+        _cleanup_failed_output(out_path)
+        raise
 
     all_passed = (md5_changed and resolution_kept and duration_close
                   and min_duration_ok and bool(phash.get("passed")))
@@ -624,7 +751,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
 
 def batch_fission(src, count=5, params=None,
-                  level=None, dimensions=None, flip_mode=None):
+                  level=None, dimensions=None, flip_mode=None, cancel_token=None):
     """裂变：同一素材生成 count 个不同参数的变体（本期增量：档位/维度透传 + 距离矩阵）。
 
     每变体用不同 seed 保证互异；开启 flip 后自动轮换 h/v/90；产出后调
@@ -638,42 +765,81 @@ def batch_fission(src, count=5, params=None,
     故此处把 trim 的头尾配比按变体序号【确定性铺开】(phase=i/(count-1))，
     让 head 跨度撑满合法可裁窗口，而不是各变体从同一窄区间 iid 抽样。
     """
-    count = max(1, min(int(count), 20))
-    base_info = probe_video(src)
-    stem = Path(base_info["name"]).stem
-
+    requested_count = max(1, min(int(count), 20))
+    token = cancel_token or CancellationToken()
+    previous_token = getattr(_RUN_CONTEXT, "cancel_token", None)
+    base_info = {"name": Path(src).name, "duration": 0.0}
     results = []
-    flip_enabled = bool(dimensions and dimensions.get("flip"))
-    flip_cycle = ("h", "v", "90")
-    for i in range(count):
-        out_name = f"{stem}_变体{i + 1}.mp4"
-        # phase 均匀铺开：count=1 时取 0.0（无对照需求）；count>1 时端到端撑满 [0,1]
-        phase = 0.0 if count == 1 else i / (count - 1)
-        # 批量裂变开启 flip 后自动轮换方向，保证页面上的单个方向选择不会让
-        # 所有变体使用同一 flip_mode，从而失去有效的变体间分离杠杆。
-        variant_flip_mode = flip_cycle[i % len(flip_cycle)] if flip_enabled else flip_mode
-        r = dedup_video(src, params=params, out_name=out_name,
-                        seed=random.randint(1, 10 ** 9),
-                        level=level, dimensions=dimensions, flip_mode=variant_flip_mode,
-                        trim_phase=phase)
-        results.append({
-            "index": i + 1,
-            "output_path": r["output_path"],
-            "md5": r["output"]["md5"],
-            "applied_params": r["applied_params"],
-            "checks": r["checks"],
-        })
-
-    md5s = [x["md5"] for x in results]
-
-    # 变体两两感知哈希距离矩阵（度量“N 个变体之间够不够互异”，PRD §8.2）
-    variant_paths = [x["output_path"] for x in results]
+    cancelled = False
+    matrix = {"count": 0, "all_pass": None, "matrix": [],
+              "too_close_pairs": [], "min_pair": None}
+    _RUN_CONTEXT.cancel_token = token
     try:
-        matrix = M.distance_matrix(variant_paths)
-    except Exception as e:
-        # 矩阵计算失败不毁整个裂变结果，降级为提示
-        matrix = {"error": str(e), "count": count, "all_pass": None,
+        token.raise_if_cancelled()
+        base_info = probe_video(src)
+        stem = Path(base_info["name"]).stem
+
+        flip_enabled = bool(dimensions and dimensions.get("flip"))
+        flip_cycle = ("h", "v", "90")
+        for i in range(requested_count):
+            try:
+                token.raise_if_cancelled()
+                out_name = f"{stem}_变体{i + 1}.mp4"
+                # phase 均匀铺开：count=1 时取 0.0（无对照需求）；count>1 时端到端撑满 [0,1]
+                phase = 0.0 if requested_count == 1 else i / (requested_count - 1)
+                # 批量裂变开启 flip 后自动轮换方向，保证页面上的单个方向选择不会让
+                # 所有变体使用同一 flip_mode，从而失去有效的变体间分离杠杆。
+                variant_flip_mode = flip_cycle[i % len(flip_cycle)] if flip_enabled else flip_mode
+                r = dedup_video(src, params=params, out_name=out_name,
+                                seed=random.randint(1, 10 ** 9),
+                                level=level, dimensions=dimensions, flip_mode=variant_flip_mode,
+                                trim_phase=phase)
+                results.append({
+                    "index": i + 1,
+                    "output_path": r["output_path"],
+                    "md5": r["output"]["md5"],
+                    "applied_params": r["applied_params"],
+                    "checks": r["checks"],
+                })
+            except PipelineCancelled:
+                cancelled = True
+                break
+
+        md5s = [x["md5"] for x in results]
+
+        # 变体两两感知哈希距离矩阵（度量“N 个变体之间够不够互异”，PRD §8.2）
+        variant_paths = [x["output_path"] for x in results]
+        if cancelled or token.is_cancelled():
+            cancelled = True
+            matrix = {"cancelled": True, "count": len(results), "all_pass": None,
+                      "matrix": [], "too_close_pairs": [], "min_pair": None}
+        else:
+            try:
+                matrix = M.distance_matrix(variant_paths)
+                if token.is_cancelled():
+                    cancelled = True
+                    matrix = {"cancelled": True, "count": len(results), "all_pass": None,
+                              "matrix": [], "too_close_pairs": [], "min_pair": None}
+            except PipelineCancelled:
+                cancelled = True
+                matrix = {"cancelled": True, "count": len(results), "all_pass": None,
+                          "matrix": [], "too_close_pairs": [], "min_pair": None}
+            except Exception as e:
+                # 矩阵计算失败不毁整个裂变结果，降级为提示
+                matrix = {"error": str(e), "count": len(results), "all_pass": None,
+                          "matrix": [], "too_close_pairs": [], "min_pair": None}
+    except PipelineCancelled:
+        cancelled = True
+        matrix = {"cancelled": True, "count": len(results), "all_pass": None,
                   "matrix": [], "too_close_pairs": [], "min_pair": None}
+    finally:
+        if previous_token is None:
+            try:
+                del _RUN_CONTEXT.cancel_token
+            except AttributeError:
+                pass
+        else:
+            _RUN_CONTEXT.cancel_token = previous_token
 
     # 分离度诊断（实测依据见 docs/eval/沉淀失败原因.md F2.4-01）：
     # 矩阵不达标时要指明【卡在哪条腿】，而不是只丢一个 all_pass=False。
@@ -698,11 +864,14 @@ def batch_fission(src, count=5, params=None,
                 "时间错位已铺开但仍不达标 → 可裁窗口偏小；"
                 "追加杠杆：给各变体指定不同 flip_mode（h/v/90）。")
 
-    all_unique = len(set(md5s)) == len(md5s)
-    delivery_ready = all_unique and matrix.get("all_pass") is True
+    all_unique = bool(results) and len(set(md5s)) == len(md5s)
+    delivery_ready = (not cancelled and len(results) == requested_count
+                      and all_unique and matrix.get("all_pass") is True)
     return {
         "src": base_info["name"],
-        "count": count,
+        "count": len(results),
+        "requested_count": requested_count,
+        "cancelled": cancelled,
         "variants": results,
         "all_unique": all_unique,
         "delivery_ready": delivery_ready,

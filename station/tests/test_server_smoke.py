@@ -79,10 +79,11 @@ class _StubPipeline:
         }
 
     def batch_fission(self, src, count=5, params=None,
-                      level=None, dimensions=None, flip_mode=None):
+                      level=None, dimensions=None, flip_mode=None, cancel_token=None):
         self.calls.append({
             "fn": "batch_fission", "src": src, "count": count, "params": params,
             "level": level, "dimensions": dimensions, "flip_mode": flip_mode,
+            "cancel_token": cancel_token,
         })
         # 与真实 pipeline.batch_fission 一致的 wrapper 结构：result["matrix"] 是包装 dict，
         # 内层 matrix 字段是 2D 列表（对角 None），外层带 all_pass / count / too_close_pairs。
@@ -94,6 +95,8 @@ class _StubPipeline:
         return {
             "src": src,
             "count": n,
+            "requested_count": n,
+            "cancelled": False,
             "all_unique": True,
             "delivery_ready": True,
             "variants": [{"index": i + 1, "output_path": f"/tmp/x_v{i+1}.mp4",
@@ -122,6 +125,13 @@ class _StubPipeline:
 
     def remove_watermark(self, src, platform, out_name=None):
         return {"ok": True}
+
+    class CancellationToken:
+        def __init__(self):
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
 
     def PipelineError(self, msg):
         return Exception(msg)
@@ -267,20 +277,145 @@ def local_http_server():
         thread.join(timeout=3)
 
 
+@pytest.mark.parametrize(
+    ("path", "content_type", "marker"),
+    [
+        ("/", "text/html", "视频去重工位"),
+        ("/index.html", "text/html", "视频去重工位"),
+        ("/style.css", "text/css", ":root"),
+        ("/app.js", "text/javascript", "connectAndBootstrap"),
+    ],
+)
+def test_web_assets_are_served_from_same_origin(local_http_server, path, content_type, marker):
+    with urlopen(local_http_server + path, timeout=3) as response:
+        body = response.read().decode("utf-8")
+        assert response.status == 200
+        assert response.headers["Content-Type"].startswith(content_type)
+        assert response.headers["Cache-Control"] == "no-store"
+    assert marker in body
+
+
+def test_web_head_returns_headers_without_body(local_http_server):
+    request = Request(local_http_server + "/app.js", method="HEAD")
+    with urlopen(request, timeout=3) as response:
+        assert response.status == 200
+        assert response.headers["Content-Type"].startswith("text/javascript")
+        assert int(response.headers["Content-Length"]) > 0
+        assert response.read() == b""
+
+
+def test_web_favicon_is_empty_and_unknown_path_is_hidden(local_http_server):
+    with urlopen(local_http_server + "/favicon.ico", timeout=3) as response:
+        assert response.status == 204
+        assert response.read() == b""
+    with pytest.raises(HTTPError) as exc_info:
+        urlopen(local_http_server + "/server/mcp_server.py", timeout=3)
+    assert exc_info.value.code == 404
+
+
 def test_open_output_endpoint_opens_fixed_directory(local_http_server, monkeypatch, tmp_path):
     opened = tmp_path / "output"
-    monkeypatch.setattr(S, "_open_output_folder", lambda: opened)
+    monkeypatch.setattr(S, "_open_output_folder", lambda filename=None: (opened, None))
     request = Request(
         local_http_server + "/local/open-output",
-        data=b"",
+        data=b"{}",
         method="POST",
-        headers={"Origin": "http://127.0.0.1:8080"},
+        headers={"Origin": "http://127.0.0.1:8080", "Content-Type": "application/json"},
     )
     with urlopen(request, timeout=3) as response:
         body = json.loads(response.read().decode("utf-8"))
         assert response.status == 200
         assert response.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:8080"
-    assert body == {"ok": True, "path": str(opened)}
+    assert body == {"ok": True, "path": str(opened), "selected": None}
+
+
+def test_cancel_fission_endpoint_signals_active_task(local_http_server, monkeypatch):
+    token = S.P.CancellationToken()
+    task_id = "fission_http_test"
+    with S._ACTIVE_FISSION_LOCK:
+        S._ACTIVE_FISSION[task_id] = token
+    try:
+        request = Request(
+            local_http_server + "/local/cancel-fission",
+            data=json.dumps({"task_id": task_id}).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urlopen(request, timeout=3) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+        assert body["ok"] is True and body["found"] is True
+        assert token.is_cancelled() is True
+    finally:
+        with S._ACTIVE_FISSION_LOCK:
+            S._ACTIVE_FISSION.pop(task_id, None)
+
+
+def test_cancel_fission_endpoint_reports_finished_task(local_http_server):
+    request = Request(
+        local_http_server + "/local/cancel-fission",
+        data=json.dumps({"task_id": "fission_finished"}).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urlopen(request, timeout=3) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    assert body == {"ok": True, "found": False, "message": "任务已结束或不存在"}
+
+
+def test_open_output_endpoint_selects_named_artifact(local_http_server, monkeypatch, tmp_path):
+    opened = tmp_path / "output"
+    selected = opened / "成片.mp4"
+    seen = []
+
+    def fake_open(filename=None):
+        seen.append(filename)
+        return opened, selected
+
+    monkeypatch.setattr(S, "_open_output_folder", fake_open)
+    request = Request(
+        local_http_server + "/local/open-output",
+        data=json.dumps({"filename": "成片.mp4"}, ensure_ascii=False).encode("utf-8"),
+        method="POST",
+        headers={"Origin": "http://127.0.0.1:8080", "Content-Type": "application/json"},
+    )
+    with urlopen(request, timeout=3) as response:
+        body = json.loads(response.read().decode("utf-8"))
+        assert response.status == 200
+    assert seen == ["成片.mp4"]
+    assert body == {"ok": True, "path": str(opened), "selected": str(selected)}
+
+
+@pytest.mark.parametrize("filename", ["../outside.mp4", "subdir/x.mp4", "C:\\outside.mp4"])
+def test_open_output_folder_rejects_non_basename(monkeypatch, tmp_path, filename):
+    output = tmp_path / "output"
+    monkeypatch.setattr(S.P, "OUTPUT_DIR", output)
+    with pytest.raises(ValueError):
+        S._open_output_folder(filename)
+
+
+def test_open_output_folder_rejects_missing_artifact(monkeypatch, tmp_path):
+    output = tmp_path / "output"
+    monkeypatch.setattr(S.P, "OUTPUT_DIR", output)
+    with pytest.raises(FileNotFoundError):
+        S._open_output_folder("missing.mp4")
+
+
+def test_open_output_folder_selects_file_on_windows(monkeypatch, tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    artifact = output / "成片 文件.mp4"
+    artifact.write_bytes(b"video")
+    calls = []
+    monkeypatch.setattr(S.P, "OUTPUT_DIR", output)
+    monkeypatch.setattr(S.os, "name", "nt")
+    monkeypatch.setattr(S.subprocess, "Popen", lambda args: calls.append(args))
+
+    opened, selected = S._open_output_folder(artifact.name)
+
+    assert opened == output.resolve()
+    assert selected == artifact.resolve()
+    assert calls == [["explorer.exe", "/select,", str(artifact.resolve())]]
 
 
 def test_open_output_endpoint_rejects_non_local_origin(local_http_server, monkeypatch):
@@ -315,8 +450,8 @@ def test_tools_list_contains_new_fields():
         assert k in d, f"dedup_video 缺字段 {k}"
     assert d["level"]["enum"] == ["light", "medium", "heavy"]
     assert d["flip_mode"]["enum"] == ["h", "v", "90"]
-    # batch_fission: level/dimensions/flip_mode 三个新字段；seed 不暴露（pipeline 不收）
-    for k in ("level", "dimensions", "flip_mode"):
+    # batch_fission: level/dimensions/flip_mode/task_id；seed 不暴露（pipeline 不收）
+    for k in ("level", "dimensions", "flip_mode", "task_id"):
         assert k in f, f"batch_fission 缺字段 {k}"
     assert "seed" not in f, "batch_fission 不应暴露 seed（pipeline.batch_fission 签名无此参数）"
 
@@ -369,6 +504,7 @@ def test_batch_fission_passes_level_dimensions_flip_mode_count(stub, monkeypatch
     args = {
         "src": "x.mp4", "count": 4, "level": "light",
         "dimensions": {"flip": True}, "flip_mode": "v",
+        "task_id": "fission_test123",
     }
     S.handle_rpc(_confirmed_req("batch_fission", args), {})
 
@@ -378,6 +514,8 @@ def test_batch_fission_passes_level_dimensions_flip_mode_count(stub, monkeypatch
     assert c["level"] == "light"
     assert c["dimensions"] == {"flip": True}
     assert c["flip_mode"] == "v"
+    assert c["cancel_token"] is not None
+    assert "fission_test123" not in S._ACTIVE_FISSION
     # 显式确认 batch_fission 没收到 seed/trim_phase（pipeline 签名不接受）
     assert "seed" not in c
     assert "trim_phase" not in c

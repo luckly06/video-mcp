@@ -164,9 +164,10 @@
             <div class="check-item check-phash" id="chk-phash"><span class="check-mark">—</span><span class="check-text"><b>pHash 自检</b><small id="phash-detail" class="phash-detail"></small></span></div>
           </div>
           <div id="phash-hint" class="phash-hint hidden"></div>
+          <div id="dedup-artifact" class="artifact-highlight hidden"><span class="artifact-label">产物文件</span><strong id="dedup-artifact-name"></strong><span>已生成，可直接定位</span></div>
           <pre id="dedup-detail" class="dedup-detail"></pre>
           <div class="result-actions">
-            <button id="btn-open-output" class="btn btn-secondary" type="button">打开输出文件夹</button>
+            <button id="btn-open-output" class="btn btn-secondary" type="button" disabled>定位产物</button>
             <button id="btn-deliver" class="btn btn-success" type="button" disabled title="五项自检全部通过后才可确认交付">确认交付</button>
             <button id="btn-regen" class="btn btn-secondary" type="button">再生成变体</button>
           </div>
@@ -186,7 +187,7 @@
         <div id="fission-progress" class="processing-progress hidden" role="status" aria-live="polite">
           <div class="progress-row"><strong id="fission-progress-label">正在准备批量裂变</strong><span id="fission-progress-time">正在估算</span></div>
           <div class="orb-loader"><div class="orb-path"><div class="orb-globe" tabindex="0" role="slider" aria-label="等待互动球，可左右拖动" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="orb-wrapper"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div></div>
-          <p>按住彩球可左右拖动；松手后继续自动往返。预计时间会动态校准，预测超时不会中断处理。</p>
+          <div class="progress-actions"><p>取消会终止当前处理并停止后续变体；已完成并通过自检的产物会保留。</p><button id="btn-cancel-fission" class="btn btn-danger" type="button">取消裂变</button></div>
         </div>
         <div id="fission-card" class="result-card hidden" aria-live="polite">
           <div class="result-head"><div><span class="result-eyebrow">batch_fission</span><h4>裂变结果与距离矩阵</h4></div><span class="tier-chip tier-warned">人工确认执行</span></div>
@@ -198,8 +199,9 @@
             <div id="fission-matrix" class="fission-matrix"></div>
             <div class="matrix-legend"><span class="ml-cell ok">绿色：通过</span><span class="ml-cell warn">红色：未通过</span><span class="ml-cell diag">自身</span></div>
           </div>
+          <div class="artifact-section-head"><span>产物文件</span><small>点击一项选择，随后在资源管理器中定位</small></div>
           <div id="fission-list" class="fission-list"></div>
-          <div class="result-actions"><button id="btn-open-output-fission" class="btn btn-secondary" type="button">打开输出文件夹</button></div>
+          <div class="result-actions"><button id="btn-open-output-fission" class="btn btn-secondary" type="button" disabled>定位选中产物</button></div>
         </div>
       </section>
     </main>

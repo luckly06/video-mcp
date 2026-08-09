@@ -16,6 +16,7 @@
 
 const MCP_URL = "http://127.0.0.1:8765/mcp";
 const OPEN_OUTPUT_URL = "http://127.0.0.1:8765/local/open-output";
+const CANCEL_FISSION_URL = "http://127.0.0.1:8765/local/cancel-fission";
 
 /* 工具四级安全分级（按工具名硬编码映射，与 shared/rules.json 对齐）。
    list_* / probe / get_job = audit，dedup / batch_fission / remove_watermark = warned，
@@ -84,6 +85,8 @@ const el = {
   chkPhash: $("chk-phash"),
   phashDetail: $("phash-detail"),
   phashHint: $("phash-hint"),
+  dedupArtifact: $("dedup-artifact"),
+  dedupArtifactName: $("dedup-artifact-name"),
   dedupDetail: $("dedup-detail"),
   btnDeliver: $("btn-deliver"),
   btnRegen: $("btn-regen"),
@@ -94,6 +97,7 @@ const el = {
 
   fissionCount: $("fission-count"),
   btnFission: $("btn-fission"),
+  btnCancelFission: $("btn-cancel-fission"),
   fissionCard: $("fission-card"),
   fissionSummary: $("fission-summary"),
   fissionExplainer: $("fission-explainer"),
@@ -126,9 +130,14 @@ const el = {
 let lastProbedAsset = null;
 let lastProbeInfo = null;
 let dedupDeliveryReady = false;
+let currentDedupArtifact = null;
+let currentFissionArtifacts = [];
+let selectedFissionArtifact = null;
 let currentWorkflowStep = 1;
 let lastModalTrigger = null;
 let activeProgress = new Map();
+let activeFissionTaskId = null;
+let fissionCancelPending = false;
 
 const PROGRESS_HISTORY_KEY = "video-dedup-progress-history-v1";
 const PROGRESS_SAMPLE_LIMIT = 8;
@@ -342,7 +351,12 @@ function resetResultsForAssetChange() {
   lastProbedAsset = null;
   lastProbeInfo = null;
   dedupDeliveryReady = false;
+  currentDedupArtifact = null;
+  currentFissionArtifacts = [];
+  selectedFissionArtifact = null;
   el.btnDeliver.disabled = true;
+  el.btnOpenOutput.disabled = true;
+  el.btnOpenOutputFission.disabled = true;
   el.probeCard.classList.add("hidden");
   el.dedupCard.classList.add("hidden");
   el.fissionCard.classList.add("hidden");
@@ -428,18 +442,64 @@ async function callToolWithConfirm(name, args, onExecute) {
   return res;
 }
 
-async function openOutputFolder(button) {
-  const original = button.innerHTML;
-  button.disabled = true;
-  button.textContent = "正在打开...";
+function newFissionTaskId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+    return "fission_" + globalThis.crypto.randomUUID().replace(/-/g, "");
+  }
+  return "fission_" + Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+async function cancelFission() {
+  if (!activeFissionTaskId || fissionCancelPending) return;
+  fissionCancelPending = true;
+  el.btnCancelFission.disabled = true;
+  el.btnCancelFission.textContent = "正在取消...";
+  el.fissionProgressLabel.textContent = "正在停止当前处理";
   try {
-    const resp = await fetch(OPEN_OUTPUT_URL, { method: "POST" });
+    const resp = await fetch(CANCEL_FISSION_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_id: activeFissionTaskId }),
+    });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || data.ok !== true) throw new Error(data.message || `HTTP ${resp.status}`);
-    addMemory("open_output", "human", "人工打开 output/ 文件夹查看成片。");
-    toast("已打开输出文件夹。", "ok");
+    if (data.found) {
+      addMemory("batch_fission", "cancel", "人工取消运行中的批量裂变，正在停止当前处理。");
+      toast("已发送取消请求，正在停止当前处理。", "warn");
+    } else {
+      // 极快点击时，取消请求可能早于后端登记任务。恢复按钮，允许再次取消；
+      // 若任务确已结束，主请求的 finally 也会立即收起整个进度区。
+      fissionCancelPending = false;
+      el.btnCancelFission.disabled = false;
+      el.btnCancelFission.textContent = "取消裂变";
+      el.fissionProgressLabel.textContent = "任务仍在启动，可再次取消";
+      toast("任务仍在启动或已经结束；如仍在处理，可再次点击取消。", "warn");
+    }
   } catch (e) {
-    toast("打开输出文件夹失败：" + (e.message || e), "warn");
+    fissionCancelPending = false;
+    el.btnCancelFission.disabled = false;
+    el.btnCancelFission.textContent = "取消裂变";
+    toast("取消裂变失败：" + (e.message || e), "err");
+  }
+}
+
+async function openOutputFolder(button, filename = null) {
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.textContent = filename ? "正在定位..." : "正在打开...";
+  try {
+    const resp = await fetch(OPEN_OUTPUT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(filename ? { filename } : {}),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok !== true) throw new Error(data.message || `HTTP ${resp.status}`);
+    const summary = filename ? "人工在 output/ 中定位产物：" + filename : "人工打开 output/ 文件夹查看成片。";
+    addMemory("open_output", "human", summary);
+    toast(filename ? "已在输出文件夹中定位：" + filename : "已打开输出文件夹。", "ok");
+  } catch (e) {
+    toast((filename ? "定位产物失败：" : "打开输出文件夹失败：") + (e.message || e), "warn");
   } finally {
     button.disabled = false;
     button.innerHTML = original;
@@ -873,6 +933,17 @@ function renderDedup(d) {
     el.phashHint.classList.add("hidden");
   }
 
+  currentDedupArtifact = d.output_path ? baseName(d.output_path) : null;
+  if (currentDedupArtifact) {
+    el.dedupArtifactName.textContent = currentDedupArtifact;
+    el.dedupArtifact.title = d.output_path;
+    el.dedupArtifact.classList.remove("hidden");
+    el.btnOpenOutput.disabled = false;
+  } else {
+    el.dedupArtifact.classList.add("hidden");
+    el.btnOpenOutput.disabled = true;
+  }
+
   const src = d.src || {};
   const out = d.output || {};
   const applied = d.applied_params || {};
@@ -923,12 +994,16 @@ async function doFission() {
   }
   el.fissionCount.value = count;
 
-  const args = { src, count, level, dimensions };
+  const args = { src, count, level, dimensions, task_id: newFissionTaskId() };
   if (flip_mode) args.flip_mode = flip_mode;
   setWorkflowStep(3);
   try {
     await withBusy(el.btnFission, "开始裂变", async () => {
       const res = await callToolWithConfirm("batch_fission", args, () => {
+        activeFissionTaskId = args.task_id;
+        fissionCancelPending = false;
+        el.btnCancelFission.disabled = false;
+        el.btnCancelFission.textContent = "取消裂变";
         startProgress("fission", "正在逐个生成变体并计算距离矩阵", {
           duration: lastProbeInfo && lastProbeInfo.duration,
           count,
@@ -947,43 +1022,60 @@ async function doFission() {
         return;
       }
       if (res.kind !== "ok") return;
-      learnProgressDuration("fission");
-      setWorkflowStep(4);
+      if (!res.data.cancelled) learnProgressDuration("fission");
+      setWorkflowStep(res.data.cancelled ? 3 : 4);
       renderFission(res.data);
       const allPass = res.data.matrix && res.data.matrix.all_pass;
       const deliveryReady = res.data.delivery_ready === true;
-      addMemory("batch_fission", "warned",
-        `裂变 ${res.data.count} 个变体 · MD5唯一${mark(res.data.all_unique)} · 矩阵${mark(allPass)} · 交付门${mark(deliveryReady)}（源：${res.data.src}）`);
-      if (deliveryReady) {
-        toast("裂变完成且双门通过：生成 " + res.data.count + " 个变体。", "ok");
+      if (res.data.cancelled) {
+        addMemory("batch_fission", "cancel",
+          `裂变已取消 · 保留 ${res.data.count || 0}/${res.data.requested_count || count} 个已完成产物（源：${res.data.src}）`);
+        toast(`裂变已取消，保留 ${res.data.count || 0} 个已完成产物。`, "warn");
       } else {
-        toast("裂变已生成，但 MD5 唯一性或距离矩阵未通过，当前不可交付。", "warn");
+        addMemory("batch_fission", "warned",
+          `裂变 ${res.data.count} 个变体 · MD5唯一${mark(res.data.all_unique)} · 矩阵${mark(allPass)} · 交付门${mark(deliveryReady)}（源：${res.data.src}）`);
+        if (deliveryReady) {
+          toast("裂变完成且双门通过：生成 " + res.data.count + " 个变体。", "ok");
+        } else {
+          toast("裂变已生成，但 MD5 唯一性或距离矩阵未通过，当前不可交付。", "warn");
+        }
       }
     });
   } finally {
     stopProgress("fission");
+    activeFissionTaskId = null;
+    fissionCancelPending = false;
+    el.btnCancelFission.disabled = false;
+    el.btnCancelFission.textContent = "取消裂变";
   }
 }
 
 function renderFission(d) {
+  const cancelled = d.cancelled === true;
   const uniq = d.all_unique === true;
   const matrix = d.matrix || null;
   const allPass = !!(matrix && matrix.all_pass);
 
-  // 摘要：MD5 唯一 + 矩阵达标
+  // 摘要：正常完成展示双门；取消任务展示实际保留数量，不把未计算矩阵误报为失败。
   const badges = [];
-  badges.push('<span class="fission-badge ' + (uniq ? "" : "warn") + '">' +
-    (uniq ? "MD5 全部互不相同 ✓" : "存在重复 MD5 ✕") + "</span>");
-  if (matrix) {
-    badges.push('<span class="fission-badge ' + (allPass ? "" : "warn") + '">' +
-      (allPass ? "距离矩阵全部达标 ✓" : "存在过近对 ✕") + "</span>");
+  if (cancelled) {
+    badges.push('<span class="fission-badge warn">任务已取消</span>');
+  } else {
+    badges.push('<span class="fission-badge ' + (uniq ? "" : "warn") + '">' +
+      (uniq ? "MD5 全部互不相同 ✓" : "存在重复 MD5 ✕") + "</span>");
+    if (matrix) {
+      badges.push('<span class="fission-badge ' + (allPass ? "" : "warn") + '">' +
+        (allPass ? "距离矩阵全部达标 ✓" : "存在过近对 ✕") + "</span>");
+    }
   }
+  const countText = cancelled
+    ? "已保留 " + (d.count || 0) + " / " + (d.requested_count || 0) + " 个完整变体 "
+    : "共 " + (d.count || 0) + " 个变体 ";
   el.fissionSummary.innerHTML =
-    "源素材 <b>" + escapeHtml(d.src || "?") + "</b> · 共 " + (d.count || 0) + " 个变体 " +
-    badges.join(" ");
+    "源素材 <b>" + escapeHtml(d.src || "?") + "</b> · " + countText + badges.join(" ");
 
   // separation 诊断（all_pass=false 时展示卡哪条腿）
-  renderSeparation(d.separation, allPass);
+  renderSeparation(cancelled ? null : d.separation, allPass);
   renderFissionExplainer(d, allPass);
 
   // 距离矩阵表格
@@ -995,13 +1087,18 @@ function renderFission(d) {
   }
 
   const variants = d.variants || [];
-  el.fissionList.innerHTML = variants.map((v) =>
-    '<div class="fission-item">' +
-      '<span class="fission-idx">' + (v.index || "?") + "</span>" +
-      '<span class="fission-name">' + escapeHtml(baseName(v.output_path)) + "</span>" +
+  currentFissionArtifacts = variants
+    .map((variant) => ({ ...variant, filename: baseName(variant.output_path) }))
+    .filter((variant) => variant.filename && variant.filename !== "?");
+  selectedFissionArtifact = currentFissionArtifacts.length ? currentFissionArtifacts[0].filename : null;
+  el.fissionList.innerHTML = currentFissionArtifacts.map((v, index) =>
+    '<button class="fission-item artifact-item' + (index === 0 ? " is-selected" : "") + '" type="button" data-artifact-name="' + escapeHtml(v.filename) + '" aria-pressed="' + (index === 0 ? "true" : "false") + '">' +
+      '<span class="fission-idx">' + (v.index || index + 1) + "</span>" +
+      '<span class="fission-name">' + escapeHtml(v.filename) + "</span>" +
       '<span class="fission-md5">MD5 ' + escapeHtml(short(v.md5)) + "</span>" +
-    "</div>"
+    "</button>"
   ).join("");
+  el.btnOpenOutputFission.disabled = !selectedFissionArtifact;
   el.fissionCard.classList.remove("hidden");
 }
 
@@ -1013,6 +1110,19 @@ function renderFissionExplainer(d, allPass) {
   const minPair = matrix.min_pair || null;
   const minDistance = minPair && minPair.phash_avg != null ? (+minPair.phash_avg).toFixed(1) : null;
   const ready = d.delivery_ready === true;
+
+  if (d.cancelled === true) {
+    const kept = Number(d.count) || 0;
+    el.fissionExplainer.innerHTML =
+      '<div class="explainer-status is-warn">' +
+        '<span class="explainer-status-mark" aria-hidden="true">!</span>' +
+        '<div><strong>批量裂变已取消</strong><p>当前处理已停止，后续变体不会继续生成；已完成并通过单条自检的 ' + kept + ' 个产物已保留。</p></div>' +
+      "</div>" +
+      '<div class="explainer-grid"><div class="explainer-action"><strong>当前结果</strong><p>' +
+        (kept ? "可在下方选择并定位已完成产物；取消批次未计算完整距离矩阵，因此不可直接交付。" : "本次取消前没有产生可保留的完整产物。") +
+      "</p></div></div>";
+    return;
+  }
 
   let statusTitle = "这批变体可以交付";
   let statusText = "MD5 已区分文件，任意两个变体的 pHash 平均距离也都达到 12。";
@@ -1381,9 +1491,21 @@ el.assetSelect.addEventListener("change", resetResultsForAssetChange);
 el.btnProbe.addEventListener("click", doProbe);
 el.btnDedup.addEventListener("click", doDedup);
 el.btnFission.addEventListener("click", doFission);
+el.btnCancelFission.addEventListener("click", cancelFission);
 el.btnOpenOutputTop.addEventListener("click", () => openOutputFolder(el.btnOpenOutputTop));
-el.btnOpenOutput.addEventListener("click", () => openOutputFolder(el.btnOpenOutput));
-el.btnOpenOutputFission.addEventListener("click", () => openOutputFolder(el.btnOpenOutputFission));
+el.btnOpenOutput.addEventListener("click", () => openOutputFolder(el.btnOpenOutput, currentDedupArtifact));
+el.btnOpenOutputFission.addEventListener("click", () => openOutputFolder(el.btnOpenOutputFission, selectedFissionArtifact));
+el.fissionList.addEventListener("click", (e) => {
+  const item = e.target.closest("[data-artifact-name]");
+  if (!item) return;
+  selectedFissionArtifact = item.getAttribute("data-artifact-name");
+  el.fissionList.querySelectorAll("[data-artifact-name]").forEach((node) => {
+    const selected = node === item;
+    node.classList.toggle("is-selected", selected);
+    node.setAttribute("aria-pressed", selected ? "true" : "false");
+  });
+  el.btnOpenOutputFission.disabled = false;
+});
 el.btnClearMemory.addEventListener("click", clearMemory);
 el.memoryDate.addEventListener("input", renderMemory);
 el.memorySearch.addEventListener("input", renderMemory);

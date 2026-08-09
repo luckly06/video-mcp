@@ -25,6 +25,7 @@ import base64
 import hashlib
 import hmac
 import socket
+import threading
 import subprocess
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,6 +40,13 @@ SERVER_INFO = {"name": "video-dedup-station", "version": "1.0.0", "title": "视�
 _STATION = Path(__file__).resolve().parent.parent
 _HOOKS = _STATION / "hooks"
 _LOGS = _STATION / "logs"
+_WEB = _STATION / "web"
+_WEB_FILES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+}
 
 # 长任务 handle 存储（stateless 协议 + 显式 handle 应用状态）
 # key: job_id -> {status, result, ...}。文件持久化，任意进程可读。
@@ -47,6 +55,11 @@ _JOBS_FILE = _LOGS / "jobs.json"
 # requestState 是客户端可见的无状态确认句柄。进程内随机密钥用于给
 # name + arguments 签名，防止第二阶段请求替换用户已确认的参数。
 _REQUEST_STATE_KEY = os.urandom(32)
+
+# 当前进程内正在运行的批量任务。仅保存不可序列化的取消令牌，生命周期随请求结束；
+# job handle 仍按既有方式持久化到 jobs.json。
+_ACTIVE_FISSION_LOCK = threading.Lock()
+_ACTIVE_FISSION = {}
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +166,7 @@ TOOLS = [
                 "level": {"type": "string", "enum": ["light", "medium", "heavy"], "description": "强度档：light=轻微、medium=中等、heavy=强烈；控制 crop/speed/trim 幅度"},
                 "dimensions": {"type": "object", "description": "维度开关：picture/rotate/crop/flip/speed/trim 六个布尔；flip 默认 false，开了必传 flip_mode"},
                 "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
+                "task_id": {"type": "string", "description": "可选：客户端生成的批量任务句柄，用于运行中取消"},
             },
             "required": ["src", "count"],
         },
@@ -264,18 +278,34 @@ def _exec_tool(name, args):
         return r
     if name == "batch_fission":
         # count 默认值由 rules.json auto_fill 提供 (5)；不写 fallback 3。
-        # 若有人绕过 handle_rpc 直接调 _exec_tool，pipeline 内部 int(count) 会失败，
-        # 这是去除 server 双重默认后的明确边界（_exec_tool 是内部接口，不该被直调）。
-        # seed / trim_phase 不传：pipeline.batch_fission 签名没有这两个参数。
-        r = P.batch_fission(
-            args["src"],
-            count=args.get("count"),
-            params=args.get("params"),
-            level=args.get("level"),
-            dimensions=args.get("dimensions"),
-            flip_mode=args.get("flip_mode"),
-        )
-        r["job_id"] = _new_job("fission", {"src": r["src"], "count": r["count"]})
+        # task_id 是客户端可见的运行句柄，仅用于本进程内取消，不写入 shell 参数。
+        task_id = args.get("task_id") or ("fission_" + uuid.uuid4().hex[:16])
+        if not isinstance(task_id, str) or not task_id.startswith("fission_") or len(task_id) > 64:
+            raise P.PipelineError("批量任务 task_id 无效。")
+        token = P.CancellationToken()
+        with _ACTIVE_FISSION_LOCK:
+            if task_id in _ACTIVE_FISSION:
+                raise P.PipelineError(f"批量任务已存在: {task_id}")
+            _ACTIVE_FISSION[task_id] = token
+        try:
+            r = P.batch_fission(
+                args["src"],
+                count=args.get("count"),
+                params=args.get("params"),
+                level=args.get("level"),
+                dimensions=args.get("dimensions"),
+                flip_mode=args.get("flip_mode"),
+                cancel_token=token,
+            )
+        finally:
+            with _ACTIVE_FISSION_LOCK:
+                _ACTIVE_FISSION.pop(task_id, None)
+        r["task_id"] = task_id
+        r["job_id"] = _new_job("fission", {
+            "src": r["src"], "count": r["count"],
+            "requested_count": r.get("requested_count"),
+            "cancelled": r.get("cancelled", False),
+        })
         return r
     if name == "list_watermark_templates":
         return {"templates": P.list_watermark_templates()}
@@ -428,17 +458,44 @@ def _allowed_origin(origin):
     return parsed.scheme in ("http", "https") and parsed.hostname in ("127.0.0.1", "localhost")
 
 
-def _open_output_folder():
-    """在本机文件管理器中打开固定的项目 output 目录，不接受客户端路径。"""
+def _cancel_fission(task_id):
+    """向当前进程内的批量任务发送取消信号。"""
+    if not isinstance(task_id, str) or not task_id.startswith("fission_"):
+        raise ValueError("批量任务 task_id 无效")
+    with _ACTIVE_FISSION_LOCK:
+        token = _ACTIVE_FISSION.get(task_id)
+    if token is None:
+        return False
+    token.cancel()
+    return True
+
+
+def _open_output_folder(filename=None):
+    """打开固定 output 目录；Windows 上可安全选中目录内的指定文件。"""
     output_dir = P.OUTPUT_DIR.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    if os.name == "nt":
+    target = None
+    if filename:
+        if not isinstance(filename, str) or Path(filename).name != filename:
+            raise ValueError("产物文件名无效")
+        candidate = (output_dir / filename).resolve()
+        try:
+            candidate.relative_to(output_dir)
+        except ValueError as exc:
+            raise ValueError("产物文件必须位于 output/ 内") from exc
+        if not candidate.is_file():
+            raise FileNotFoundError(f"产物文件不存在: {filename}")
+        target = candidate
+
+    if os.name == "nt" and target is not None:
+        subprocess.Popen(["explorer.exe", "/select,", str(target)])
+    elif os.name == "nt":
         os.startfile(str(output_dir))
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(output_dir)])
+        subprocess.Popen(["open", "-R", str(target)] if target else ["open", str(output_dir)])
     else:
         subprocess.Popen(["xdg-open", str(output_dir)])
-    return output_dir
+    return output_dir, target
 
 
 def _summary(name, result):
@@ -517,18 +574,75 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    def do_GET(self):
+        self._serve_web(head_only=False)
+
+    def do_HEAD(self):
+        self._serve_web(head_only=True)
+
+    def _serve_web(self, head_only=False):
+        if not self._request_allowed():
+            self.send_response(403)
+            self.end_headers()
+            return
+        path = urlsplit(self.path).path
+        if path == "/favicon.ico":
+            self.send_response(204)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        web_file = _WEB_FILES.get(path)
+        if web_file is None:
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        filename, content_type = web_file
+        body = (_WEB / filename).read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(body)
+
     def do_POST(self):
         if not self._request_allowed():
             self.send_response(403)
             self.end_headers()
             return
-        if self.path.rstrip("/") == "/local/open-output":
+        if self.path.rstrip("/") in ("/local/open-output", "/local/cancel-fission"):
+            endpoint = self.path.rstrip("/")
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
             try:
-                output_dir = _open_output_folder()
-            except Exception as exc:
-                self._respond_http(500, {"ok": False, "message": f"无法打开输出文件夹: {exc}"})
+                payload = json.loads(raw.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("请求体必须是 JSON 对象")
+                if endpoint == "/local/cancel-fission":
+                    found = _cancel_fission(payload.get("task_id"))
+                else:
+                    output_dir, selected = _open_output_folder(payload.get("filename"))
+            except (ValueError, FileNotFoundError) as exc:
+                self._respond_http(400, {"ok": False, "message": str(exc)})
                 return
-            self._respond_http(200, {"ok": True, "path": str(output_dir)})
+            except Exception as exc:
+                action = "取消批量裂变" if endpoint == "/local/cancel-fission" else "打开输出文件夹"
+                self._respond_http(500, {"ok": False, "message": f"无法{action}: {exc}"})
+                return
+            if endpoint == "/local/cancel-fission":
+                self._respond_http(200, {
+                    "ok": True,
+                    "found": found,
+                    "message": "已发送取消请求" if found else "任务已结束或不存在",
+                })
+            else:
+                self._respond_http(200, {
+                    "ok": True,
+                    "path": str(output_dir),
+                    "selected": str(selected) if selected else None,
+                })
             return
         if self.path.rstrip("/") not in ("/mcp", ""):
             self.send_response(404)

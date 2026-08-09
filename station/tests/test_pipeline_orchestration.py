@@ -17,6 +17,8 @@ test_pipeline_e2e.py。
 import inspect
 import random
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -56,6 +58,92 @@ def test_resolve_safe_allows_subdir_asset():
 def test_resolve_safe_missing_file_raises():
     with pytest.raises(P.PipelineError):
         P._resolve_safe("不存在的素材.mp4", P.VIDEO_DIR, must_exist=True)
+
+
+def test_reserve_output_path_uses_requested_name_then_increments(monkeypatch, tmp_path):
+    monkeypatch.setattr(P, "OUTPUT_DIR", tmp_path)
+
+    first = P._reserve_output_path("成片.mp4")
+    second = P._reserve_output_path("成片.mp4")
+    third = P._reserve_output_path("成片.mp4")
+
+    assert first == tmp_path / "成片.mp4"
+    assert second == tmp_path / "成片_2.mp4"
+    assert third == tmp_path / "成片_3.mp4"
+    assert first.exists() and second.exists() and third.exists()
+
+
+def test_reserve_output_path_skips_existing_artifact(monkeypatch, tmp_path):
+    monkeypatch.setattr(P, "OUTPUT_DIR", tmp_path)
+    (tmp_path / "成片.mp4").write_bytes(b"existing")
+
+    reserved = P._reserve_output_path("成片.mp4")
+
+    assert reserved == tmp_path / "成片_2.mp4"
+    assert (tmp_path / "成片.mp4").read_bytes() == b"existing"
+
+
+def test_reserve_output_path_skips_locked_existing_file_on_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr(P, "OUTPUT_DIR", tmp_path)
+    locked = tmp_path / "成片.mp4"
+    locked.write_bytes(b"locked")
+    original_open = Path.open
+
+    def windows_open(path, mode="r", *args, **kwargs):
+        if path == locked and mode == "xb":
+            raise PermissionError("file is locked")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", windows_open)
+
+    reserved = P._reserve_output_path("成片.mp4")
+
+    assert reserved == tmp_path / "成片_2.mp4"
+    assert locked.read_bytes() == b"locked"
+
+
+def test_reserve_output_path_still_blocks_traversal(monkeypatch, tmp_path):
+    monkeypatch.setattr(P, "OUTPUT_DIR", tmp_path)
+    with pytest.raises(P.PipelineError):
+        P._reserve_output_path("../outside.mp4")
+
+
+def test_ffmpeg_permission_error_is_actionable_and_compact():
+    message = P._ffmpeg_error_message(
+        "configuration: many flags\nF:/output/成片.mp4: Permission denied\n",
+        Path("F:/output/成片.mp4"),
+    )
+    assert "成片.mp4" in message
+    assert "播放器" in message and "资源管理器预览窗格" in message
+    assert "configuration" not in message
+
+
+def test_ffmpeg_other_error_keeps_only_tail_lines():
+    stderr = "\n".join(f"line-{index}" for index in range(12))
+    message = P._ffmpeg_error_message(stderr, Path("output.mp4"))
+    assert "line-0" not in message and "line-3" not in message
+    assert "line-4" in message and "line-11" in message
+
+
+def test_run_cancel_token_terminates_running_process():
+    token = P.CancellationToken()
+    outcome = {}
+
+    def worker():
+        try:
+            P._run([sys.executable, "-c", "import time; time.sleep(30)"],
+                   timeout=60, cancel_token=token)
+        except Exception as exc:
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    time.sleep(0.4)
+    token.cancel()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert isinstance(outcome.get("error"), P.PipelineCancelled)
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +398,43 @@ def test_batch_fission_delivery_ready_requires_both_gates(
     result = P.batch_fission("x.mp4", count=2)
     assert result["all_unique"] is (len(set(md5s)) == len(md5s))
     assert result["delivery_ready"] is expected
+
+
+def test_batch_fission_cancel_keeps_completed_variants_and_skips_matrix(monkeypatch):
+    token = P.CancellationToken()
+    monkeypatch.setattr(P, "probe_video", lambda _src: {
+        "name": "x.mp4", "duration": 10.0,
+    })
+    calls = {"count": 0, "matrix": 0}
+
+    def fake_dedup(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            token.cancel()
+            raise P.PipelineCancelled("cancelled")
+        return {
+            "output_path": "x_1.mp4",
+            "output": {"md5": "m1"},
+            "applied_params": {"trim_skipped": False},
+            "checks": {"all_passed": True},
+        }
+
+    def fake_matrix(_paths):
+        calls["matrix"] += 1
+        return {}
+
+    monkeypatch.setattr(P, "dedup_video", fake_dedup)
+    monkeypatch.setattr(P.M, "distance_matrix", fake_matrix)
+
+    result = P.batch_fission("x.mp4", count=4, cancel_token=token)
+
+    assert result["cancelled"] is True
+    assert result["requested_count"] == 4
+    assert result["count"] == 1
+    assert [v["output_path"] for v in result["variants"]] == ["x_1.mp4"]
+    assert result["delivery_ready"] is False
+    assert result["matrix"]["cancelled"] is True
+    assert calls["matrix"] == 0
 
 
 # ---------------------------------------------------------------------------
