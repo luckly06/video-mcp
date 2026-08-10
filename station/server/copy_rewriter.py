@@ -47,14 +47,20 @@ def is_available():
         return False
 
 
-def _find_chrome_profile():
-    """查找用户 Chrome Profile 路径。"""
+def _find_browser_profile():
+    """查找用户 Edge/Chrome Profile 路径（Edge 优先，国产 Windows 用户更常用）。"""
     import platform
     home = Path.home()
     local = home / "AppData" / "Local"
     if platform.system() == "Windows":
-        return str(local / "Google" / "Chrome" / "User Data")
-    return ""
+        candidates = [
+            (local / "Microsoft" / "Edge" / "User Data", "msedge"),
+            (local / "Google" / "Chrome" / "User Data", "chrome"),
+        ]
+        for path, channel in candidates:
+            if path.exists():
+                return str(path), channel
+    return "", "chrome"
 
 
 async def _rewrite_async(original_text, timeout=60):
@@ -62,14 +68,14 @@ async def _rewrite_async(original_text, timeout=60):
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
-        profile_dir = _find_chrome_profile()
-        if not profile_dir or not Path(profile_dir).exists():
-            logger.warning(f"Chrome Profile 不存在: {profile_dir}")
+        profile_dir, channel = _find_browser_profile()
+        if not profile_dir:
+            logger.warning("未找到 Edge/Chrome Profile")
             return None
 
         context = await p.chromium.launch_persistent_context(
             user_data_dir=profile_dir,
-            channel="chrome",
+            channel=channel,
             headless=False,
             args=["--disable-blink-features=AutomationControlled"],
         )

@@ -19,6 +19,20 @@ Hooks 由外层框架（pre_tool_guard / post_tool_audit）在调用链路注入
 
 import os
 import sys
+from pathlib import Path
+
+# 自动加载 .env（本地开发用，不依赖 python-dotenv）
+_ENV_FILE = Path(__file__).resolve().parent / ".env"
+if _ENV_FILE.exists():
+    for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+import sys
 import re
 import json
 import uuid

@@ -19,3 +19,4 @@ venv/
 station/_exp_*.py
 station/_diag_*.py
 station/_smoke_*.py
+.env
