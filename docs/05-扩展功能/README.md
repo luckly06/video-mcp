@@ -33,4 +33,5 @@
 
 | Change ID | 说明 | 进度 |
 |---|---|---|
-| `add-tts-audio-replace` | MiMo TTS 音频轨道替换 + ffmpeg 字幕提取 | 核心已实现，待 ASR + DeepSeek 文案改写 |
+| `add-tts-audio-replace` | MiMo TTS 音频轨道替换 + ffmpeg 字幕提取 | 核心已实现，待 ASR + 改写 |
+| `add-asr-copy-rewrite` | sherpa-onnx 本地 ASR + DeepSeek 文案改写（零 API 成本） | 设计阶段 |
