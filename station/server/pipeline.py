@@ -30,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics as M  # noqa: E402
 import tts_client as TTS  # noqa: E402 — MiMo TTS v2.5 语音合成（音频轨道替换）
+import asr_client as ASR  # noqa: E402 — sherpa-onnx 本地语音识别
 
 # ---------------------------------------------------------------------------
 # 路径锚定：本文件位于 video-uniqueness/station/server/pipeline.py（自包含版）
@@ -753,17 +754,26 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         raise PipelineError(_ffmpeg_error_message(err, out_path))
 
     # --- TTS 音频轨道替换（🆕 模块六）---
-    # 文案来源优先级：用户手动输入 > 视频内嵌字幕自动提取 > 留空（跳过）
+    # 文案来源优先级：用户手动输入 > 内嵌字幕提取 > sherpa-onnx ASR > 留空
     tts_applied = False
-    tts_source = None  # "user" | "subtitle" | None
+    tts_source = None  # "user" | "subtitle" | "asr" | None
 
     if not tts_text and src_info.get("has_subtitle"):
-        # 🆕 自动提取内嵌字幕作为 TTS 文案
+        # 自动提取内嵌字幕作为 TTS 文案
         sub_text, _ = get_subtitle_text(str(src_path))
         if sub_text:
             tts_text = sub_text
             tts_source = "subtitle"
             applied["tts_source"] = "subtitle"
+    elif not tts_text and not src_info.get("has_subtitle") and src_info.get("audio_codec"):
+        # 🆕 无字幕且无用户文案 → sherpa-onnx ASR 语音转文字
+        if ASR.is_available():
+            asr_text = ASR.transcribe_video(str(src_path), FFMPEG)
+            if asr_text:
+                tts_text = asr_text
+                tts_source = "asr"
+                applied["tts_source"] = "asr"
+                applied["tts_asr_raw"] = asr_text[:100] + ("..." if len(asr_text) > 100 else "")
     elif tts_text:
         tts_source = "user"
 
