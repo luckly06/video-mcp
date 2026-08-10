@@ -165,7 +165,10 @@
               <button type="button" class="btn btn-mini tts-preset-btn" data-text="你有没有想过，为什么有些人总能轻松搞定难题？其实秘诀只有一个……">🎙️ 解说</button>
               <button type="button" class="btn btn-mini tts-preset-btn" data-text="今天去了一个好地方，随手拍了一段，分享给你们！喜欢的话记得点赞关注哦。">📱 Vlog</button>
             </div>
-            <textarea id="tts-text" class="wb-textarea" rows="3" placeholder="输入配音文案，比如：&#10;大家好，今天给大家分享一个超实用的干货，记得点赞收藏！&#10;&#10;也可以点上方快捷按钮一键填入。留空则不启用配音。" style="width:100%;min-height:56px;font-size:14px;resize:vertical;box-sizing:border-box;padding:8px 12px;border:1px solid var(--border-light, #d4d4d8);border-radius:8px;background:var(--surface-default, #fff);color:var(--text-primary, #18181b);font-family:inherit;line-height:1.6;"></textarea>
+            <label class="pf-search tts-input">
+              <svg class="pf-search__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <input id="tts-text" class="pf-search__input" type="text" placeholder="输入配音文案，比如：大家好，今天给大家分享一个超实用的干货……&#10;也可以点上方快捷按钮一键填入。留空则不启用配音。" />
+            </label>
             <div style="display:flex;gap:12px;align-items:center;margin-top:8px;flex-wrap:wrap;">
               <select id="tts-voice" class="wb-select compact"><option value="冰糖">冰糖（女）</option><option value="茉莉">茉莉（女）</option><option value="苏打">苏打（男）</option><option value="白桦">白桦（男）</option></select>
               <select id="tts-speed" class="wb-select compact">
