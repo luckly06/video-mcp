@@ -1,8 +1,10 @@
 # 01 · 系统总体架构设计（SAD, System Architecture Design）
 
+> ⚠️ **P0 冻结**（2026-08-10）：本文档为架构基线，P0 阶段起冻结，不再原地修改。后续扩展应通过对应 DD Addendum 表述架构影响面。
+>
 > 视频去重工位 station · 去重维度补齐迭代（第 2 版）
 >
-> **文档定位**：本文档为顶层架构参考，只回答「系统如何组成」，不下探到 Controller / API / 表 / 类 / 时序 / 代码级实现（这些属于 [02-DD](02-系统详细设计说明书【DD（Detailed Design）】.md)）。
+> **文档定位**：本文档为顶层架构参考，只回答「系统如何组成」，不下探到 Controller / API / 表 / 类 / 时序 / 代码级实现（这些属于 [video-uniqueness-DD-v1.1](video-uniqueness-DD-v1.1.md)）。
 > **业务唯一依据**：[../01-需求分析/02-PRD.md](../01-需求分析/02-PRD.md)。本文不新增、删除或修改任何需求。
 > **技术栈说明**：本项目为**本地单用户桌面工具**，实际技术栈为 **Python 3 标准库（http.server）+ 原生 JavaScript + ffmpeg（vendor 自包含）**，**无数据库、无远程账户、无 Cookie 会话**。全文安全/性能/部署设计均按此真实栈诚实展开，不套用 Web 全栈（Hono/Prisma/Better Auth 等）模板。
 
@@ -359,7 +361,7 @@ sequenceDiagram
     W-->>U: 自检报告 → 人工决策交付/再生成
 ```
 
-> 交互契约的字段级细节（`inputResponses` 放 params 顶层、`checks` 字段结构等）属于 [02-DD](02-系统详细设计说明书【DD（Detailed Design）】.md) 接口设计，本文不展开。
+> 交互契约的字段级细节（`inputResponses` 放 params 顶层、`checks` 字段结构等）属于 [video-uniqueness-DD-v1.1](video-uniqueness-DD-v1.1.md) 接口设计，本文不展开。
 
 ---
 
@@ -450,7 +452,7 @@ sequenceDiagram
 
 ## 12. 与 DD 的边界
 
-本 SAD 到「系统由哪些模块组成、如何分层、如何通信、依赖方向、非功能约束」为止。以下内容归属 [02-DD](02-系统详细设计说明书【DD（Detailed Design）】.md)：
+本 SAD 到「系统由哪些模块组成、如何分层、如何通信、依赖方向、非功能约束」为止。以下内容归属 [video-uniqueness-DD-v1.1](video-uniqueness-DD-v1.1.md)：
 
 - 各工具的 tools/call 接口契约（入参/出参字段）
 - pipeline 各维度滤镜链的具体算法与参数公式
