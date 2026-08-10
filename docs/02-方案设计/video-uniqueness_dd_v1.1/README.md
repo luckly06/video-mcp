@@ -18,6 +18,8 @@ video-uniqueness_dd_v1.1/video-uniqueness_dd_p{N}_addendum.md
 - 新增架构范围
 - 对原 DD 产生较大影响的扩展设计
 
-## 当前状态
+## 当前 Addendum
 
-_尚无大扩展 Addendum，将在首次触发时创建。_
+| 编号 | 文件 | 说明 | 日期 |
+|---|---|---|---|
+| p1 | `video-uniqueness_dd_p1_addendum.md` | 模块六：云 TTS 音频轨道替换（MiMo v2.5） | 2026-08-10 |

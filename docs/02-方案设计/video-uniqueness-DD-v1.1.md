@@ -24,7 +24,7 @@
 > | 版本 | 文件 | 说明 |
 > |---|---|---|
 > | v1.1（当前） | `video-uniqueness-DD-v1.1.md` | 第 2 版：crop/flip/speed/trim + pHash 自检升级 + SSIM 三重门 + rules 分级 + Web UI |
-> | — | `video-uniqueness_dd_v1.1/` | Addendum 目录（待大扩展时启用） |
+> | p1 | `video-uniqueness_dd_v1.1/video-uniqueness_dd_p1_addendum.md` | 模块六：云 TTS 音频轨道替换（MiMo v2.5） |
 
 ---
 
