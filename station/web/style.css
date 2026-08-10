@@ -508,50 +508,34 @@ code {
 }
 
 /* ── TTS 语音合成输入框 ── */
-.pf-search.tts-input {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
+.tts-textarea {
+  display: block;
   width: 100%;
   max-width: 480px;
-  height: 46px;
-  padding: 0 12px 0 40px;
+  min-height: 64px;
+  padding: 10px 14px;
   background: #fff;
   border: 1px solid #d4d4d8;
   border-radius: 10px;
-  transition: border-color .12s, box-shadow .2s, background .2s;
-}
-.pf-search.tts-input .pf-search__icon {
-  position: absolute;
-  left: 14px; top: 50%;
-  transform: translateY(-50%);
-  width: 16px; height: 16px;
-  color: #5a5a66;
-  pointer-events: none;
-  transition: color .12s;
-}
-.pf-search.tts-input .pf-search__input {
-  flex: 1; height: 100%;
-  border: 0; outline: 0;
-  background: transparent;
   color: #18181b;
   font-family: inherit;
   font-size: 14px;
-  min-width: 0;
+  line-height: 1.6;
+  resize: vertical;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color .12s, box-shadow .2s, background .2s;
 }
-.pf-search.tts-input .pf-search__input::placeholder {
+.tts-textarea::placeholder {
   color: #8b8b95;
 }
-.pf-search.tts-input:hover {
+.tts-textarea:hover {
   border-color: #18181b;
 }
-.pf-search.tts-input:focus-within {
+.tts-textarea:focus {
   border-color: transparent;
   background:
     linear-gradient(#fff, #fff) padding-box,
     linear-gradient(90deg, #e8429b, #9b5be8, #3fc7e8, #b8f25f, #f5b946) border-box;
   box-shadow: 0 0 0 3px rgba(63,199,232,.32);
-}
-.pf-search.tts-input:focus-within .pf-search__icon {
-  color: #18181b;
 }
