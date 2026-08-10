@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics as M  # noqa: E402
 import tts_client as TTS  # noqa: E402 — MiMo TTS v2.5 语音合成（音频轨道替换）
 import asr_client as ASR  # noqa: E402 — sherpa-onnx 本地语音识别
+import copy_rewriter as REWRITER  # noqa: E402 — DeepSeek 文案改写（Playwright）
 
 # ---------------------------------------------------------------------------
 # 路径锚定：本文件位于 video-uniqueness/station/server/pipeline.py（自包含版）
@@ -774,6 +775,15 @@ def dedup_video(src, params=None, out_name=None, seed=None,
                 tts_source = "asr"
                 applied["tts_source"] = "asr"
                 applied["tts_asr_raw"] = asr_text[:100] + ("..." if len(asr_text) > 100 else "")
+
+                # 🆕 DeepSeek 改写：ASR 原文 → 配音文案
+                if REWRITER.is_available():
+                    rewritten = REWRITER.rewrite(asr_text)
+                    if rewritten:
+                        applied["tts_rewritten"] = rewritten[:100] + ("..." if len(rewritten) > 100 else "")
+                        tts_text = rewritten
+                        tts_source = "asr_rewrite"
+                        applied["tts_source"] = "asr_rewrite"
     elif tts_text:
         tts_source = "user"
 

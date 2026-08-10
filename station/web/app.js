@@ -1053,8 +1053,10 @@ function renderDedup(d) {
   const trimLine = applied.trim_skipped
     ? "去头尾   : 跳过（" + (applied.trim_skip_reason || "原时长过短") + "）\n"
     : "";
+  const sourceLabels = { user: "手动输入", subtitle: "字幕提取", asr: "ASR 识别", asr_rewrite: "ASR + 改写" };
   const ttsLine = applied.tts_text
     ? ("TTS 配音 : " + (applied.tts_applied ? "[已替换]" : "[失败]") +
+       " 来源=" + (sourceLabels[applied.tts_source] || "未知") +
        " 音色=" + (applied.tts_voice || "冰糖") +
        " 文本=" + (applied.tts_text || "—") + "\n")
     : "";
