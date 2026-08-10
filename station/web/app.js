@@ -1715,6 +1715,15 @@ el.levelSeg.addEventListener("click", (e) => {
 el.dimGrid.querySelector('input[data-dim="flip"]').addEventListener("change", syncFlipModeState);
 syncFlipModeState();
 
+// 🆕 TTS 预设文案快捷填入
+document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var text = this.getAttribute("data-text") || "";
+    var elText = document.getElementById("tts-text");
+    if (elText) { elText.value = text; elText.focus(); }
+  });
+});
+
 el.modalConfirm.addEventListener("click", () => closeModal(true));
 el.modalCancel.addEventListener("click", () => closeModal(false));
 el.modalOverlay.addEventListener("click", (e) => { if (e.target === el.modalOverlay) closeModal(false); });
