@@ -710,15 +710,17 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         merged_temp = None
         try:
             tts_temp = TTS.tts_to_temp(tts_text, voice=tts_voice, speed=tts_speed)
-            # 用 ffmpeg 合并：视频=产物，音频=TTS WAV，最短对齐
+            # 用 ffmpeg 合并：视频=产物，音频=TTS WAV。
+            # apad 补齐静音（TTS 短于视频时尾部静音） + shortest 对齐（TTS 长于视频时截断）
             merged_temp = out_path.with_suffix(".merged.mp4")
             merge_cmd = [
                 str(FFMPEG), "-y",
                 "-i", str(out_path),
                 "-i", str(tts_temp),
+                "-filter_complex", "[1:a]apad[a]",
                 "-c:v", "copy",
                 "-c:a", "aac", "-b:a", "128k",
-                "-map", "0:v:0", "-map", "1:a:0",
+                "-map", "0:v:0", "-map", "[a]",
                 "-shortest",
                 str(merged_temp),
             ]
