@@ -937,6 +937,20 @@ function syncFlipModeState() {
 /* ---------------------------------------------------------------------------
    去重（dedup_video）—— 走人工决策流 + 自检报告
    --------------------------------------------------------------------------- */
+/** 🆕 读取 TTS 参数（仅文案非空时才启用） */
+function readTTS() {
+  const elText = document.getElementById("tts-text");
+  const elVoice = document.getElementById("tts-voice");
+  const elSpeed = document.getElementById("tts-speed");
+  const text = (elText && elText.value || "").trim();
+  if (!text) return null;
+  return {
+    tts_text: text,
+    tts_voice: elVoice ? elVoice.value : "冰糖",
+    tts_speed: elSpeed ? parseFloat(elSpeed.value) || 1.0 : 1.0,
+  };
+}
+
 async function doDedup() {
   const src = currentAsset();
   if (!src || !requireProbedAsset(src)) return;
@@ -947,6 +961,9 @@ async function doDedup() {
   }
   const args = { src, level, dimensions };
   if (flip_mode) args.flip_mode = flip_mode;
+  // 🆕 TTS
+  const tts = readTTS();
+  if (tts) Object.assign(args, tts);
   setWorkflowStep(3);
   try {
     await withBusy(el.btnDedup, "开始单条去重", async () => {
@@ -1035,6 +1052,11 @@ function renderDedup(d) {
   const trimLine = applied.trim_skipped
     ? "去头尾   : 跳过（" + (applied.trim_skip_reason || "原时长过短") + "）\n"
     : "";
+  const ttsLine = applied.tts_text
+    ? ("TTS 配音 : " + (applied.tts_applied ? "[已替换]" : "[失败]") +
+       " 音色=" + (applied.tts_voice || "冰糖") +
+       " 文本=" + (applied.tts_text || "—") + "\n")
+    : "";
   const detail =
     "输出文件 : " + (d.output_path || "?") + "\n" +
     "源  MD5  : " + (src.md5 || "?") + "\n" +
@@ -1044,6 +1066,7 @@ function renderDedup(d) {
     "时长     : " + (src.duration != null ? src.duration : "?") + "s  →  " +
       (out.duration != null ? out.duration : "?") + "s\n" +
     trimLine +
+    ttsLine +
     "帧率     : " + (d.fps != null ? d.fps : "?") + " fps\n" +
     "job_id   : " + (d.job_id || "—") + "\n" +
     "应用参数 : " + JSON.stringify(applied);
@@ -1081,6 +1104,8 @@ async function doFission() {
 
   const args = { src, count, level, dimensions, task_id: newFissionTaskId() };
   if (flip_mode) args.flip_mode = flip_mode;
+  const tts = readTTS();
+  if (tts) Object.assign(args, tts);
   setWorkflowStep(3);
   try {
     await withBusy(el.btnFission, "开始裂变", async () => {

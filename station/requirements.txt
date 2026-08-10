@@ -6,6 +6,7 @@
 imagehash==4.3.2        # 逐帧 64 位 pHash 感知哈希（PRD D-01 主自检）
 Pillow>=10.0            # imagehash 依赖：图像读取
 scikit-image>=0.21.0    # SSIM 结构相似度（裂变第三重交付门）
+openai>=1.0             # MiMo TTS v2.5 客户端（OpenAI 兼容协议）；缺省时 TTS 功能不可用
 
 # 仅开发/测试用
 pytest>=8.0

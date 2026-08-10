@@ -29,6 +29,7 @@ from pathlib import Path
 # 感知度量域（模块一）。同目录模块，保证 pytest / server 两种入口都能导入。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics as M  # noqa: E402
+import tts_client as TTS  # noqa: E402 — MiMo TTS v2.5 语音合成（音频轨道替换）
 
 # ---------------------------------------------------------------------------
 # 路径锚定：本文件位于 video-uniqueness/station/server/pipeline.py（自包含版）
@@ -574,9 +575,10 @@ def _clamp_speed_for_floor(factor, base_dur):
 
 
 def dedup_video(src, params=None, out_name=None, seed=None,
-                level=None, dimensions=None, flip_mode=None, trim_phase=None):
+                level=None, dimensions=None, flip_mode=None, trim_phase=None,
+                tts_text=None, tts_voice="冰糖", tts_speed=1.0):
     """
-    对单个视频执行去重（本期增量：强度档 + 构图/时序维度 + pHash 自检升级）。
+    对单个视频执行去重（本期增量：强度档 + 构图/时序维度 + pHash 自检升级 + 🆕 TTS 音频替换）。
 
     src: 文件名或绝对路径（经 _resolve_safe 白名单校验）
     level: 强度档 light/medium/heavy（默认 medium）
@@ -588,6 +590,9 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     trim_phase: ∈[0,1]，裂变专用。把去头尾配比按相位铺开而非 iid 随机取，
         使各变体在源时间轴上的错位量最大化（见 _calc_trim phase 参数说明）。
         None = 单片模式，保持原随机行为。
+    tts_text: 🆕 TTS 配音文案（None = 不启用音频替换，保留原始音轨）
+    tts_voice: 🆕 TTS 音色（冰糖/茉莉/苏打/白桦），默认冰糖
+    tts_speed: 🆕 TTS 语速（0.5-2.0），默认 1.0
     返回处理报告字典（checks 含 phash 与 all_passed）。
     """
     # 路径安全：src 必须在 assets 白名单内
@@ -696,6 +701,52 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         _cleanup_failed_output(out_path)
         raise PipelineError(_ffmpeg_error_message(err, out_path))
 
+    # --- TTS 音频轨道替换（🆕 模块六）---
+    # 在有原素材音频轨且用户提供了 TTS 文案时，用 MiMo TTS 生成新音频替换原轨。
+    # 替换为第二遍 ffmpeg：视频流取自第一遍产物，音频流取自 TTS WAV，-shortest 对齐。
+    tts_applied = False
+    if tts_text and TTS.is_available():
+        tts_temp = None
+        merged_temp = None
+        try:
+            tts_temp = TTS.tts_to_temp(tts_text, voice=tts_voice, speed=tts_speed)
+            # 用 ffmpeg 合并：视频=产物，音频=TTS WAV，最短对齐
+            merged_temp = out_path.with_suffix(".merged.mp4")
+            merge_cmd = [
+                str(FFMPEG), "-y",
+                "-i", str(out_path),
+                "-i", str(tts_temp),
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "128k",
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-shortest",
+                str(merged_temp),
+            ]
+            rc2, out2, err2 = _run(merge_cmd, timeout=120)
+            if rc2 == 0:
+                # 原子替换：先删产物再 rename（Windows rename 不能覆盖已有文件）
+                out_path.unlink()
+                merged_temp.rename(out_path)
+                tts_applied = True
+            else:
+                _cleanup_failed_output(merged_temp)
+                applied["tts_warning"] = f"TTS 合并失败（视频已保留原始音轨）: {err2[-200:]}"
+        except Exception as e:
+            applied["tts_warning"] = f"TTS 生成/合并失败: {e}"
+        finally:
+            if tts_temp and tts_temp.exists():
+                try:
+                    tts_temp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    # 回填 TTS 参数到 applied（前端展示 + 审计）
+    if tts_text:
+        applied["tts_text"] = tts_text[:100] + ("..." if len(tts_text) > 100 else "")
+        applied["tts_voice"] = tts_voice
+        applied["tts_speed"] = tts_speed
+        applied["tts_applied"] = tts_applied
+
     try:
         out_info = probe_video(str(out_path), base_dir=OUTPUT_DIR)
     except Exception:
@@ -751,7 +802,8 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
 
 def batch_fission(src, count=5, params=None,
-                  level=None, dimensions=None, flip_mode=None, cancel_token=None):
+                  level=None, dimensions=None, flip_mode=None, cancel_token=None,
+                  tts_text=None, tts_voice="冰糖", tts_speed=1.0):
     """裂变：同一素材生成 count 个不同参数的变体（本期增量：档位/维度透传 + 距离矩阵）。
 
     每变体用不同 seed 保证互异；开启 flip 后自动轮换 h/v/90；产出后调
@@ -793,7 +845,8 @@ def batch_fission(src, count=5, params=None,
                 r = dedup_video(src, params=params, out_name=out_name,
                                 seed=random.randint(1, 10 ** 9),
                                 level=level, dimensions=dimensions, flip_mode=variant_flip_mode,
-                                trim_phase=phase)
+                                trim_phase=phase,
+                                tts_text=tts_text, tts_voice=tts_voice, tts_speed=tts_speed)
                 results.append({
                     "index": i + 1,
                     "output_path": r["output_path"],

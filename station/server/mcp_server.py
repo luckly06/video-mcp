@@ -140,7 +140,7 @@ TOOLS = [
     },
     {
         "name": "dedup_video",
-        "description": "对单个视频去重（画面微调+微旋转+帧率+降噪+码率），保持分辨率，改变MD5。调用前须先 probe_video。",
+        "description": "对单个视频去重（画面微调+微旋转+帧率+降噪+码率+crop/flip/speed/trim+🆕TTS音频替换），保持分辨率，改变MD5。调用前须先 probe_video。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -151,6 +151,9 @@ TOOLS = [
                 "dimensions": {"type": "object", "description": "维度开关：picture/rotate/crop/flip/speed/trim 六个布尔；flip 默认 false，开了必传 flip_mode"},
                 "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
                 "seed": {"type": "integer", "description": "随机种子；缺省随机回填"},
+                "tts_text": {"type": "string", "description": "🆕 TTS 配音文案；提供后将以 MiMo TTS 生成音频替换原视频音轨"},
+                "tts_voice": {"type": "string", "enum": ["冰糖", "茉莉", "苏打", "白桦"], "description": "🆕 TTS 音色；默认冰糖"},
+                "tts_speed": {"type": "number", "description": "🆕 TTS 语速倍率（0.5-2.0）；默认 1.0"},
             },
             "required": ["src"],
         },
@@ -158,7 +161,7 @@ TOOLS = [
     },
     {
         "name": "batch_fission",
-        "description": "裂变：同一素材生成 count 个不同参数的变体（每个 MD5 互不相同）。",
+        "description": "裂变：同一素材生成 count 个不同参数的变体（每个 MD5 互不相同）。🆕 支持 TTS 音频替换。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -169,6 +172,9 @@ TOOLS = [
                 "dimensions": {"type": "object", "description": "维度开关：picture/rotate/crop/flip/speed/trim 六个布尔；flip 默认 false，开了必传 flip_mode"},
                 "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
                 "task_id": {"type": "string", "description": "可选：客户端生成的批量任务句柄，用于运行中取消"},
+                "tts_text": {"type": "string", "description": "🆕 TTS 配音文案；提供后每个变体将以 MiMo TTS 替换音频轨"},
+                "tts_voice": {"type": "string", "enum": ["冰糖", "茉莉", "苏打", "白桦"], "description": "🆕 TTS 音色；默认冰糖"},
+                "tts_speed": {"type": "number", "description": "🆕 TTS 语速倍率（0.5-2.0）；默认 1.0"},
             },
             "required": ["src", "count"],
         },
@@ -213,6 +219,12 @@ TOOLS = [
             "required": ["name"],
         },
         "_tier": "blocked",
+    },
+    {
+        "name": "list_voices",
+        "description": "🆕 列出 MiMo TTS 可用音色。返回 id/lang/gender 列表，供前端选音色。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
     },
 ]
 
@@ -275,6 +287,9 @@ def _exec_tool(name, args):
             dimensions=args.get("dimensions"),
             flip_mode=args.get("flip_mode"),
             trim_phase=args.get("trim_phase"),
+            tts_text=args.get("tts_text"),
+            tts_voice=args.get("tts_voice", "冰糖"),
+            tts_speed=args.get("tts_speed", 1.0),
         )
         r["job_id"] = _new_job("dedup", {"src": r["src"]["name"], "output": r["output_path"]})
         return r
@@ -298,6 +313,9 @@ def _exec_tool(name, args):
                 dimensions=args.get("dimensions"),
                 flip_mode=args.get("flip_mode"),
                 cancel_token=token,
+                tts_text=args.get("tts_text"),
+                tts_voice=args.get("tts_voice", "冰糖"),
+                tts_speed=args.get("tts_speed", 1.0),
             )
         finally:
             with _ACTIVE_FISSION_LOCK:
@@ -313,6 +331,9 @@ def _exec_tool(name, args):
         return {"templates": P.list_watermark_templates()}
     if name == "remove_watermark":
         return P.remove_watermark(args["src"], args["platform"], out_name=args.get("out_name"))
+    if name == "list_voices":
+        import tts_client as TTS_V  # noqa: E402 同目录，不污染顶部 import
+        return {"voices": TTS_V.list_voices(), "available": TTS_V.is_available()}
     if name == "get_job":
         jobs = _load_jobs()
         j = jobs.get(args["job_id"])
@@ -521,12 +542,15 @@ def _open_output_folder(filename=None):
 def _summary(name, result):
     if name == "dedup_video":
         checks = result.get("checks") or {}
+        applied = result.get("applied_params") or {}
         return {
             "output": result.get("output_path"),
             "checks": checks,
             "phash": checks.get("phash"),
             "phash_passed": bool(checks.get("phash", {}).get("passed")),
-            "applied_level": (result.get("applied_params") or {}).get("level"),
+            "applied_level": applied.get("level"),
+            "tts_applied": bool(applied.get("tts_applied")),
+            "tts_voice": applied.get("tts_voice"),
         }
     if name == "batch_fission":
         wrapper = result.get("matrix") or {}

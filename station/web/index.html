@@ -156,6 +156,19 @@
           </select>
           <span class="field-help">单条按所选方向处理；批量裂变会自动轮换水平、垂直和旋转 90°。</span>
         </div>
+        <div class="parameter-group" id="tts-param-group">
+          <div class="field-label">🆕 AI 配音（TTS）</div>
+          <div class="tts-rows">
+            <textarea id="tts-text" class="wb-textarea" rows="2" placeholder="输入配音文案；留空则不启用音频替换&#10;例：这是一条适合抖音发布的短视频，记得点赞关注哦" style="width:100%;min-height:44px;font-size:14px;resize:vertical;box-sizing:border-box;padding:8px 12px;border:1px solid var(--border-light, #d4d4d8);border-radius:8px;background:var(--surface-default, #fff);color:var(--text-primary, #18181b);font-family:inherit;line-height:1.6;"></textarea>
+            <div style="display:flex;gap:12px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+              <select id="tts-voice" class="wb-select compact"><option value="冰糖">冰糖（女）</option><option value="茉莉">茉莉（女）</option><option value="苏打">苏打（男）</option><option value="白桦">白桦（男）</option></select>
+              <select id="tts-speed" class="wb-select compact">
+                <option value="0.8">语速 0.8×</option><option value="1.0" selected>语速 1.0×</option><option value="1.2">语速 1.2×</option><option value="1.5">语速 1.5×</option>
+              </select>
+              <span class="field-help" style="margin:0;">文案填了才会启用；将用 MiMo TTS 生成新音频替换原视频音轨</span>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="work-card" aria-labelledby="dedup-title">
