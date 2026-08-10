@@ -893,6 +893,7 @@ function renderProbe(p) {
     ["时长", (p.duration != null ? p.duration : "?") + " s"],
     ["视频编码", p.video_codec || "?"],
     ["音频编码", p.audio_codec || "—"],
+    ["字幕轨道", p.has_subtitle ? ("内嵌 · " + (p.subtitle_codec || "?")) : "无"],
     ["码率", p.bit_rate ? Math.round(p.bit_rate / 1000) + " kbps" : "?"],
     ["体积", (p.size_mb != null ? p.size_mb : "?") + " MB"],
     ["MD5", p.md5 || "?"],

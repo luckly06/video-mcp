@@ -289,6 +289,7 @@ def probe_video(path, base_dir=None):
     fmt = data.get("format", {})
     vstream = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), {})
     astream = next((s for s in data.get("streams", []) if s.get("codec_type") == "audio"), {})
+    sstream = next((s for s in data.get("streams", []) if s.get("codec_type") == "subtitle"), None)
 
     def _fps(rate):
         try:
@@ -310,8 +311,58 @@ def probe_video(path, base_dir=None):
         "video_codec": vstream.get("codec_name", ""),
         "fps": _fps(vstream.get("r_frame_rate", "0/0")),
         "audio_codec": astream.get("codec_name", ""),
+        "has_subtitle": sstream is not None,
+        "subtitle_codec": sstream.get("codec_name", "") if sstream else "",
         "md5": md5_of(p),
     }
+
+
+def get_subtitle_text(path):
+    """从视频内嵌字幕轨道提取纯文本。
+
+    返回 (text, source)：
+      - source="subtitle"：ffmpeg 直接从内嵌字幕轨提取 SRT → 纯文本
+      - source=None：无字幕轨
+    空字符串表示有字幕轨但内容为空。
+    """
+    p = _resolve_safe(path, VIDEO_DIR, must_exist=True)
+
+    # 先探测有没有字幕流
+    info = probe_video(str(p))
+    if not info["has_subtitle"]:
+        return None, None
+
+    # 用 ffmpeg 直接抽取字幕到 stdout（SRT 格式）
+    extract_cmd = [
+        str(FFMPEG), "-y",
+        "-i", str(p),
+        "-map", "0:s:0",
+        "-f", "srt",
+        "-",
+    ]
+    rc, out, err = _run(extract_cmd, timeout=60)
+    if rc != 0 or not out.strip():
+        return None, None   # 提取失败或字幕为空
+
+    # SRT → 纯文本：去序号、时间戳、空行
+    lines = out.splitlines()
+    text_parts = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.isdigit():           # 序号行
+            continue
+        if "-->" in line:            # 时间戳行
+            continue
+        # 去除 SRT 内嵌的 <b>/<i>/<font> 等标签
+        import re
+        clean = re.sub(r"<[^>]+>", "", line)
+        if clean.strip():
+            text_parts.append(clean.strip())
+
+    full_text = "".join(text_parts)
+    return full_text, "subtitle"
 
 
 # ---------------------------------------------------------------------------
@@ -702,9 +753,20 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         raise PipelineError(_ffmpeg_error_message(err, out_path))
 
     # --- TTS 音频轨道替换（🆕 模块六）---
-    # 在有原素材音频轨且用户提供了 TTS 文案时，用 MiMo TTS 生成新音频替换原轨。
-    # 替换为第二遍 ffmpeg：视频流取自第一遍产物，音频流取自 TTS WAV，-shortest 对齐。
+    # 文案来源优先级：用户手动输入 > 视频内嵌字幕自动提取 > 留空（跳过）
     tts_applied = False
+    tts_source = None  # "user" | "subtitle" | None
+
+    if not tts_text and src_info.get("has_subtitle"):
+        # 🆕 自动提取内嵌字幕作为 TTS 文案
+        sub_text, _ = get_subtitle_text(str(src_path))
+        if sub_text:
+            tts_text = sub_text
+            tts_source = "subtitle"
+            applied["tts_source"] = "subtitle"
+    elif tts_text:
+        tts_source = "user"
+
     if tts_text and TTS.is_available():
         tts_temp = None
         merged_temp = None
