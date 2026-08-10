@@ -1466,19 +1466,32 @@ function renderMemory() {
     .map((record, sourceIndex) => ({ record, sourceIndex }))
     .filter((item) => memoryMatches(item.record))
     .sort((a, b) => a.record.t - b.record.t);
-  el.memoryCount.textContent = visible.length === list.length
+  // 🆕 合并连续周期：探测之后紧跟着去重 → 吞掉探测只留去重结果
+  const merged = [];
+  for (let i = 0; i < visible.length; i++) {
+    const cur = visible[i];
+    const next = visible[i + 1];
+    if (cur.record.tool === "probe_video" && next && next.record.tool === "dedup_video" && next.record.t - cur.record.t < 60000) {
+      continue; // 跳过探测条目，仅保留去重
+    }
+    if (cur.record.tool === "probe_video" && next && next.record.tool === "batch_fission" && next.record.t - cur.record.t < 60000) {
+      continue; // 探测→裂变同理
+    }
+    merged.push(cur);
+  }
+  el.memoryCount.textContent = merged.length === list.length
     ? list.length + " 条记录"
-    : visible.length + " / " + list.length + " 条";
+    : merged.length + " / " + list.length + " 条";
   const dateContext = list
     .map((record, sourceIndex) => ({ record, sourceIndex }))
     .filter((item) => !el.memoryDate.value || memoryDateKey(item.record.t) === el.memoryDate.value)
     .sort((a, b) => a.record.t - b.record.t);
   renderMemoryArc(visible, dateContext);
-  if (!visible.length) {
+  if (!merged.length) {
     el.timeline.innerHTML = '<div class="tl-empty">' + (list.length ? "没有符合筛选条件的操作记录。" : "暂无操作记录。完成探测或生成后，这里会记录关键步骤。") + "</div>";
     return;
   }
-  el.timeline.innerHTML = visible.map((item, index) => {
+  el.timeline.innerHTML = merged.map((item, index) => {
     const r = item.record;
     const cls = "t-" + (r.kind || "audit");
     const memoryId = r.t + "-" + item.sourceIndex;

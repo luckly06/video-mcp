@@ -764,6 +764,8 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     if tts_text:
         # 用户手动提供了文案 — 直接用
         tts_source = "user"
+        applied["tts_source"] = "user"
+        applied["tts_process"] = "手动输入文案"
     else:
         # 尝试自动提取文本（字幕优先，失败回退 ASR）
         raw_text = None
@@ -773,44 +775,49 @@ def dedup_video(src, params=None, out_name=None, seed=None,
                 raw_text = sub_text
                 tts_source = "subtitle"
                 applied["tts_source"] = "subtitle"
-                print(f"[TTS] 从字幕提取到文案: {len(raw_text)} 字")
+                print(f"[TTS] 从字幕提取到文案: {len(raw_text)} 字", flush=True)
+            else:
+                print(f"[TTS] 字幕提取为空", flush=True)
 
         if not raw_text and src_info.get("audio_codec") and ASR.is_available():
-            print("[TTS] 无字幕或提取为空，尝试 ASR...")
+            print("[TTS] 无字幕或提取为空，尝试 ASR...", flush=True)
             asr_text = ASR.transcribe_video(str(src_path), FFMPEG)
             if asr_text:
                 raw_text = asr_text
                 tts_source = "asr"
                 applied["tts_source"] = "asr"
-                print(f"[TTS] ASR 识别完成: {len(asr_text)} 字")
+                print(f"[TTS] ASR 识别完成: {len(asr_text)} 字", flush=True)
             else:
-                print("[TTS] ASR 未识别到文字")
+                print("[TTS] ASR 未识别到文字", flush=True)
         else:
             if not src_info.get("has_subtitle"):
-                print("[TTS] 视频无字幕轨")
+                print("[TTS] 视频无字幕轨", flush=True)
             if not raw_text and not ASR.is_available():
-                print("[TTS] ASR 不可用（sherpa-onnx 未安装/模型缺失）")
+                print("[TTS] ASR 不可用（sherpa-onnx 未安装/模型缺失）", flush=True)
             if not raw_text and not src_info.get("audio_codec"):
-                print("[TTS] 视频无音频轨")
+                print("[TTS] 视频无音频轨", flush=True)
 
         if raw_text:
             rewrite_info = f"rewrite_template={'有' if rewrite_template else '无'}, REWRITER_available={REWRITER.is_available()}"
-            print(f"[TTS] 原文已提取 ({len(raw_text)} 字), {rewrite_info}")
+            print(f"[TTS] 原文已提取 ({len(raw_text)} 字), {rewrite_info}", flush=True)
 
             # 🆕 构建 tts_process 追踪链（前端报告展示）
             process_steps = [f"提取原文: {len(raw_text)} 字 (来源: {tts_source})"]
 
             if rewrite_template and REWRITER.is_available():
-                print(f"[TTS] 🚀 开始 DeepSeek 改写 (模板长度={len(rewrite_template)})...")
+                print(f"[TTS] 🚀 开始 DeepSeek 改写 (模板长度={len(rewrite_template)})...", flush=True)
                 rewritten = REWRITER.rewrite(raw_text, template=rewrite_template)
                 if rewritten:
-                    print(f"[TTS] ✅ DeepSeek 改写完成: {len(rewritten)} 字")
+                    print(f"[TTS] ✅ DeepSeek 改写完成: {len(rewritten)} 字", flush=True)
                     process_steps.append(f"DeepSeek 改写: ✅ 成功 ({len(rewritten)} 字)")
                     tts_text = rewritten
                     tts_source = tts_source + "_rewrite"
                 else:
-                    print("[TTS] ⚠️ DeepSeek 改写失败，降级用原文")
-                    process_steps.append("DeepSeek 改写: ❌ 失败，用原文")
+                    print("[TTS] ⚠️ DeepSeek 改写失败，降级用原文", flush=True)
+                    err = REWRITER.get_last_error()
+                    process_steps.append(f"DeepSeek 改写: ❌ 失败 ({err or '未知原因'})，用原文")
+                    if err:
+                        applied["rewrite_error"] = err
                     tts_text = raw_text
                     tts_source = tts_source + "_fallback"
                 applied["tts_source"] = tts_source
@@ -818,11 +825,19 @@ def dedup_video(src, params=None, out_name=None, seed=None,
             else:
                 if not rewrite_template:
                     process_steps.append("DeepSeek 改写: — 跳过 (未启用)")
+                    print("[TTS] DeepSeek 改写未启用", flush=True)
                 else:
                     process_steps.append("DeepSeek 改写: — 跳过 (Playwright 不可用)")
+                    print("[TTS] Playwright 不可用，跳过改写", flush=True)
                 tts_text = raw_text
                 applied["tts_source"] = tts_source
                 applied["tts_process"] = "  →  ".join(process_steps)
+        else:
+            # 🆕 没有提取到任何文案 — 给用户明确的反馈
+            applied["tts_source"] = "none"
+            applied["tts_process"] = "未提取到文案 (视频无字幕 + ASR 无识别结果)"
+            applied["tts_warning"] = "无配音：视频既无字幕轨，ASR 也未识别到语音。请在手动模式下输入文案。"
+            print("[TTS] 无文案可用，跳过 TTS", flush=True)
 
     if tts_text and TTS.is_available():
         tts_temp = None

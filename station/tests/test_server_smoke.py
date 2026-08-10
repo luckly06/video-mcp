@@ -58,11 +58,15 @@ class _StubPipeline:
         self.calls = []
 
     def dedup_video(self, src, params=None, out_name=None, seed=None,
-                    level=None, dimensions=None, flip_mode=None, trim_phase=None):
+                    level=None, dimensions=None, flip_mode=None, trim_phase=None,
+                    tts_text=None, tts_voice="冰糖", tts_speed=1.0,
+                    rewrite_template=None):
         self.calls.append({
             "fn": "dedup_video", "src": src, "params": params, "out_name": out_name,
             "seed": seed, "level": level, "dimensions": dimensions,
             "flip_mode": flip_mode, "trim_phase": trim_phase,
+            "tts_text": tts_text, "tts_voice": tts_voice,
+            "tts_speed": tts_speed, "rewrite_template": rewrite_template,
         })
         return {
             "src": {"name": src, "md5": "a"},
@@ -79,11 +83,15 @@ class _StubPipeline:
         }
 
     def batch_fission(self, src, count=5, params=None,
-                      level=None, dimensions=None, flip_mode=None, cancel_token=None):
+                      level=None, dimensions=None, flip_mode=None, cancel_token=None,
+                      tts_text=None, tts_voice="冰糖", tts_speed=1.0,
+                      rewrite_template=None):
         self.calls.append({
             "fn": "batch_fission", "src": src, "count": count, "params": params,
             "level": level, "dimensions": dimensions, "flip_mode": flip_mode,
             "cancel_token": cancel_token,
+            "tts_text": tts_text, "tts_voice": tts_voice,
+            "tts_speed": tts_speed, "rewrite_template": rewrite_template,
         })
         # 与真实 pipeline.batch_fission 一致的 wrapper 结构：result["matrix"] 是包装 dict，
         # 内层 matrix 字段是 2D 列表（对角 None），外层带 all_pass / count / too_close_pairs。
