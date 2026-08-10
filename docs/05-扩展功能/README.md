@@ -1,28 +1,36 @@
-## 一，关于DD的扩写
-注意：初始的【SRS\02-方案设计\02-系统详细设计说明书【DD（Detailed Design）】.md】不动
-SAD作为架构基线，在P0阶段冻结；
-DD采用增量演进机制，保留历史版本，不允许无记录覆盖修改。扩写路径：SRS\05-扩展功能
-——>
-- 小迭代升v1.1原地扩写:{项目名}-DD-v1.1.md;
+# docs/05-扩展功能 · 扩展功能工作区
 
-适用于：
-- 已有模块设计细节调整
-- 参数、流程、接口细节优化
-- 不改变整体架构边界的设计变更
+> 遵循 OpenSpec 方法论（proposal → tasks → design → spec → archive），手动管理，不使用 CLI。
 
+## DD 治理规则
 
-- 大范围扩展：
-不直接修改主 DD，应通过 Addendum 增量补充。
+| 规则 | 说明 |
+|---|---|
+| **SAD 冻结** | P0 阶段起冻结，不原地修改 |
+| **小迭代** | 已有模块细节调整 → 原地升版本号（`video-uniqueness-DD-v1.x.md`） |
+| **大扩展** | 新增功能/能力/架构范围 → 在此目录按 OpenSpec 流程管理 |
+| **Archive** | 完工后将 `changes/<id>/` 整个搬入 `changes/archive/YYYY-MM-DD-<id>/` |
 
-命名规则：{项目名}-DD-v1.1.md
+## 目录结构
 
-- 大扩展出增量补篇,名：
-{项目名}_dd_v1.1/
-    └── {项目名}_dd_p1_addendum.md
-    
-适用于：
-- 新增功能模块
-- 新增系统能力
-- 新增架构范围
-- 对原 DD 产生较大影响的扩展设计
-    
+```
+05-扩展功能/
+├── changes/                          # 进行中的变更
+│   ├── add-tts-audio-replace/        # 🟢 活跃：TTS 音频替换
+│   │   ├── proposal.md               # 为什么做 / 做什么
+│   │   ├── tasks.md                  # 实现清单 + 进度
+│   │   ├── design.md                 # 技术决策
+│   │   └── specs/tts-audio-replace/  # 需求规格
+│   │       └── spec.md               # ADDED Requirements + Scenarios
+│   └── archive/                      # 已完工的变更
+│
+├── specs/                            # 已完工扩展的真相源（变更归档后落地）
+├── 01-扩展功能需求提示词/            # AS-IS / Gap / TO-BE 需求分析模板
+└── README.md                         # 本文件
+```
+
+## 当前活跃变更
+
+| Change ID | 说明 | 进度 |
+|---|---|---|
+| `add-tts-audio-replace` | MiMo TTS 音频轨道替换 + ffmpeg 字幕提取 | 核心已实现，待 ASR + DeepSeek 文案改写 |

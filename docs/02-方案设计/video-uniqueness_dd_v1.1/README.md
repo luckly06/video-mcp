@@ -2,24 +2,13 @@
 
 大范围扩展时在此目录创建增量补篇，不修改主 DD。
 
-## 命名规则
-
-```
-video-uniqueness_dd_v1.1/video-uniqueness_dd_p{N}_addendum.md
-```
-
-- `p1` = 第一个大扩展，`p2` = 第二个，以此类推
-- 每篇 Addendum 独立描述一个新增模块/能力
-
-## 触发条件
-
-- 新增功能模块
-- 新增系统能力
-- 新增架构范围
-- 对原 DD 产生较大影响的扩展设计
-
 ## 当前 Addendum
 
 | 编号 | 文件 | 说明 | 日期 |
 |---|---|---|---|
-| p1 | `video-uniqueness_dd_p1_addendum.md` | 模块六：云 TTS 音频轨道替换（MiMo v2.5） | 2026-08-10 |
+| p1 | → 已迁移至 `docs/05-扩展功能/changes/add-tts-audio-replace/` | TTS 音频替换 | 2026-08-10 |
+
+> **迁移说明**（2026-08-10）：扩展功能的 DD 设计文档从本目录迁至
+> [`docs/05-扩展功能/changes/add-tts-audio-replace/`](../../../05-扩展功能/changes/add-tts-audio-replace/)
+> ，采用 OpenSpec 风格（proposal + tasks + design + spec）。
+> 本目录保留 p1 的 addendum.md 原文件作为历史记录，不再作为活跃参考。
