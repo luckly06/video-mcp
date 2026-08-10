@@ -168,6 +168,7 @@ TOOLS = [
                 "tts_text": {"type": "string", "description": "🆕 TTS 配音文案；提供后将以 MiMo TTS 生成音频替换原视频音轨"},
                 "tts_voice": {"type": "string", "enum": ["冰糖", "茉莉", "苏打", "白桦"], "description": "🆕 TTS 音色；默认冰糖"},
                 "tts_speed": {"type": "number", "description": "🆕 TTS 语速倍率（0.5-2.0）；默认 1.0"},
+                "rewrite_template": {"type": "string", "description": "🆕 DeepSeek 改写模板（带货/解说/Vlog 或自定义）；设置后自动从字幕/ASR 提取文案并用 DeepSeek 改写"},
             },
             "required": ["src"],
         },
@@ -189,6 +190,7 @@ TOOLS = [
                 "tts_text": {"type": "string", "description": "🆕 TTS 配音文案；提供后每个变体将以 MiMo TTS 替换音频轨"},
                 "tts_voice": {"type": "string", "enum": ["冰糖", "茉莉", "苏打", "白桦"], "description": "🆕 TTS 音色；默认冰糖"},
                 "tts_speed": {"type": "number", "description": "🆕 TTS 语速倍率（0.5-2.0）；默认 1.0"},
+                "rewrite_template": {"type": "string", "description": "🆕 DeepSeek 改写模板；设置后每个变体自动从字幕/ASR 提取文案并用 DeepSeek 改写"},
             },
             "required": ["src", "count"],
         },
@@ -238,6 +240,18 @@ TOOLS = [
         "name": "list_voices",
         "description": "🆕 列出 MiMo TTS 可用音色。返回 id/lang/gender 列表，供前端选音色。",
         "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
+    },
+    {
+        "name": "rewrite_copy",
+        "description": "🆕 DeepSeek 改写文案：用已登录的 DeepSeek 网页会话改写短视频配音文案（零 API 成本）。会打开浏览器窗口，需先关闭 Edge/Chrome 避免 profile 锁。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "需要改写的原始文案文本"},
+            },
+            "required": ["text"],
+        },
         "_tier": "audit",
     },
 ]
@@ -292,6 +306,11 @@ def _exec_tool(name, args):
     if name == "probe_video":
         return P.probe_video(args["src"])
     if name == "dedup_video":
+        rwt = args.get("rewrite_template")
+        if rwt:
+            print(f"[MCP] dedup_video 收到 rewrite_template（长度={len(rwt)}）")
+        else:
+            print(f"[MCP] dedup_video rewrite_template=空，跳过改写")
         r = P.dedup_video(
             args["src"],
             params=args.get("params"),
@@ -304,6 +323,7 @@ def _exec_tool(name, args):
             tts_text=args.get("tts_text"),
             tts_voice=args.get("tts_voice", "冰糖"),
             tts_speed=args.get("tts_speed", 1.0),
+            rewrite_template=args.get("rewrite_template"),
         )
         r["job_id"] = _new_job("dedup", {"src": r["src"]["name"], "output": r["output_path"]})
         return r
@@ -330,6 +350,7 @@ def _exec_tool(name, args):
                 tts_text=args.get("tts_text"),
                 tts_voice=args.get("tts_voice", "冰糖"),
                 tts_speed=args.get("tts_speed", 1.0),
+                rewrite_template=args.get("rewrite_template"),
             )
         finally:
             with _ACTIVE_FISSION_LOCK:
@@ -348,6 +369,10 @@ def _exec_tool(name, args):
     if name == "list_voices":
         import tts_client as TTS_V  # noqa: E402 同目录，不污染顶部 import
         return {"voices": TTS_V.list_voices(), "available": TTS_V.is_available()}
+    if name == "rewrite_copy":
+        import copy_rewriter as REWRITER  # noqa: E402
+        rewritten = REWRITER.rewrite(args["text"])
+        return {"rewritten": rewritten, "original": args["text"]}
     if name == "get_job":
         jobs = _load_jobs()
         j = jobs.get(args["job_id"])

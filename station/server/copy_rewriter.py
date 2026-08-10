@@ -37,6 +37,13 @@ SYSTEM_PROMPT = """你是短视频配音文案优化师。
 输入：这段打斗太精彩了
 输出：你见过这么炸裂的打斗吗？三秒之内反转三次，这操作你学不来！评论区告诉我你看到了第几遍，点赞关注不迷路！"""
 
+# 🆕 改写模板：用户在前端选择风格，系统自动传到这里作为角色设定
+REWRITE_TEMPLATES = {
+    "带货": "你是带货主播。改写为口播带货文案：突出产品卖点、制造紧迫感、引导下单。语气热情有感染力。",
+    "解说": "你是知识解说博主。改写为解说旁白：逻辑清晰、深入浅出、善用设问引导。语气沉稳专业。",
+    "Vlog": "你是生活 Vlog 博主。改写为 Vlog 口播：自然随性、像在跟朋友聊天。语气轻松真实。",
+}
+
 
 def is_available():
     """检查 Playwright + Chrome 是否可用。"""
@@ -63,7 +70,7 @@ def _find_browser_profile():
     return "", "chrome"
 
 
-async def _rewrite_async(original_text, timeout=60):
+async def _rewrite_async(original_text, template=None, timeout=60):
     """异步版：Playwright 操控 DeepSeek 网页。"""
     from playwright.async_api import async_playwright
 
@@ -86,8 +93,17 @@ async def _rewrite_async(original_text, timeout=60):
             await page.goto("https://chat.deepseek.com/", wait_until="domcontentloaded")
             await asyncio.sleep(2)  # 等页面完全加载
 
-            # 构建 prompt
-            prompt = f"{SYSTEM_PROMPT}\n\n需要改写的原文：{original_text}"
+            # 构建 prompt：用户模板（角色/自定义指令 · 可空） + 通用要求 + 原文
+            prompt_parts = []
+            if template:
+                if template in REWRITE_TEMPLATES:
+                    prompt_parts.append("## 角色\n" + REWRITE_TEMPLATES[template])
+                else:
+                    # 用户在前端自由输入的模板 — 原样作为"自定义指令"插入
+                    prompt_parts.append("## 自定义指令\n" + template)
+            prompt_parts.append(SYSTEM_PROMPT)
+            prompt_parts.append("需要改写的原文：" + original_text)
+            prompt = "\n\n".join(prompt_parts)
 
             # openteam 技术：注入文本到 contenteditable 输入框并派发 InputEvent
             await page.evaluate("""
@@ -165,18 +181,19 @@ async def _rewrite_async(original_text, timeout=60):
             await context.close()
 
 
-def rewrite(original_text, timeout=60):
+def rewrite(original_text, template=None, timeout=60):
     """同步封装：调用 DeepSeek 改写文案。
 
     Args:
         original_text: ASR 识别或字幕提取的原始文本
+        template: 改写模板（"带货"/"解说"/"Vlog" 或自定义角色描述），None=无模板
         timeout: 最长等待秒数
 
     Returns:
         str | None: 改写后的文案，失败返回 None
     """
     try:
-        return asyncio.run(_rewrite_async(original_text, timeout=timeout))
+        return asyncio.run(_rewrite_async(original_text, template=template, timeout=timeout))
     except Exception as e:
         logger.error(f"rewrite 异常: {e}")
         return None

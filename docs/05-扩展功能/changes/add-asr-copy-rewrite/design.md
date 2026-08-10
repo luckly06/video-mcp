@@ -29,24 +29,95 @@
 
 **放弃**：DeepSeek API（增加外部付费依赖，违背 0 API Token 原则）
 
-### 3. 文案改写 system prompt
+### 3. 文案改写：通用 system prompt + 用户模板（可选）
+
+文案改写由两部分 prompt 组成，最终发给 DeepSeek：
 
 ```
-你是短视频配音文案优化师。将原始对白/字幕改写为适合 TTS 配音的单段旁白。
-要求：口语化、有开头钩子、有结尾互动引导、30-100 字、纯文案输出不分段。
+[可选] 用户模板（角色/自定义指令）
+↓
+通用 system prompt（短视频配音文案优化师）
+↓
+需要改写的原文
 ```
 
-### 4. 管道：原始文案 → 改写 → TTS
+**3.1 通用 system prompt（写死在 `copy_rewriter.SYSTEM_PROMPT`）**
 
 ```
-ffmpeg 抽音频 .wav → sherpa-onnx ASR → 原文
-                                    ↓
-                          DeepSeek 改写 → 新文案
-                                    ↓
-                          MiMo TTS → 新语音 → ffmpeg 替换
+你是短视频配音文案优化师。
+
+## 任务
+将输入的原始对白/字幕，改写为一条适合 TTS 配音的短视频旁白。
+
+## 要求
+1. 口语化：自然说话语气，不要书面语
+2. 有钩子：开头 3 秒抓注意力（悬念/提问/冲击性陈述）
+3. 有行动：结尾留互动引导（"点赞关注"、"评论区聊聊"等）
+4. 时长适配：30-100 字，适合 15-60 秒短视频
+5. 纯文案：只输出最终文案，不要解释、前缀、标注
 ```
 
-文案来源优先级：用户手动输入 > 内嵌字幕提取 > ASR 识别 > ASR+改写
+**3.2 用户模板（用户自由填写，可选）**
+
+- 形态：TTS 模式区里的 textarea，`id="tts-template"`
+- 内容：任意字符串。常见用法是「角色设定」或「风格指南」，例如：
+  - "你是带货主播，把原文改写为口播带货文案，突出卖点、引导下单，语气热情有感染力。"
+  - "你是科普博主，把原文改写成严谨的科普讲解，避免夸张表达。"
+- 留空：跳过 DeepSeek 改写，直接用原文 TTS
+- 前端辅助：三个示例按钮（📦带货/🎙️解说/📱Vlog）一键填入示例文本到 textarea，**仅是快捷填入，用户可任意编辑或清空**
+
+**3.3 prompt 拼接逻辑**（`copy_rewriter._rewrite_async`）
+
+```python
+parts = []
+if template:
+    if template in REWRITE_TEMPLATES:        # 内置预设键
+        parts.append("## 角色\n" + REWRITE_TEMPLATES[template])
+    else:                                    # 用户自由输入
+        parts.append("## 自定义指令\n" + template)
+parts.append(SYSTEM_PROMPT)
+parts.append("需要改写的原文：" + original_text)
+prompt = "\n\n".join(parts)
+```
+
+### 4. 管道：原文 → 可选改写 → TTS
+
+```
+[视频]
+   │ ffmpeg probe → 检查是否有字幕轨
+   │
+   ├─ 有字幕轨 ─────────→ get_subtitle_text → raw_text
+   │
+   └─ 无字幕轨 ──→ ffmpeg 抽 16kHz WAV ──→ sherpa-onnx ASR → raw_text
+                                                    │
+                                                    ▼
+                              ┌──── 用户提供模板 (rewrite_template)? ────┐
+                              │                                          │
+                              ▼                                          ▼
+                       有模板：DeepSeek 改写                         无模板：跳过
+                       （Playwright 操控网页）                  （直接用 raw_text）
+                              │                                          │
+                              ▼                                          ▼
+                            tts_text                          tts_text（=raw_text）
+                                    \                              /
+                                     \                            /
+                                      ▼                          ▼
+                                            MiMo TTS → 新语音
+                                                    │
+                                                    ▼
+                                ffmpeg 合并（apad + shortest）→ 最终 mp4
+```
+
+**文案来源优先级**：
+
+| 优先级 | 来源 | tts_source 标签 |
+|---|---|---|
+| 1 | 用户手动输入文案 | `user` |
+| 2 | 内嵌字幕提取（无改写） | `subtitle` |
+| 3 | ASR 识别（无改写） | `asr` |
+| 4 | 内嵌字幕 + DeepSeek 改写 | `subtitle_rewrite` |
+| 5 | ASR 识别 + DeepSeek 改写 | `asr_rewrite` |
+| - | 模板提供但改写失败 | `subtitle_fallback` / `asr_fallback`（用原文兜底） |
 
 ## Risks
 

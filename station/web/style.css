@@ -39,8 +39,8 @@ body {
   background: var(--surface-page);
   color: var(--text-primary);
   font-family: "Noto Sans SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.55;
 }
 button, input, select { font: inherit; }
 button, a, select, input { -webkit-tap-highlight-color: transparent; }
@@ -348,10 +348,10 @@ code {
 .tl-item.t-cancel .tl-index { border-color: #64748B; background: #D8DEE7; color: #64748B; }
 .tl-item.t-human .tl-index { border-color: #248E87; background: #AFE2DF; color: #248E87; }
 .tl-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 3px; }
-.tl-tool { min-width: 0; overflow: hidden; color: var(--text-primary); font: 500 10px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.tl-time { color: var(--text-tertiary); font-size: 9px; white-space: nowrap; }
-.tl-summary { color: var(--text-secondary); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
-.tl-tag { display: inline-block; margin-right: 5px; padding: 1px 5px; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-tertiary); font-size: 9px; }
+.tl-tool { min-width: 0; overflow: hidden; color: var(--text-primary); font-weight: 600; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.tl-time { color: var(--text-tertiary); font-size: 10px; white-space: nowrap; }
+.tl-summary { color: var(--text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.tl-tag { display: inline-block; margin-right: 5px; padding: 1px 5px; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-tertiary); font-size: 10px; }
 .memory-foot { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); font-size: 10px; line-height: 1.55; }
 .tool-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 13px; }
 .tool-filter { min-height: 28px; padding: 4px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: #fff; color: var(--text-secondary); cursor: pointer; font-size: 10px; }
@@ -375,7 +375,7 @@ code {
 .tool-axis-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: start; gap: 7px; min-width: 0; padding: 8px; border: 1px solid var(--border-subtle); border-left: 3px solid var(--tool-tier); border-radius: 7px; background: #fff; cursor: pointer; }
 .tool-axis-item:hover, .tool-axis-item.is-active { border-color: var(--tool-tier); background: #FFFBF3; }
 .tool-axis-index { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--tool-tier); border-radius: 5px; background: var(--tool-fill); color: var(--tool-tier); font: 600 9px Consolas, monospace; }
-.tool-name { min-width: 0; color: var(--text-primary); font-size: 10px; font-weight: 600; overflow-wrap: anywhere; }
+.tool-name { min-width: 0; color: var(--text-primary); font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
 .tool-desc { margin-top: 3px; color: var(--text-tertiary); font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
 .tool-axis-tag { padding: 1px 5px; border-radius: 999px; background: var(--tool-fill); color: var(--tool-tier); font-size: 9px; white-space: nowrap; }
 .tool-detail { margin-top: 11px; padding: 10px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface-muted); }

@@ -596,7 +596,7 @@ function renderTools(tools) {
     return '<article class="tool-axis-item" data-tool-id="' + index + '" data-tool-tier="' + tool.tier + '" tabindex="0" ' +
       'style="--tool-tier:' + colors.stroke + ";--tool-fill:" + colors.fill + '">' +
       '<span class="tool-axis-index">' + (index + 1) + "</span>" +
-      '<div><div class="tool-name">' + escapeHtml(tool.name) + '</div><div class="tool-desc">' + escapeHtml(tool.description || "暂无说明") + "</div></div>" +
+      '<div><div class="tool-name">' + escapeHtml(toolLabel(tool.name)) + '</div><div class="tool-desc">' + escapeHtml(tool.description || "暂无说明") + "</div></div>" +
       '<span class="tool-axis-tag">' + TIER_LABEL[tool.tier] + "</span>" +
     "</article>";
   }).join("");
@@ -654,7 +654,7 @@ function renderToolAxis(tools) {
     svg.appendChild(toolAxisNode("path", {
       d: bandPath(from, to), fill: colors.fill, stroke: colors.stroke, "stroke-width": 1,
       class: "tool-axis-segment", tabindex: 0, "data-tool-id": index, "data-tool-tier": tool.tier,
-      "aria-label": (index + 1) + "，" + tool.name + "，" + TIER_LABEL[tool.tier],
+      "aria-label": (index + 1) + "，" + toolLabel(tool.name) + "，" + TIER_LABEL[tool.tier],
     }));
     const labelPoint = point(labelRadius, (from + to) / 2);
     const number = toolAxisNode("text", { x: labelPoint.x, y: labelPoint.y + 3, fill: colors.stroke, class: "tool-axis-number", "data-tool-id": index, "data-tool-tier": tool.tier });
@@ -938,18 +938,39 @@ function syncFlipModeState() {
 /* ---------------------------------------------------------------------------
    去重（dedup_video）—— 走人工决策流 + 自检报告
    --------------------------------------------------------------------------- */
-/** 🆕 读取 TTS 参数（仅文案非空时才启用） */
+/** 🆕 读取 TTS 参数（自动模式=提取+改写，手动模式=用户文案） */
 function readTTS() {
-  const elText = document.getElementById("tts-text");
+  const modeBtn = document.querySelector("#tts-mode-switch .tts-mode-btn.active");
+  const isAuto = modeBtn && modeBtn.getAttribute("data-mode") === "auto";
   const elVoice = document.getElementById("tts-voice");
   const elSpeed = document.getElementById("tts-speed");
-  const text = (elText && elText.value || "").trim();
-  if (!text) return null;
-  return {
-    tts_text: text,
-    tts_voice: elVoice ? elVoice.value : "冰糖",
-    tts_speed: elSpeed ? parseFloat(elSpeed.value) || 1.0 : 1.0,
-  };
+
+  if (isAuto) {
+    // 自动模式：checkbox 控制是否启用改写
+    var chkRewrite = document.getElementById("chk-rewrite");
+    var enabled = chkRewrite && chkRewrite.checked;
+    var template = "";
+    if (enabled) {
+      var elTemplate = document.getElementById("tts-template");
+      template = elTemplate ? elTemplate.value.trim() : "";
+    }
+    return {
+      tts_text: null,
+      rewrite_template: template,  // 空 = 不改写，非空 = DeepSeek 改写
+      tts_voice: elVoice ? elVoice.value : "冰糖",
+      tts_speed: elSpeed ? parseFloat(elSpeed.value) || 1.0 : 1.0,
+    };
+  } else {
+    // 手动模式：必须用户填了文案才启用 TTS
+    const elText = document.getElementById("tts-text");
+    const text = (elText && elText.value || "").trim();
+    if (!text) return null;
+    return {
+      tts_text: text,
+      tts_voice: elVoice ? elVoice.value : "冰糖",
+      tts_speed: elSpeed ? parseFloat(elSpeed.value) || 1.0 : 1.0,
+    };
+  }
 }
 
 async function doDedup() {
@@ -1053,10 +1074,12 @@ function renderDedup(d) {
   const trimLine = applied.trim_skipped
     ? "去头尾   : 跳过（" + (applied.trim_skip_reason || "原时长过短") + "）\n"
     : "";
-  const sourceLabels = { user: "手动输入", subtitle: "字幕提取", asr: "ASR 识别", asr_rewrite: "ASR + 改写" };
+  const sourceLabels = { user: "手动输入", subtitle: "字幕提取", asr: "ASR 识别", subtitle_rewrite: "字幕+改写", asr_rewrite: "ASR+改写", subtitle_fallback: "字幕(改写失败)", asr_fallback: "ASR(改写失败)" };
+  const ttsProcess = applied.tts_process
+    ? ("TTS 流程  : " + applied.tts_process + "\n")
+    : "";
   const ttsLine = applied.tts_text
     ? ("TTS 配音 : " + (applied.tts_applied ? "[已替换]" : "[失败]") +
-       " 来源=" + (sourceLabels[applied.tts_source] || "未知") +
        " 音色=" + (applied.tts_voice || "冰糖") +
        " 文本=" + (applied.tts_text || "—") + "\n")
     : "";
@@ -1069,6 +1092,7 @@ function renderDedup(d) {
     "时长     : " + (src.duration != null ? src.duration : "?") + "s  →  " +
       (out.duration != null ? out.duration : "?") + "s\n" +
     trimLine +
+    ttsProcess +
     ttsLine +
     "帧率     : " + (d.fps != null ? d.fps : "?") + " fps\n" +
     "job_id   : " + (d.job_id || "—") + "\n" +
@@ -1429,7 +1453,7 @@ function memoryDateKey(t) {
 function memoryMatches(r) {
   const date = el.memoryDate.value;
   const query = el.memorySearch.value.trim().toLocaleLowerCase("zh-CN");
-  const text = [r.tool, r.summary, kindLabel(r.kind), r.kind].join(" ").toLocaleLowerCase("zh-CN");
+  const text = [toolLabel(r.tool), r.tool, r.summary, kindLabel(r.kind), r.kind].join(" ").toLocaleLowerCase("zh-CN");
   return (!date || memoryDateKey(r.t) === date) && (!query || text.includes(query));
 }
 function renderMemory() {
@@ -1459,7 +1483,7 @@ function renderMemory() {
     const cls = "t-" + (r.kind || "audit");
     const memoryId = r.t + "-" + item.sourceIndex;
     return '<div class="tl-item ' + cls + '" data-memory-id="' + memoryId + '" tabindex="0">' +
-      '<div class="tl-head"><span class="tl-tool"><span class="tl-index">' + (index + 1) + "</span>" + escapeHtml(r.tool || "?") + "</span>" +
+      '<div class="tl-head"><span class="tl-tool"><span class="tl-index">' + (index + 1) + "</span>" + escapeHtml(toolLabel(r.tool)) + "</span>" +
         '<span class="tl-time">' + fmtTime(r.t) + "</span></div>" +
       '<div class="tl-summary"><span class="tl-tag">' + kindLabel(r.kind) + "</span>" + escapeHtml(r.summary || "") + "</div>" +
     "</div>";
@@ -1586,6 +1610,22 @@ function clearMemorySelection() {
 }
 function kindLabel(k) {
   return { audit: "审计", warned: "确认执行", blocked: "阻断", error: "错误", cancel: "已取消", human: "人工决策" }[k] || "记录";
+}
+function toolLabel(t) {
+  const map = {
+    dedup_video: "单条去重",
+    batch_fission: "批量裂变",
+    probe_video: "素材探测",
+    list_assets: "刷新素材",
+    list_voices: "查看音色",
+    list_watermark_templates: "查看水印",
+    remove_watermark: "去除水印",
+    download: "下载产物",
+    rewrite_copy: "改写文案",
+    get_job: "查询任务",
+    delete_output: "删除产物",
+  };
+  return map[t] || t.replace(/_/g, " ");
 }
 function clearMemory() {
   saveMemory([]);
@@ -1718,7 +1758,7 @@ el.levelSeg.addEventListener("click", (e) => {
 el.dimGrid.querySelector('input[data-dim="flip"]').addEventListener("change", syncFlipModeState);
 syncFlipModeState();
 
-// 🆕 TTS 预设文案快捷填入
+// 🆕 TTS 预设文案快捷填入（手动模式用）
 document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
   btn.addEventListener("click", function () {
     var text = this.getAttribute("data-text") || "";
@@ -1726,6 +1766,76 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
     if (elText) { elText.value = text; elText.focus(); }
   });
 });
+
+// 🆕 TTS 模式切换（自动提取+AI 改写 ↔ 手动输入）
+(function initTtsMode() {
+  var autoGroup = document.getElementById("tts-auto-group");
+  var manualGroup = document.getElementById("tts-manual-group");
+  var modeBtns = document.querySelectorAll("#tts-mode-switch .tts-mode-btn");
+
+  modeBtns.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      modeBtns.forEach(function (b) {
+        b.classList.remove("active");
+        b.style.background = "transparent";
+        b.style.color = "var(--gray-600)";
+        b.style.boxShadow = "none";
+        b.style.fontWeight = "500";
+      });
+      this.classList.add("active");
+      this.style.background = "var(--bg)";
+      this.style.color = "var(--text)";
+      this.style.boxShadow = "0 1px 3px rgba(0,0,0,.08)";
+      this.style.fontWeight = "600";
+
+      var mode = this.getAttribute("data-mode");
+      if (autoGroup) autoGroup.style.display = mode === "auto" ? "" : "none";
+      if (manualGroup) manualGroup.style.display = mode === "manual" ? "" : "none";
+    });
+  });
+
+  // 🆕 DeepSeek 改写开关：勾选 → 显示模板 textarea，不勾 → 隐藏并清空
+  var chkRewrite = document.getElementById("chk-rewrite");
+  var templateWrap = document.getElementById("tts-template-wrap");
+  var rewriteHint = document.getElementById("tts-rewrite-hint");
+  function syncRewriteUI() {
+    var on = chkRewrite && chkRewrite.checked;
+    if (templateWrap) templateWrap.style.display = on ? "" : "none";
+    if (rewriteHint) rewriteHint.textContent = on
+      ? "已启用改写。去重时会先用 DeepSeek 按模板改写字幕/ASR 原文，再 TTS 配音。"
+      : "未启用改写。系统会用字幕/ASR 原文直接生成配音。";
+  }
+  if (chkRewrite) {
+    chkRewrite.addEventListener("change", syncRewriteUI);
+    syncRewriteUI();  // 初始状态
+  }
+
+  // 🆕 改写模板：预设按钮把示例文本填入 textarea（用户可自由编辑）
+  var TEMPLATE_PRESETS = {
+    "带货": "你是带货主播。把原文改写为口播带货文案：突出产品卖点、制造紧迫感、引导下单。语气热情有感染力。",
+    "解说": "你是知识解说博主。把原文改写为解说旁白：逻辑清晰、深入浅出、善用设问引导。语气沉稳专业。",
+    "Vlog": "你是生活 Vlog 博主。把原文改写为 Vlog 口播：自然随性、像在跟朋友聊天。语气轻松真实。",
+  };
+  document.querySelectorAll(".tts-template-fill").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var key = this.getAttribute("data-template");
+      var text = TEMPLATE_PRESETS[key];
+      var elTemplate = document.getElementById("tts-template");
+      if (elTemplate && text) {
+        elTemplate.value = text;
+        elTemplate.focus();
+      }
+    });
+  });
+  // 🆕 清空模板按钮
+  var btnClear = document.getElementById("btn-template-clear");
+  if (btnClear) {
+    btnClear.addEventListener("click", function () {
+      var elTemplate = document.getElementById("tts-template");
+      if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
+    });
+  }
+})();
 
 el.modalConfirm.addEventListener("click", () => closeModal(true));
 el.modalCancel.addEventListener("click", () => closeModal(false));
