@@ -5,11 +5,10 @@
 前端检测：fetch('http://localhost:9224/health')
 """
 
-import asyncio
 import json
-import logging
 import sys
-from aiohttp import web
+import traceback
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -18,64 +17,80 @@ sys.path.insert(0, str(SERVER_DIR))
 
 import yuanbao_client as YB
 
-logger = logging.getLogger("yb-proxy")
-logging.basicConfig(level=logging.INFO, format="[yb-proxy] %(message)s")
 
-routes = web.RouteTableDef()
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        print(f"[yb-proxy] {args[0]}" if args else f"[yb-proxy] {fmt}")
 
+    def _json(self, code, data):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.end_headers()
+        self.wfile.write(body)
 
-@routes.get("/health")
-async def health(_req):
-    return web.json_response({"ok": True, "has_profile": YB.has_profile()})
+    def do_OPTIONS(self):
+        self._json(200, {})
 
+    def do_GET(self):
+        if self.path == "/health":
+            self._json(200, {"ok": True, "has_profile": YB.has_profile()})
+        elif self.path == "/status":
+            self._json(200, {"has_profile": YB.has_profile(), "channel": YB._pick_channel()})
+        else:
+            self._json(404, {"error": "not found"})
 
-@routes.post("/rewrite")
-async def rewrite(req: web.Request):
-    try:
-        body = await req.json()
-    except Exception:
-        return web.json_response({"error": "invalid json"}, status=400)
+    def do_POST(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b""
+            body = json.loads(raw) if raw else {}
+        except Exception:
+            self._json(400, {"error": "invalid json"})
+            return
 
-    frames = body.get("frames", [])
-    raw_text = body.get("raw_text", "")
-    template = body.get("rewrite_template")
-    max_chars = body.get("max_chars")
-    topic = body.get("topic", "")
-    timeout = body.get("timeout", 120)
+        if self.path == "/login":
+            try:
+                ok = YB.login()
+                self._json(200, {"ok": ok})
+            except Exception as e:
+                self._json(500, {"error": str(e)})
 
-    result = YB.vision_and_rewrite(
-        frames, raw_text,
-        rewrite_template=template,
-        max_chars=max_chars,
-        topic=topic,
-        timeout=timeout,
-        headless=False,  # 用户本机有桌面，用有头模式
-    )
-    return web.json_response(result)
+        elif self.path == "/rewrite":
+            try:
+                result = YB.vision_and_rewrite(
+                    body.get("frames", []),
+                    body.get("raw_text", ""),
+                    rewrite_template=body.get("rewrite_template"),
+                    max_chars=body.get("max_chars"),
+                    topic=body.get("topic", ""),
+                    timeout=body.get("timeout", 120),
+                    headless=False,
+                )
+                self._json(200, result)
+            except Exception as e:
+                traceback.print_exc()
+                self._json(500, {"error": str(e)})
 
-
-@routes.post("/login")
-async def login(_req: web.Request):
-    ok = YB.login()
-    return web.json_response({"ok": ok})
-
-
-@routes.get("/status")
-async def status(_req: web.Request):
-    return web.json_response({
-        "has_profile": YB.has_profile(),
-        "channel": YB._pick_channel(),
-    })
+        else:
+            self._json(404, {"error": "not found"})
 
 
 def main():
     port = 9224
-    app = web.Application()
-    app.add_routes(routes)
-    logger.info(f"元宝本地代理启动 → http://localhost:{port}")
-    logger.info("  前端访问 vu.evenblue.top 时自动检测此代理")
-    logger.info("  端点: /health /login /rewrite /status")
-    web.run_app(app, host="127.0.0.1", port=port, print=None)
+    server = HTTPServer(("127.0.0.1", port), Handler)
+    print(f"[yb-proxy] 元宝本地代理 → http://localhost:{port}")
+    print("[yb-proxy] 端点: /health /login /rewrite /status")
+    print("[yb-proxy] 前端访问 vu.evenblue.top 时自动检测此代理")
+    print("[yb-proxy] Ctrl+C 退出")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[yb-proxy] 已退出")
+        server.server_close()
 
 
 if __name__ == "__main__":
