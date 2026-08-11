@@ -96,20 +96,25 @@ async def main():
     page = browser.pages[0] if browser.pages else await browser.new_page()
     try:
         await page.goto("https://yuanbao.tencent.com/", wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(5)  # 等登录页加载完成（含 QR 码）
+        await asyncio.sleep(5)
         
-        # 检测是否已登录
-        if not any(k in page.url.lower() for k in ("/login", "/sign_in", "passport")):
-            print(json.dumps({{"ok": True, "logged_in": True}}, ensure_ascii=False))
-            # 保持浏览器不关（profile 持久化 cookie）
-            return
-        
-        # 截取登录页截图（含二维码）
+        # 始终截取页面截图（含可能存在的 QR 码/登录弹窗）
         screenshot_bytes = await page.screenshot(type="png", full_page=False)
         screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
         
-        # 尝试裁剪出 QR 码区域
-        qr_b64 = screenshot_b64  # 默认返回整页
+        # 检测页面是否有登录入口（QR码/手机号输入框）
+        has_login_form = await page.evaluate("""() => {{
+            // 检测 QR 码相关元素
+            if (document.querySelector('canvas, img[src*="qr"], [class*="qrcode"], [class*="qr"], [class*="login"], [class*="Login"]'))
+                return true;
+            // 检测手机号输入框
+            if (document.querySelector('input[type="tel"], input[placeholder*="手机"], input[placeholder*="phone"]'))
+                return true;
+            return false;
+        }}""")
+        
+        # 尝试裁剪出 QR 码
+        qr_b64 = screenshot_b64
         try:
             qr_el = page.locator('canvas, img[src*="qrcode"], img[src*="qr"], [class*="qrcode"], [class*="qr"]').first
             if await qr_el.count() > 0:
@@ -119,7 +124,9 @@ async def main():
             pass
         
         print(json.dumps({{
-            "ok": True, "logged_in": False,
+            "ok": True,
+            "logged_in": not has_login_form,
+            "has_login_form": has_login_form,
             "screenshot_b64": screenshot_b64,
             "qr_b64": qr_b64,
         }}, ensure_ascii=False))
