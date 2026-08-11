@@ -126,19 +126,23 @@ async def main():
         try:
             # 评估页面里所有 canvas 和 img 的位置，挑最大的
             qr_rect = await page.evaluate("""() => {{
-                // 找所有可能是 QR 码的元素（canvas 或 img）
+                // 元宝的 QR 码在 iframe 里（open.weixin.qq.com/connect/qrconnect）
+                const ifr = document.querySelector('iframe.hyc-wechat-login, iframe[src*="qrconnect"], iframe[src*="weixin.qq.com"]');
+                if (ifr) {{
+                    const r = ifr.getBoundingClientRect();
+                    return {{x: r.x, y: r.y, w: r.width, h: r.height}};
+                }}
+                // 兜底：找所有 canvas 和 img
                 const candidates = [
                     ...document.querySelectorAll('canvas'),
                     ...document.querySelectorAll('img[src*="qr"], img[src*="QR"], img[src*="base64"]'),
-                    ...document.querySelectorAll('[class*="qrcode"], [class*="QrCode"], [class*="qr-code"], [class*="qrcode-img"], [class*="qrbox"], [class*="QR"], [class*="qrImg"]'),
+                    ...document.querySelectorAll('[class*="qrcode"], [class*="QrCode"], [class*="qr-code"]'),
                 ];
                 let best = null, bestSize = 0;
                 for (const el of candidates) {{
                     const r = el.getBoundingClientRect();
                     const sz = r.width * r.height;
-                    // 方形、最小尺寸 100x100 = 10000 像素
                     if (sz > 10000 && r.width >= 100 && r.height >= 100 && sz > bestSize) {{
-                        // 还要近似方形（QR 码都是方形的）
                         const ratio = Math.max(r.width, r.height) / Math.min(r.width, r.height);
                         if (ratio < 1.5) {{
                             best = {{x: r.x, y: r.y, w: r.width, h: r.height}};
