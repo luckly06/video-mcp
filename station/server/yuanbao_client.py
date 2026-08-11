@@ -137,67 +137,51 @@ async def main():
     vision_desc = ""
 
     async def upload_frames(fs, label=""):
-        """把帧图传到元宝输入框。元宝是 Next.js，没有原生 input[type=file]，
-        而是用 UploadFileSelector_iconContainer 组件。点击它 → file_chooser 拦截。"""
+        """元宝上传：click UploadFileSelector → file_chooser。用 page.wait_for_event
+        异步等文件对话框（React 组件可能延迟创建对话框）。"""
         if not fs:
             return False
         fs3 = fs[:3]
-        # 等聊天输入框出现
         try:
             await page.wait_for_selector('div[contenteditable="true"]', timeout=15000)
         except Exception:
             pass
-        # 诊断
-        cnt = await page.locator('input[type="file"]').count()
-        print(f"[yuanbao-upload{{label}}] file inputs: {{cnt}}", file=sys.stderr)
-        # DOM dump
-        try:
-            html = await page.content()
-            dump = Path(r"{station_dir}") / f"yuanbao_page_{{label.strip('-')}}.html"
-            dump.write_text(html, encoding="utf-8")
-        except Exception:
-            pass
-        # 策略 A：元宝专属 — 点击 UploadFileSelector 图标
+        # 策略 A：page.evaluate 直调 click，用 wait_for_event 异步等 filechooser
         sel_ub = 'div[class*="UploadFileSelector_iconContainer"]'
         ub = page.locator(sel_ub).first
-        if await ub.count() > 0:
-            try:
-                async with page.expect_file_chooser(timeout=8000) as fc:
-                    await ub.click()
-                chooser = await fc.value
-                await chooser.set_files(fs3)
-                print(f"[yuanbao-upload{{label}}] UploadFileSelector ok, {{len(fs3)}} files", file=sys.stderr)
-                return True
-            except Exception as e1:
-                print(f"[yuanbao-upload{{label}}] UploadFileSelector err: {{e1}}", file=sys.stderr)
-        # 策略 B：点击 attachment 区域
-        att = page.locator('div[class*="attachment"]').first
-        if await att.count() > 0:
-            try:
-                async with page.expect_file_chooser(timeout=5000) as fc:
-                    await att.click()
-                chooser = await fc.value
-                await chooser.set_files(fs3)
-                print(f"[yuanbao-upload{{label}}] attachment ok", file=sys.stderr)
-                return True
-            except Exception as e2:
-                print(f"[yuanbao-upload{{label}}] attachment err: {{e2}}", file=sys.stderr)
-        # 策略 C：兜底 page.evaluate + file_chooser
-        if cnt > 0:
-            try:
-                js = """() => {{
-                    var el = document.querySelector('input[type="file"]');
-                    if (el) el.click();
-                }}"""
-                async with page.expect_file_chooser(timeout=5000) as fc:
-                    await page.evaluate(js)
-                chooser = await fc.value
-                await chooser.set_files(fs3)
-                print(f"[yuanbao-upload{{label}}] evaluate ok", file=sys.stderr)
-                return True
-            except Exception as e3:
-                print(f"[yuanbao-upload{{label}}] evaluate err: {{e3}}", file=sys.stderr)
-        print(f"[yuanbao-upload{{label}}] ALL FAILED", file=sys.stderr)
+        if await ub.count() == 0:
+            print(f"[yuanbao-upload{{label}}] no UploadFileSelector", file=sys.stderr)
+            return False
+        try:
+            fc_task = asyncio.ensure_future(page.wait_for_event('filechooser'))
+            await page.evaluate("""
+                (sel) => {{
+                    const el = document.querySelector(sel);
+                    if (el) {{ el.dispatchEvent(new MouseEvent('click', {{bubbles:true,cancelable:true}})); }}
+                }}
+            """, sel_ub)
+            fc = await asyncio.wait_for(fc_task, timeout=20)
+            await fc.set_files(fs3)
+            print(f"[yuanbao-upload{{label}}] UploadFileSelector ok, {{len(fs3)}} files", file=sys.stderr)
+            return True
+        except asyncio.TimeoutError:
+            print(f"[yuanbao-upload{{label}}] filechooser timed out", file=sys.stderr)
+            fc_task.cancel()
+        except Exception as e1:
+            print(f"[yuanbao-upload{{label}}] UploadFileSelector err: {{e1}}", file=sys.stderr)
+            try: fc_task.cancel()
+            except: pass
+        # 策略 B：Playwright click
+        try:
+            async with page.expect_file_chooser(timeout=15000) as fc:
+                await ub.click(force=True)
+            chooser = await fc.value
+            await chooser.set_files(fs3)
+            print(f"[yuanbao-upload{{label}}] playwright click ok", file=sys.stderr)
+            return True
+        except Exception as e2:
+            print(f"[yuanbao-upload{{label}}] playwright click err: {{e2}}", file=sys.stderr)
+        print(f"[yuanbao-upload{{label}}] FAILED", file=sys.stderr)
         return False
 
     if frames:
