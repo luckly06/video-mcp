@@ -132,6 +132,49 @@ async def main():
         print(json.dumps({{"error":"未登录"}}, ensure_ascii=False))
         return
 
+    # === 图片上传：MutationObserver 等 React 动态创建 file input ===
+    frames = {frames}
+    if frames:
+        ub_cnt = await page.locator('div[class*="UploadFileSelector_iconContainer"]').count()
+        print(f"[yuanbao] UploadFileSelector count={{ub_cnt}}", file=sys.stderr)
+        if ub_cnt > 0:
+            try: await page.screenshot(path=r"{station_dir}" + "/yb_before_click.png")
+            except: pass
+            hob = await page.evaluate("""() => {{
+                return new Promise((resolve) => {{
+                    let done = false;
+                    const obs = new MutationObserver((mutations) => {{
+                        for (const m of mutations) {{
+                            for (const node of m.addedNodes) {{
+                                if (node.nodeType===1 && node.tagName==='INPUT' && node.type==='file') {{
+                                    if (!done) {{ done=true; obs.disconnect(); resolve(true); return; }}
+                                }}
+                            }}
+                        }}
+                    }});
+                    obs.observe(document.body, {{childList:true, subtree:true}});
+                    const btn = document.querySelector('div[class*="UploadFileSelector_iconContainer"]');
+                    if (btn) btn.click();
+                    else resolve(false);
+                    setTimeout(() => {{ if (!done) {{ obs.disconnect(); resolve(false); }} }}, 8000);
+                }});
+            }}""")
+            print(f"[yuanbao] MutationObserver={{hob}}", file=sys.stderr)
+            if hob:
+                await asyncio.sleep(0.5)
+                n = await page.locator('input[type="file"]').count()
+                print(f"[yuanbao] file inputs={{n}}", file=sys.stderr)
+                if n > 0:
+                    try:
+                        await page.locator('input[type="file"]').last.set_input_files(frames[:3])
+                        print(f"[yuanbao] set_input_files ok", file=sys.stderr)
+                        await asyncio.sleep(2)
+                    except Exception as eu:
+                        print(f"[yuanbao] set_input_files err: {{eu}}", file=sys.stderr)
+            try: await page.screenshot(path=r"{station_dir}" + "/yb_after_click.png")
+            except: pass
+
+    # === 改写 ===
     raw = {raw_text}
     topic = {topic}
     pmt = _R._build_prompt(raw, template={tmpl}, max_chars={max_chars}, topic=topic)
@@ -155,7 +198,6 @@ async def main():
                 break
         await asyncio.sleep(1.5)
 
-    # CDP disconnect
     await browser.close()
     await p.stop()
     print(json.dumps({{"rewritten": rw or None, "vision_desc": "", "error": ""}}, ensure_ascii=False))
