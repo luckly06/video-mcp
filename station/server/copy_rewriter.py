@@ -254,16 +254,32 @@ def has_profile():
     return _cookie_db() is not None
 
 
-def _build_prompt(original_text, template=None):
-    """拼装 prompt：用户模板（角色/自定义指令 · 可空） + 通用要求 + 原文。"""
+def _build_prompt(original_text, template=None, max_chars=None, topic=None):
+    """拼装 prompt：视频主题 → 角色模板 → 通用要求+字数 → 原文。"""
     parts = []
+    # 视频主题（用户手动描述，弥补 ASR 不准）
+    if topic and topic.strip():
+        parts.append("## 视频主题\n这个视频的内容是：" + topic.strip())
     if template:
         if template in REWRITE_TEMPLATES:
             parts.append("## 角色\n" + REWRITE_TEMPLATES[template])
         else:
-            # 用户在前端自由输入的模板 — 原样作为「自定义指令」插入
             parts.append("## 自定义指令\n" + template)
-    parts.append(SYSTEM_PROMPT)
+
+    # 动态字数约束：根据视频时长计算最大字数（中文 TTS 约 3 字/秒）
+    sys_lines = SYSTEM_PROMPT.strip().split("\n")
+    if max_chars:
+        # 替换硬编码的"30-100 字，适合 15-60 秒"为实际约束
+        new_lines = []
+        for line in sys_lines:
+            if "30-100 字" in line:
+                new_lines.append(f"4. **时长适配**：不超过 {max_chars} 字（视频仅 {max_chars//3} 秒），精炼表达核心信息")
+            else:
+                new_lines.append(line)
+        parts.append("\n".join(new_lines))
+    else:
+        parts.append(SYSTEM_PROMPT)
+
     parts.append("需要改写的原文：" + original_text)
     return "\n\n".join(parts)
 
@@ -459,14 +475,14 @@ async def _launch(p, channel, headless=True):
         raise RewriteError(f"浏览器启动失败: {msg[:150]}")
 
 
-async def _rewrite_async(original_text, template=None, timeout=60, headless=True):
+async def _rewrite_async(original_text, template=None, timeout=60, headless=True, max_chars=None, topic=None):
     """异步版：Playwright 操控 DeepSeek 网页，返回改写后文案。
 
     失败一律抛 RewriteError（携带用户可读原因），由 rewrite() 统一捕获。
     """
     from playwright.async_api import async_playwright
 
-    prompt = _build_prompt(original_text, template=template)
+    prompt = _build_prompt(original_text, template=template, max_chars=max_chars, topic=topic)
     channel = _pick_channel()
     if not has_profile():
         # 连 profile 都没建过 → 必然没登录，省一次浏览器启动
@@ -515,7 +531,7 @@ async def _rewrite_async(original_text, template=None, timeout=60, headless=True
                 pass
 
 
-def rewrite(original_text, template=None, timeout=60, headless=True):
+def rewrite(original_text, template=None, timeout=60, headless=True, max_chars=None, topic=None):
     """同步封装：调用 DeepSeek 改写文案。
 
     Args:
@@ -523,6 +539,8 @@ def rewrite(original_text, template=None, timeout=60, headless=True):
         template: 改写模板（"带货"/"解说"/"Vlog" 或自定义角色描述），None=无模板
         timeout: 回复最长等待秒数
         headless: 默认 True（后台静默改写，不弹窗打扰用户）
+        max_chars: 最大字数限制（根据视频时长计算，中文 TTS 约 3 字/秒）
+        topic: 视频内容简述（弥补 ASR 不准时的语义断层）
 
     Returns:
         str | None: 改写后的文案，失败返回 None（调用 get_last_error() 获取失败原因）
@@ -536,7 +554,8 @@ def rewrite(original_text, template=None, timeout=60, headless=True):
 
     try:
         return asyncio.run(_rewrite_async(original_text, template=template,
-                                          timeout=timeout, headless=headless))
+                                          timeout=timeout, headless=headless,
+                                          max_chars=max_chars, topic=topic))
     except RewriteError as e:
         _last_error = str(e)
         logger.error(f"DeepSeek 改写失败: {e}")

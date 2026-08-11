@@ -629,7 +629,7 @@ def _clamp_speed_for_floor(factor, base_dur):
 
 def dedup_video(src, params=None, out_name=None, seed=None,
                 level=None, dimensions=None, flip_mode=None, trim_phase=None,
-                tts_text=None, tts_voice="冰糖", tts_speed=1.0, rewrite_template=None):
+                tts_text=None, tts_voice="冰糖", tts_speed=1.0, rewrite_template=None, rewrite_topic=None):
     """
     对单个视频执行去重（本期增量：强度档 + 构图/时序维度 + pHash 自检升级 + 🆕 TTS 音频替换）。
 
@@ -806,7 +806,9 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
             if rewrite_template and REWRITER.is_available():
                 print(f"[TTS] 🚀 开始 DeepSeek 改写 (模板长度={len(rewrite_template)})...", flush=True)
-                rewritten = REWRITER.rewrite(raw_text, template=rewrite_template, headless=False)
+                dur = src_info.get("duration", 60)
+                max_chars = max(10, int(dur * 3))
+                rewritten = REWRITER.rewrite(raw_text, template=rewrite_template, headless=False, max_chars=max_chars, topic=rewrite_topic)
                 if rewritten:
                     print(f"[TTS] ✅ DeepSeek 改写完成: {len(rewritten)} 字", flush=True)
                     process_steps.append(f"DeepSeek 改写: ✅ 成功 ({len(rewritten)} 字)")
@@ -938,7 +940,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
 def batch_fission(src, count=5, params=None,
                   level=None, dimensions=None, flip_mode=None, cancel_token=None,
-                  tts_text=None, tts_voice="冰糖", tts_speed=1.0, rewrite_template=None):
+                  tts_text=None, tts_voice="冰糖", tts_speed=1.0, rewrite_template=None, rewrite_topic=None):
     """裂变：同一素材生成 count 个不同参数的变体（本期增量：档位/维度透传 + 距离矩阵）。
 
     每变体用不同 seed 保证互异；开启 flip 后自动轮换 h/v/90；产出后调
@@ -982,7 +984,7 @@ def batch_fission(src, count=5, params=None,
                                 level=level, dimensions=dimensions, flip_mode=variant_flip_mode,
                                 trim_phase=phase,
                                 tts_text=tts_text, tts_voice=tts_voice, tts_speed=tts_speed,
-                                rewrite_template=rewrite_template)
+                                rewrite_template=rewrite_template, rewrite_topic=rewrite_topic)
                 results.append({
                     "index": i + 1,
                     "output_path": r["output_path"],

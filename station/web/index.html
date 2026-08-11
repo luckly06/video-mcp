@@ -232,6 +232,10 @@
                 <span style="font-size:12px;color:var(--gray-400);font-weight:400;">（手动开关，勾上才会把字幕/ASR 原文发给 DeepSeek 改写）</span>
               </label>
               <div id="tts-template-wrap" style="display:none;">
+                <label for="tts-topic" style="font-size:13px;color:var(--gray-700);font-weight:500;display:block;margin-bottom:4px;">
+                  视频内容简述 <span style="font-size:11px;color:var(--gray-400);font-weight:400;">— 告诉 DeepSeek 这个视频拍的是什么，ASR 识别不准就靠它</span>
+                </label>
+                <input id="tts-topic" class="tts-textarea" style="height:36px;margin-bottom:10px;" placeholder="例如：海边夕阳慢动作，一个人走向镜头；或：剑客拔刀战斗片段" />
                 <label for="tts-template" style="font-size:13px;color:var(--gray-700);font-weight:500;display:block;margin-bottom:4px;">
                   改写模板
                 </label>

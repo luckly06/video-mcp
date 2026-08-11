@@ -251,6 +251,7 @@ TOOLS = [
                 "text": {"type": "string", "description": "手动提供的原始文案（优先级高于 src 自动提取）"},
                 "src": {"type": "string", "description": "视频文件名；设置后自动提取字幕或 ASR 得到原文"},
                 "template": {"type": "string", "description": "改写模板（带货/解说/Vlog 或自定义）"},
+                "topic": {"type": "string", "description": "视频内容简述（弥补 ASR 不准）：告诉 DeepSeek 这个视频拍的是什么"},
             },
             "required": [],
         },
@@ -338,6 +339,7 @@ def _exec_tool(name, args):
             tts_voice=args.get("tts_voice", "冰糖"),
             tts_speed=args.get("tts_speed", 1.0),
             rewrite_template=args.get("rewrite_template"),
+            rewrite_topic=args.get("rewrite_topic"),
         )
         r["job_id"] = _new_job("dedup", {"src": r["src"]["name"], "output": r["output_path"]})
         return r
@@ -386,25 +388,28 @@ def _exec_tool(name, args):
     if name == "rewrite_copy":
         import copy_rewriter as REWRITER  # noqa: E402
         template_param = args.get("template")
+        topic = args.get("topic")          # 🆕 视频内容简述
         # 方式1：手动提供文案
         if args.get("text"):
-            rewritten = REWRITER.rewrite(args["text"], template=template_param, headless=False)
+            rewritten = REWRITER.rewrite(args["text"], template=template_param, headless=False, topic=topic)
             return {"original": args["text"], "rewritten": rewritten, "error": REWRITER.get_last_error()}
-        # 方式2：传入 src，自动提取文案
+        # 方式2：传入 src，自动提取文案 + 根据视频时长限制字数
         src_name = args.get("src")
         if not src_name:
             raise P.PipelineError("请提供 text（手动文案）或 src（视频文件名）")
         info = P.probe_video(src_name)
+        duration = info.get("duration", 60)
+        max_chars = max(10, int(duration * 3))  # 中文 TTS ~3字/秒，最少10字
         src_path = P._resolve_safe(src_name, P.VIDEO_DIR, must_exist=True)
         raw_text = None
         source = ""
-        # 字幕提取
+        # 提取优先级：字幕 > (将来: 识图) > ASR
         if info.get("has_subtitle"):
             sub_text, _ = P.get_subtitle_text(str(src_path))
             if sub_text:
                 raw_text = sub_text
                 source = "subtitle"
-        # ASR 兜底
+        # ASR 兜底（Phase 2 替换为视觉识图）
         if not raw_text and info.get("audio_codec"):
             import asr_client as ASR  # noqa: E402
             if ASR.is_available():
@@ -414,8 +419,8 @@ def _exec_tool(name, args):
                     source = "asr"
         if not raw_text:
             raise P.PipelineError("视频无字幕且 ASR 未识别到文字，无法提取文案。请用手动输入。")
-        rewritten = REWRITER.rewrite(raw_text, template=template_param, headless=False)
-        return {"original": raw_text, "source": source, "rewritten": rewritten, "error": REWRITER.get_last_error()}
+        rewritten = REWRITER.rewrite(raw_text, template=template_param, headless=False, max_chars=max_chars)
+        return {"original": raw_text, "source": source, "rewritten": rewritten, "error": REWRITER.get_last_error(), "max_chars": max_chars, "duration": duration}
     if name == "deepseek_login":
         import copy_rewriter as REWRITER  # noqa: E402
         # 后台线程跑登录（不阻塞 MCP 响应），前端轮询 deepseek_status 等结果

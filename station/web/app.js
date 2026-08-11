@@ -957,6 +957,7 @@ function readTTS() {
     return {
       tts_text: null,
       rewrite_template: template,  // 空 = 不改写，非空 = DeepSeek 改写
+      rewrite_topic: (document.getElementById("tts-topic") || {}).value || "",
       tts_voice: elVoice ? elVoice.value : "冰糖",
       tts_speed: elSpeed ? parseFloat(elSpeed.value) || 1.0 : 1.0,
     };
@@ -1922,13 +1923,15 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (!src) { toast("请先上传并探测视频素材", "warn"); return; }
       var elTemplate = document.getElementById("tts-template");
       var template = elTemplate ? elTemplate.value.trim() : "";
+      var elTopic = document.getElementById("tts-topic");
+      var topic = elTopic ? elTopic.value.trim() : "";
       var origLabel = this.textContent;
       this.disabled = true;
 
       // 阶段1：提取文案
       this.textContent = "提取视频文案中...";
       try {
-        var result = await callTool("rewrite_copy", { src: src, template: template || "" });
+        var result = await callTool("rewrite_copy", { src: src, template: template || "", topic: topic });
 
         if (result.kind !== "ok" || !result.data) {
           var errText = result.text || "未知错误";
@@ -1952,10 +1955,11 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
 
         var d = result.data;
         if (d.rewritten && previewBox) {
+          var durText = d.duration ? ' (视频 ' + Math.round(d.duration) + 's，上限 ' + d.max_chars + ' 字)' : '';
           previewBox.innerHTML =
-            '<div style="font-size:12px;color:#4ECB71;font-weight:600;margin-bottom:6px;">DeepSeek 改写结果</div>' +
+            '<div style="font-size:12px;color:#4ECB71;font-weight:600;margin-bottom:6px;">DeepSeek 改写结果<span style="font-size:10px;color:var(--gray-400);font-weight:400;">' + durText + '</span></div>' +
             '<div style="font-size:11px;color:var(--gray-400);margin-bottom:4px;">原文 (' + (d.source || '') + ')：' + escapeHtml(d.original || '') + '</div>' +
-            '<div style="font-size:13px;color:#E2F5E8;margin-bottom:8px;line-height:1.6;">' + escapeHtml(d.rewritten) + '</div>' +
+            '<div style="font-size:13px;color:#E2F5E8;margin-bottom:8px;line-height:1.6;">' + escapeHtml(d.rewritten) + '<span style="font-size:10px;color:var(--gray-500);margin-left:4px;">(' + d.rewritten.length + '字)</span></div>' +
             '<div style="display:flex;gap:8px;">' +
             '<button type="button" onclick="confirmRewriteText()" class="btn btn-mini" style="background:#16845B;color:#fff;"><svg class="ico-16" style="color:#6EE7B7"><use href=\'#ico-check\'/></svg> 确认使用此文案</button>' +
             '<button type="button" onclick="cancelRewritePreview()" class="btn btn-mini"><svg class="ico-16" style="color:#EF4444"><use href=\'#ico-xcircle\'/></svg> 不用</button>' +
