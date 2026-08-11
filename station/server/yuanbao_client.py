@@ -183,8 +183,11 @@ async def main():
         traceback.print_exc(file=sys.stderr)
         print(json.dumps({{"error": str(e)}}, ensure_ascii=False))
     finally:
-        # 不关 browser！等下一次 check/login 复用 profile
-        pass
+        # 关闭浏览器，释放 profile 锁，cookie 已写入磁盘
+        try:
+            await browser.close()
+        except:
+            pass
 
 asyncio.run(main())
 '''
