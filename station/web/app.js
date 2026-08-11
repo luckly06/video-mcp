@@ -1918,16 +1918,31 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
         var d = result.data;
         if (d.rewritten && previewBox) {
           var durText = d.duration ? ' (视频 ' + Math.round(d.duration) + 's，上限 ' + d.max_chars + ' 字)' : '';
+          // 🆕 砂纸纹理底纹 — 包住原文和改写后两块
+          var sandpaperSvg =
+            '<svg class="sandpaper-svg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">' +
+              '<defs><filter id="sandTexture">' +
+                '<feTurbulence result="sand" seed="20" numOctaves="4" baseFrequency="0.6" type="fractalNoise"></feTurbulence>' +
+                '<feColorMatrix values="0.8 0 0 0 0.1  0 0.7 0 0 0.05  0 0 0.6 0 0.02  0 0 0 1 0" type="matrix"></feColorMatrix>' +
+              '</filter></defs>' +
+              '<rect filter="url(#sandTexture)" width="100%" height="100%"></rect>' +
+            '</svg>';
+          function spBlock(inner) {
+            return '<div class="sandpaper-pattern">' + sandpaperSvg + inner + '</div>';
+          }
+          var originalHtml = '<div class="rp-original">📄 原文 (' + (d.source || '') + ')：' + escapeHtml(d.original || '') + '</div>';
+          var rewrittenHtml = '<div class="rp-rewritten">' + escapeHtml(d.rewritten) + '<span class="rp-meta">(' + d.rewritten.length + '字)</span></div>';
+          previewBox.dataset.rewritten = d.rewritten;  // 供「确认使用」直接读取
           previewBox.innerHTML =
-            '<div style="font-size:12px;color:#4ECB71;font-weight:600;margin-bottom:6px;">DeepSeek 改写结果<span style="font-size:10px;color:var(--gray-400);font-weight:400;">' + durText + '</span></div>' +
-            '<div style="font-size:11px;color:var(--gray-400);margin-bottom:4px;">原文 (' + (d.source || '') + ')：' + escapeHtml(d.original || '') + '</div>' +
-            '<div style="font-size:13px;color:#E2F5E8;margin-bottom:8px;line-height:1.6;">' + escapeHtml(d.rewritten) + '<span style="font-size:10px;color:var(--gray-500);margin-left:4px;">(' + d.rewritten.length + '字)</span></div>' +
-            '<div style="display:flex;gap:8px;">' +
+            '<div class="rp-title">✦ 元宝改写结果<span class="rp-meta">' + durText + '</span></div>' +
+            spBlock(originalHtml) +
+            spBlock(rewrittenHtml) +
+            '<div class="rp-actions">' +
             '<button type="button" onclick="confirmRewriteText()" class="btn btn-mini" style="background:#16845B;color:#fff;"><svg class="ico-16" style="color:#6EE7B7"><use href=\'#ico-check\'/></svg> 确认使用此文案</button>' +
-            '<button type="button" onclick="cancelRewritePreview()" class="btn btn-mini"><svg class="ico-16" style="color:#EF4444"><use href=\'#ico-xcircle\'/></svg> 不用</button>' +
+            '<button type="button" onclick="cancelRewritePreview()" class="btn btn-mini" style="background:#444;color:#fff;"><svg class="ico-16" style="color:#FFA0A0"><use href=\'#ico-xcircle\'/></svg> 不用</button>' +
             '</div>';
           previewBox.style.display = "";
-          toast("DeepSeek 改写完成", "ok");
+          toast("元宝改写完成", "ok");
         } else {
           var diagMsg = d.error || "";
           previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">未获得改写结果</div>' +
@@ -1948,24 +1963,14 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
   }
   // 🆕 确认/丢弃改写文案（全局函数，由动态生成的按钮调用）
   window.confirmRewriteText = function () {
-    var text = (document.getElementById("rewrite-preview").innerText || "").trim();
-    // 提取改写文案（跳过标题行）
-    var lines = text.split("\n");
-    var content = "";
-    var found = false;
-    for (var i = 0; i < lines.length; i++) {
-      if (found) content += lines[i] + "\n";
-      if (lines[i].indexOf("原文") === 0) { found = true; continue; }
-      // 跳过按钮文字行
-      if (lines[i] === "确认使用此文案" || lines[i] === "不用") continue;
-    }
-    if (!content.trim()) { toast("未找到改写文案", "warn"); return; }
-    content = content.replace(/\n*(确认使用此文案|不用)\n*/g, "").trim();
+    var previewBox = document.getElementById("rewrite-preview");
+    var content = (previewBox.dataset.rewritten || "").trim();
+    if (!content) { toast("未找到改写文案", "warn"); return; }
     // 切到手动模式
     document.querySelector('.tts-mode-btn[data-mode="manual"]').click();
     var elText = document.getElementById("tts-text");
     if (elText) { elText.value = content; elText.focus(); }
-    document.getElementById("rewrite-preview").style.display = "none";
+    previewBox.style.display = "none";
     toast("文案已填入，请点击「开始单条去重」", "ok");
   };
   window.cancelRewritePreview = function () {
