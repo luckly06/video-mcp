@@ -153,7 +153,7 @@ async def main():
                     cropped.save(buf, 'PNG')
                     qr_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         except Exception as ex:
-            print(f"QR crop fallback: {ex}", file=sys.stderr)
+            print(f"QR crop fallback: {{ex}}", file=sys.stderr)
         
         print(json.dumps({{
             "ok": True,
