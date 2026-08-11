@@ -137,8 +137,7 @@ async def main():
     vision_desc = ""
 
     async def upload_frames(fs, label=""):
-        """把帧图传到元宝输入框。1) 等页面就绪 2) 诊断打印所有 file input
-        3) page.evaluate 直调 click 触发原生对话框 4) file_chooser 设文件"""
+        """把帧图传到元宝输入框。1) 等页面就绪 2) DOM dump 诊断 3) 多层上传"""
         if not fs:
             return False
         fs3 = fs[:3]
@@ -148,11 +147,17 @@ async def main():
             await page.wait_for_selector(sel, timeout=15000)
         except Exception:
             pass
-        # 诊断：列出所有 file input
+        # 诊断：列出所有 file input + 保存 DOM 到文件供分析
         cnt = await page.locator('input[type="file"]').count()
-        print(f"[yuanbao-upload{{label}}] found {{cnt}} file input(s) on page", file=sys.stderr)
-        if cnt == 0:
-            return False
+        print(f"[yuanbao-upload{{label}}] found {{cnt}} file input(s)", file=sys.stderr)
+        # 🆕 dump 页面 DOM
+        try:
+            html = await page.content()
+            dump = Path(r"{station_dir}") / f"yuanbao_page_{{label.strip('-')}}.html"
+            dump.write_text(html, encoding="utf-8")
+            print(f"[yuanbao-upload{{label}}] DOM saved to {{dump}}", file=sys.stderr)
+        except Exception:
+            pass
         inp = page.locator('input[type="file"]').first
         # 策略 A：page.evaluate 直调 click（绕过 Playwright actionability），拦截 file_chooser
         try:
