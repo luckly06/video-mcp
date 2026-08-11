@@ -32,9 +32,18 @@ import pipeline as P  # noqa: E402
 # ---------------------------------------------------------------------------
 # Feature 2.1 — 路径穿越防护
 # ---------------------------------------------------------------------------
-def test_default_video_dir_is_project_input():
-    project_dir = _STATION.parent
-    assert P.VIDEO_DIR.resolve() == (project_dir / "input").resolve()
+def test_default_video_dir_is_temp_upload_dir():
+    """素材默认落系统临时上传目录（上传即用、超 1h 自动清理），不再是项目内 input/。
+
+    历史：本用例原断言 project/input/，但 VIDEO_DIR 已改为 tempdir()/vu-uploads
+    并由 mcp_server 定时清理；断言未同步，属陈旧用例（非产品缺陷）。
+    VU_ASSETS 环境变量仍可覆盖，故这里只锚定「默认值 = 临时目录下的 vu-uploads」。
+    """
+    import tempfile
+    expected = (Path(tempfile.gettempdir()) / "vu-uploads").resolve()
+    assert P.VIDEO_DIR.resolve() == expected
+    # 关键安全属性：素材目录与产物目录必须是两个不同的白名单根
+    assert P.VIDEO_DIR.resolve() != P.OUTPUT_DIR.resolve()
 
 
 @pytest.mark.parametrize("bad", [
@@ -365,15 +374,22 @@ def test_batch_fission_rotates_flip_modes_between_variants(monkeypatch):
     assert result["separation"]["flip_spread"] is True
 
 
-@pytest.mark.parametrize("md5s,matrix_pass,expected", [
-    (["a", "b"], True, True),
-    (["a", "a"], True, False),
-    (["a", "b"], False, False),
-    (["a", "b"], None, False),
+@pytest.mark.parametrize("md5s,matrix_pass,ssim_pass,expected", [
+    (["a", "b"], True, True, True),      # 三门全过 → 可交付
+    (["a", "a"], True, True, False),     # MD5 重复 → 拒
+    (["a", "b"], False, True, False),    # phash 矩阵不过 → 拒
+    (["a", "b"], None, True, False),     # phash 矩阵未明确通过 → 拒
+    (["a", "b"], True, False, False),    # SSIM 结构过近 → 拒（第三重门）
 ])
-def test_batch_fission_delivery_ready_requires_both_gates(
-        monkeypatch, md5s, matrix_pass, expected):
-    """只有 MD5 全唯一且矩阵明确通过时才允许交付。"""
+def test_batch_fission_delivery_ready_requires_all_three_gates(
+        monkeypatch, md5s, matrix_pass, ssim_pass, expected):
+    """交付门 = MD5 全唯一 且 pHash 矩阵明确通过 且 SSIM 矩阵通过。
+
+    历史：本用例原名 requires_both_gates 且只 stub distance_matrix，
+    在 SSIM 被加为「裂变第三重交付门」后，真实 ssim_matrix 会对不存在的
+    产物路径求值而返回假值，导致 expected=True 的参数组失败 —— 属用例未随
+    设计同步（非产品缺陷）。此处补齐第三门 stub 并新增一条 SSIM 拒绝用例。
+    """
     monkeypatch.setattr(P, "probe_video", lambda _src: {
         "name": "x.mp4", "duration": 10.0,
     })
@@ -393,6 +409,11 @@ def test_batch_fission_delivery_ready_requires_both_gates(
     monkeypatch.setattr(P.M, "distance_matrix", lambda _paths: {
         "count": 2, "all_pass": matrix_pass,
         "matrix": [[None, 15], [15, None]],
+        "too_close_pairs": [], "min_pair": None,
+    })
+    monkeypatch.setattr(P.M, "ssim_matrix", lambda _paths, **_kw: {
+        "available": True, "count": 2, "all_pass": ssim_pass,
+        "matrix": [[None, 0.42], [0.42, None]],
         "too_close_pairs": [], "min_pair": None,
     })
     result = P.batch_fission("x.mp4", count=2)

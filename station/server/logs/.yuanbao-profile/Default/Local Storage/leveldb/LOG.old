@@ -1,0 +1,13 @@
+2026/08/11-10:06:33.268 7b28 Reusing MANIFEST F:\ai_agent\dev2\xiaomi\ai\test11\video-uniqueness\station\server\logs\.yuanbao-profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/08/11-10:06:33.273 7b28 Recovering log #12
+2026/08/11-10:06:33.274 7b28 Level-0 table #15: started
+2026/08/11-10:06:33.280 7b28 Level-0 table #15: 39462 bytes OK
+2026/08/11-10:06:33.286 7b28 Delete type=0 #12
+2026/08/11-10:06:33.287 bec Compacting 4@0 + 0@1 files
+2026/08/11-10:06:33.294 bec Generated table #17@0: 31 keys, 39559 bytes
+2026/08/11-10:06:33.294 bec Compacted 4@0 + 0@1 files => 39559 bytes
+2026/08/11-10:06:33.295 bec compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/08/11-10:06:33.296 bec Delete type=2 #7
+2026/08/11-10:06:33.296 bec Delete type=2 #10
+2026/08/11-10:06:33.296 bec Delete type=2 #13
+2026/08/11-10:06:33.296 bec Delete type=2 #15

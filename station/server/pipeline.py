@@ -29,6 +29,9 @@ from pathlib import Path
 # 感知度量域（模块一）。同目录模块，保证 pytest / server 两种入口都能导入。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics as M  # noqa: E402
+import tts_client as TTS  # noqa: E402 — MiMo TTS v2.5 语音合成（音频轨道替换）
+import asr_client as ASR  # noqa: E402 — sherpa-onnx 本地语音识别
+import copy_rewriter as REWRITER  # noqa: E402 — DeepSeek 文案改写（Playwright）
 
 # ---------------------------------------------------------------------------
 # 路径锚定：本文件位于 video-uniqueness/station/server/pipeline.py（自包含版）
@@ -288,6 +291,7 @@ def probe_video(path, base_dir=None):
     fmt = data.get("format", {})
     vstream = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), {})
     astream = next((s for s in data.get("streams", []) if s.get("codec_type") == "audio"), {})
+    sstream = next((s for s in data.get("streams", []) if s.get("codec_type") == "subtitle"), None)
 
     def _fps(rate):
         try:
@@ -309,8 +313,58 @@ def probe_video(path, base_dir=None):
         "video_codec": vstream.get("codec_name", ""),
         "fps": _fps(vstream.get("r_frame_rate", "0/0")),
         "audio_codec": astream.get("codec_name", ""),
+        "has_subtitle": sstream is not None,
+        "subtitle_codec": sstream.get("codec_name", "") if sstream else "",
         "md5": md5_of(p),
     }
+
+
+def get_subtitle_text(path):
+    """从视频内嵌字幕轨道提取纯文本。
+
+    返回 (text, source)：
+      - source="subtitle"：ffmpeg 直接从内嵌字幕轨提取 SRT → 纯文本
+      - source=None：无字幕轨
+    空字符串表示有字幕轨但内容为空。
+    """
+    p = _resolve_safe(path, VIDEO_DIR, must_exist=True)
+
+    # 先探测有没有字幕流
+    info = probe_video(str(p))
+    if not info["has_subtitle"]:
+        return None, None
+
+    # 用 ffmpeg 直接抽取字幕到 stdout（SRT 格式）
+    extract_cmd = [
+        str(FFMPEG), "-y",
+        "-i", str(p),
+        "-map", "0:s:0",
+        "-f", "srt",
+        "-",
+    ]
+    rc, out, err = _run(extract_cmd, timeout=60)
+    if rc != 0 or not out.strip():
+        return None, None   # 提取失败或字幕为空
+
+    # SRT → 纯文本：去序号、时间戳、空行
+    lines = out.splitlines()
+    text_parts = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.isdigit():           # 序号行
+            continue
+        if "-->" in line:            # 时间戳行
+            continue
+        # 去除 SRT 内嵌的 <b>/<i>/<font> 等标签
+        import re
+        clean = re.sub(r"<[^>]+>", "", line)
+        if clean.strip():
+            text_parts.append(clean.strip())
+
+    full_text = "".join(text_parts)
+    return full_text, "subtitle"
 
 
 # ---------------------------------------------------------------------------
@@ -574,9 +628,10 @@ def _clamp_speed_for_floor(factor, base_dur):
 
 
 def dedup_video(src, params=None, out_name=None, seed=None,
-                level=None, dimensions=None, flip_mode=None, trim_phase=None):
+                level=None, dimensions=None, flip_mode=None, trim_phase=None,
+                tts_text=None, tts_voice="冰糖", tts_speed=1.0, rewrite_template=None, rewrite_topic=None):
     """
-    对单个视频执行去重（本期增量：强度档 + 构图/时序维度 + pHash 自检升级）。
+    对单个视频执行去重（本期增量：强度档 + 构图/时序维度 + pHash 自检升级 + 🆕 TTS 音频替换）。
 
     src: 文件名或绝对路径（经 _resolve_safe 白名单校验）
     level: 强度档 light/medium/heavy（默认 medium）
@@ -588,6 +643,11 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     trim_phase: ∈[0,1]，裂变专用。把去头尾配比按相位铺开而非 iid 随机取，
         使各变体在源时间轴上的错位量最大化（见 _calc_trim phase 参数说明）。
         None = 单片模式，保持原随机行为。
+    tts_text: 🆕 TTS 配音文案（None = 不启用音频替换，保留原始音轨；填了文案则直接用）
+    tts_voice: 🆕 TTS 音色（冰糖/茉莉/苏打/白桦），默认冰糖
+    tts_speed: 🆕 TTS 语速（0.5-2.0），默认 1.0
+    rewrite_template: 🆕 DeepSeek 改写模板（"带货"/"解说"/"Vlog" 或自定义角色描述）。
+        None=不改写；设置后自动从字幕/ASR 提取原文并用 DeepSeek 改写为配音文案。
     返回处理报告字典（checks 含 phash 与 all_passed）。
     """
     # 路径安全：src 必须在 assets 白名单内
@@ -696,6 +756,134 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         _cleanup_failed_output(out_path)
         raise PipelineError(_ffmpeg_error_message(err, out_path))
 
+    # --- TTS 音频轨道替换（🆕 模块六）---
+    # 文案来源：用户手动输入 > 自动提取(字幕优先→ASR回退) + 可选 DeepSeek 改写 > 留空
+    tts_applied = False
+    tts_source = None
+
+    if tts_text:
+        # 用户手动提供了文案 — 直接用
+        tts_source = "user"
+        applied["tts_source"] = "user"
+        applied["tts_process"] = "手动输入文案"
+    else:
+        # 尝试自动提取文本（字幕优先，失败回退 ASR）
+        raw_text = None
+        if src_info.get("has_subtitle"):
+            sub_text, _ = get_subtitle_text(str(src_path))
+            if sub_text:
+                raw_text = sub_text
+                tts_source = "subtitle"
+                applied["tts_source"] = "subtitle"
+                print(f"[TTS] 从字幕提取到文案: {len(raw_text)} 字", flush=True)
+            else:
+                print(f"[TTS] 字幕提取为空", flush=True)
+
+        if not raw_text and src_info.get("audio_codec") and ASR.is_available():
+            print("[TTS] 无字幕或提取为空，尝试 ASR...", flush=True)
+            asr_text = ASR.transcribe_video(str(src_path), FFMPEG)
+            if asr_text:
+                raw_text = asr_text
+                tts_source = "asr"
+                applied["tts_source"] = "asr"
+                print(f"[TTS] ASR 识别完成: {len(asr_text)} 字", flush=True)
+            else:
+                print("[TTS] ASR 未识别到文字", flush=True)
+        else:
+            if not src_info.get("has_subtitle"):
+                print("[TTS] 视频无字幕轨", flush=True)
+            if not raw_text and not ASR.is_available():
+                print("[TTS] ASR 不可用（sherpa-onnx 未安装/模型缺失）", flush=True)
+            if not raw_text and not src_info.get("audio_codec"):
+                print("[TTS] 视频无音频轨", flush=True)
+
+        if raw_text:
+            rewrite_info = f"rewrite_template={'有' if rewrite_template else '无'}, REWRITER_available={REWRITER.is_available()}"
+            print(f"[TTS] 原文已提取 ({len(raw_text)} 字), {rewrite_info}", flush=True)
+
+            # 🆕 构建 tts_process 追踪链（前端报告展示）
+            process_steps = [f"提取原文: {len(raw_text)} 字 (来源: {tts_source})"]
+
+            if rewrite_template and REWRITER.is_available():
+                print(f"[TTS] 🚀 开始 DeepSeek 改写 (模板长度={len(rewrite_template)})...", flush=True)
+                dur = src_info.get("duration", 60)
+                max_chars = max(10, int(dur * 3))
+                rewritten = REWRITER.rewrite(raw_text, template=rewrite_template, headless=False, max_chars=max_chars, topic=rewrite_topic)
+                if rewritten:
+                    print(f"[TTS] ✅ DeepSeek 改写完成: {len(rewritten)} 字", flush=True)
+                    process_steps.append(f"DeepSeek 改写: ✅ 成功 ({len(rewritten)} 字)")
+                    tts_text = rewritten
+                    tts_source = tts_source + "_rewrite"
+                else:
+                    print("[TTS] ⚠️ DeepSeek 改写失败，降级用原文", flush=True)
+                    err = REWRITER.get_last_error()
+                    process_steps.append(f"DeepSeek 改写: ❌ 失败 ({err or '未知原因'})，用原文")
+                    if err:
+                        applied["rewrite_error"] = err
+                    tts_text = raw_text
+                    tts_source = tts_source + "_fallback"
+                applied["tts_source"] = tts_source
+                applied["tts_process"] = "  →  ".join(process_steps)
+            else:
+                if not rewrite_template:
+                    process_steps.append("DeepSeek 改写: — 跳过 (未启用)")
+                    print("[TTS] DeepSeek 改写未启用", flush=True)
+                else:
+                    process_steps.append("DeepSeek 改写: — 跳过 (Playwright 不可用)")
+                    print("[TTS] Playwright 不可用，跳过改写", flush=True)
+                tts_text = raw_text
+                applied["tts_source"] = tts_source
+                applied["tts_process"] = "  →  ".join(process_steps)
+        else:
+            # 🆕 没有提取到任何文案 — 给用户明确的反馈
+            applied["tts_source"] = "none"
+            applied["tts_process"] = "未提取到文案 (视频无字幕 + ASR 无识别结果)"
+            applied["tts_warning"] = "无配音：视频既无字幕轨，ASR 也未识别到语音。请在手动模式下输入文案。"
+            print("[TTS] 无文案可用，跳过 TTS", flush=True)
+
+    if tts_text and TTS.is_available():
+        tts_temp = None
+        merged_temp = None
+        try:
+            tts_temp = TTS.tts_to_temp(tts_text, voice=tts_voice, speed=tts_speed)
+            # 用 ffmpeg 合并：视频=产物，音频=TTS WAV。
+            # apad 补齐静音（TTS 短于视频时尾部静音） + shortest 对齐（TTS 长于视频时截断）
+            merged_temp = out_path.with_suffix(".merged.mp4")
+            merge_cmd = [
+                str(FFMPEG), "-y",
+                "-i", str(out_path),
+                "-i", str(tts_temp),
+                "-filter_complex", "[1:a]apad[a]",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "128k",
+                "-map", "0:v:0", "-map", "[a]",
+                "-shortest",
+                str(merged_temp),
+            ]
+            rc2, out2, err2 = _run(merge_cmd, timeout=120)
+            if rc2 == 0:
+                # 原子替换：os.replace 直接覆盖，避免 safe-delete 沙箱拦截 unlink
+                os.replace(merged_temp, out_path)
+                tts_applied = True
+            else:
+                _cleanup_failed_output(merged_temp)
+                applied["tts_warning"] = f"TTS 合并失败（视频已保留原始音轨）: {err2[-200:]}"
+        except Exception as e:
+            applied["tts_warning"] = f"TTS 生成/合并失败: {e}"
+        finally:
+            if tts_temp and tts_temp.exists():
+                try:
+                    tts_temp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    # 回填 TTS 参数到 applied（前端展示 + 审计）
+    if tts_text:
+        applied["tts_text"] = tts_text[:100] + ("..." if len(tts_text) > 100 else "")
+        applied["tts_voice"] = tts_voice
+        applied["tts_speed"] = tts_speed
+        applied["tts_applied"] = tts_applied
+
     try:
         out_info = probe_video(str(out_path), base_dir=OUTPUT_DIR)
     except Exception:
@@ -751,7 +939,8 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
 
 def batch_fission(src, count=5, params=None,
-                  level=None, dimensions=None, flip_mode=None, cancel_token=None):
+                  level=None, dimensions=None, flip_mode=None, cancel_token=None,
+                  tts_text=None, tts_voice="冰糖", tts_speed=1.0, rewrite_template=None, rewrite_topic=None):
     """裂变：同一素材生成 count 个不同参数的变体（本期增量：档位/维度透传 + 距离矩阵）。
 
     每变体用不同 seed 保证互异；开启 flip 后自动轮换 h/v/90；产出后调
@@ -793,7 +982,9 @@ def batch_fission(src, count=5, params=None,
                 r = dedup_video(src, params=params, out_name=out_name,
                                 seed=random.randint(1, 10 ** 9),
                                 level=level, dimensions=dimensions, flip_mode=variant_flip_mode,
-                                trim_phase=phase)
+                                trim_phase=phase,
+                                tts_text=tts_text, tts_voice=tts_voice, tts_speed=tts_speed,
+                                rewrite_template=rewrite_template, rewrite_topic=rewrite_topic)
                 results.append({
                     "index": i + 1,
                     "output_path": r["output_path"],

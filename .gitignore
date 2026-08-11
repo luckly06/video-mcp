@@ -8,6 +8,8 @@ output/*
 !output/.gitkeep
 station/logs/*
 !station/logs/.gitkeep
+station/logs/.deepseek-profile/
+station/logs/.yuanbao-profile/
 .claude/settings.local.json
 **/.claude/settings.local.json
 __pycache__/
@@ -19,3 +21,9 @@ venv/
 station/_exp_*.py
 station/_diag_*.py
 station/_smoke_*.py
+# 调试截图与 DOM dump（不提交）
+station/server/yb_*.png
+station/server/yuanbao_page_*.html
+station/server/_patch_*.py
+station/server/_new_body*.txt
+.env

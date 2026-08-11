@@ -19,6 +19,20 @@ Hooks 由外层框架（pre_tool_guard / post_tool_audit）在调用链路注入
 
 import os
 import sys
+from pathlib import Path
+
+# 自动加载 .env（本地开发用，不依赖 python-dotenv）
+_ENV_FILE = Path(__file__).resolve().parent / ".env"
+if _ENV_FILE.exists():
+    for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+import sys
 import re
 import json
 import uuid
@@ -140,7 +154,7 @@ TOOLS = [
     },
     {
         "name": "dedup_video",
-        "description": "对单个视频去重（画面微调+微旋转+帧率+降噪+码率），保持分辨率，改变MD5。调用前须先 probe_video。",
+        "description": "对单个视频去重（画面微调+微旋转+帧率+降噪+码率+crop/flip/speed/trim+🆕TTS音频替换），保持分辨率，改变MD5。调用前须先 probe_video。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -151,6 +165,10 @@ TOOLS = [
                 "dimensions": {"type": "object", "description": "维度开关：picture/rotate/crop/flip/speed/trim 六个布尔；flip 默认 false，开了必传 flip_mode"},
                 "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
                 "seed": {"type": "integer", "description": "随机种子；缺省随机回填"},
+                "tts_text": {"type": "string", "description": "🆕 TTS 配音文案；提供后将以 MiMo TTS 生成音频替换原视频音轨"},
+                "tts_voice": {"type": "string", "enum": ["冰糖", "茉莉", "苏打", "白桦"], "description": "🆕 TTS 音色；默认冰糖"},
+                "tts_speed": {"type": "number", "description": "🆕 TTS 语速倍率（0.5-2.0）；默认 1.0"},
+                "rewrite_template": {"type": "string", "description": "🆕 DeepSeek 改写模板（带货/解说/Vlog 或自定义）；设置后自动从字幕/ASR 提取文案并用 DeepSeek 改写"},
             },
             "required": ["src"],
         },
@@ -158,7 +176,7 @@ TOOLS = [
     },
     {
         "name": "batch_fission",
-        "description": "裂变：同一素材生成 count 个不同参数的变体（每个 MD5 互不相同）。",
+        "description": "裂变：同一素材生成 count 个不同参数的变体（每个 MD5 互不相同）。🆕 支持 TTS 音频替换。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -169,6 +187,10 @@ TOOLS = [
                 "dimensions": {"type": "object", "description": "维度开关：picture/rotate/crop/flip/speed/trim 六个布尔；flip 默认 false，开了必传 flip_mode"},
                 "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
                 "task_id": {"type": "string", "description": "可选：客户端生成的批量任务句柄，用于运行中取消"},
+                "tts_text": {"type": "string", "description": "🆕 TTS 配音文案；提供后每个变体将以 MiMo TTS 替换音频轨"},
+                "tts_voice": {"type": "string", "enum": ["冰糖", "茉莉", "苏打", "白桦"], "description": "🆕 TTS 音色；默认冰糖"},
+                "tts_speed": {"type": "number", "description": "🆕 TTS 语速倍率（0.5-2.0）；默认 1.0"},
+                "rewrite_template": {"type": "string", "description": "🆕 DeepSeek 改写模板；设置后每个变体自动从字幕/ASR 提取文案并用 DeepSeek 改写"},
             },
             "required": ["src", "count"],
         },
@@ -213,6 +235,51 @@ TOOLS = [
             "required": ["name"],
         },
         "_tier": "blocked",
+    },
+    {
+        "name": "list_voices",
+        "description": "🆕 列出 MiMo TTS 可用音色。返回 id/lang/gender 列表，供前端选音色。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
+    },
+    {
+        "name": "rewrite_copy",
+        "description": "🆕 DeepSeek 改写预览：传入视频文件名或直接文案，自动提取字幕/ASR 后用 DeepSeek 改写为配音文案。会打开浏览器窗口，需先关闭 Edge/Chrome。返回 {original, rewritten} 供用户预览确认。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "手动提供的原始文案（优先级高于 src 自动提取）"},
+                "src": {"type": "string", "description": "视频文件名；设置后自动提取字幕或 ASR 得到原文"},
+                "template": {"type": "string", "description": "改写模板（带货/解说/Vlog 或自定义）"},
+                "topic": {"type": "string", "description": "视频内容简述（弥补 ASR 不准）：告诉 DeepSeek 这个视频拍的是什么"},
+            },
+            "required": [],
+        },
+        "_tier": "audit",
+    },
+    {
+        "name": "deepseek_login",
+        "description": "🆕 首次使用前打开浏览器扫码登录 DeepSeek（只需一次）。会弹出浏览器窗口，登录后自动关闭。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "warned",
+    },
+    {
+        "name": "deepseek_status",
+        "description": "🆕 查询 DeepSeek 登录状态：是否已登录、profile 是否已建立。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
+    },
+    {
+        "name": "yuanbao_login",
+        "description": "打开浏览器扫码登录腾讯元宝（只需一次）。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
+    },
+    {
+        "name": "yuanbao_status",
+        "description": "🆕 查询腾讯元宝登录状态。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
     },
 ]
 
@@ -266,6 +333,11 @@ def _exec_tool(name, args):
     if name == "probe_video":
         return P.probe_video(args["src"])
     if name == "dedup_video":
+        rwt = args.get("rewrite_template")
+        if rwt:
+            print(f"[MCP] dedup_video 收到 rewrite_template（长度={len(rwt)}）")
+        else:
+            print(f"[MCP] dedup_video rewrite_template=空，跳过改写")
         r = P.dedup_video(
             args["src"],
             params=args.get("params"),
@@ -275,6 +347,11 @@ def _exec_tool(name, args):
             dimensions=args.get("dimensions"),
             flip_mode=args.get("flip_mode"),
             trim_phase=args.get("trim_phase"),
+            tts_text=args.get("tts_text"),
+            tts_voice=args.get("tts_voice", "冰糖"),
+            tts_speed=args.get("tts_speed", 1.0),
+            rewrite_template=args.get("rewrite_template"),
+            rewrite_topic=args.get("rewrite_topic"),
         )
         r["job_id"] = _new_job("dedup", {"src": r["src"]["name"], "output": r["output_path"]})
         return r
@@ -298,6 +375,10 @@ def _exec_tool(name, args):
                 dimensions=args.get("dimensions"),
                 flip_mode=args.get("flip_mode"),
                 cancel_token=token,
+                tts_text=args.get("tts_text"),
+                tts_voice=args.get("tts_voice", "冰糖"),
+                tts_speed=args.get("tts_speed", 1.0),
+                rewrite_template=args.get("rewrite_template"),
             )
         finally:
             with _ACTIVE_FISSION_LOCK:
@@ -313,6 +394,94 @@ def _exec_tool(name, args):
         return {"templates": P.list_watermark_templates()}
     if name == "remove_watermark":
         return P.remove_watermark(args["src"], args["platform"], out_name=args.get("out_name"))
+    if name == "list_voices":
+        import tts_client as TTS_V  # noqa: E402 同目录，不污染顶部 import
+        return {"voices": TTS_V.list_voices(), "available": TTS_V.is_available()}
+    if name == "rewrite_copy":
+        import copy_rewriter as REWRITER  # noqa: E402
+        template_param = args.get("template")
+        topic = args.get("topic")          # 🆕 视频内容简述
+        # 方式1：手动文案 → 元宝改写
+        if args.get("text"):
+            import yuanbao_client as YB  # noqa: E402
+            result = YB.vision_and_rewrite(
+                None, args["text"],
+                rewrite_template=template_param, topic=topic, headless=False
+            )
+            return {
+                "original": args["text"],
+                "rewritten": result.get("rewritten"),
+                "vision_desc": result.get("vision_desc", ""),
+                "error": result.get("error", ""),
+            }
+        # 方式2：传入 src，自动提取文案 + 根据视频时长限制字数
+        src_name = args.get("src")
+        if not src_name:
+            raise P.PipelineError("请提供 text（手动文案）或 src（视频文件名）")
+        info = P.probe_video(src_name)
+        duration = info.get("duration", 60)
+        max_chars = max(10, int(duration * 3))  # 中文 TTS ~3字/秒，最少10字
+        src_path = P._resolve_safe(src_name, P.VIDEO_DIR, must_exist=True)
+        raw_text = None
+        source = ""
+        # 提取优先级：字幕 > 视觉识图 > ASR
+        if info.get("has_subtitle"):
+            sub_text, _ = P.get_subtitle_text(str(src_path))
+            if sub_text:
+                raw_text = sub_text
+                source = "subtitle"
+        # 🆕 始终提取帧截图给元宝识图，不依赖是否有字幕/ASR
+        frames = REWRITER._extract_frames(str(src_path), P.FFMPEG, n=3)
+        # ASR 兜底（无画面描述时用）
+        if not raw_text and info.get("audio_codec"):
+            import asr_client as ASR  # noqa: E402
+            if ASR.is_available():
+                asr_text = ASR.transcribe_video(str(src_path), P.FFMPEG)
+                if asr_text:
+                    raw_text = asr_text
+                    source = "asr"
+        if not raw_text:
+            raw_text = ""  # 允许无原文，靠视觉理解
+        
+        # 🆕 元宝全链路：识图 + 改写
+        import yuanbao_client as YB  # noqa: E402
+        result = YB.vision_and_rewrite(
+            frames, raw_text,
+            rewrite_template=template_param,
+            max_chars=max_chars, topic=topic,
+            headless=False
+        )
+        return {
+            "original": raw_text, "source": source,
+            "rewritten": result.get("rewritten"),
+            "vision_desc": result.get("vision_desc", ""),
+            "error": result.get("error", ""),
+            "max_chars": max_chars, "duration": duration,
+        }
+    if name == "deepseek_login":
+        import copy_rewriter as REWRITER  # noqa: E402
+        # 后台线程跑登录（不阻塞 MCP 响应），前端轮询 deepseek_status 等结果
+        import threading
+        def _bg_login():
+            try:
+                REWRITER.login()
+            except Exception as e:
+                print(f"[deepseek_login] 登录失败: {e}")
+        t = threading.Thread(target=_bg_login, daemon=True)
+        t.start()
+        return {"message": "浏览器已打开，请在浏览器窗口里完成 DeepSeek 登录（扫码或账号密码）。登录后浏览器会自动关闭。"}
+    if name == "deepseek_status":
+        import copy_rewriter as REWRITER  # noqa: E402
+        has_p = REWRITER.has_profile()
+        return {"profile_exists": has_p, "hint": "已登录 (profile 已建立)" if has_p else "未登录，请点击「DeepSeek 登录」按钮"}
+    if name == "yuanbao_login":
+        import yuanbao_client as YB  # noqa: E402
+        success = YB.login()
+        return {"login_ok": success, "message": "登录成功，元宝已就绪" if success else "登录超时或取消，请重试"}
+    if name == "yuanbao_status":
+        import yuanbao_client as YB  # noqa: E402
+        has_p = YB.has_profile()
+        return {"profile_exists": has_p, "hint": "已登录" if has_p else "未登录，请点击「元宝登录」按钮"}
     if name == "get_job":
         jobs = _load_jobs()
         j = jobs.get(args["job_id"])
@@ -521,12 +690,15 @@ def _open_output_folder(filename=None):
 def _summary(name, result):
     if name == "dedup_video":
         checks = result.get("checks") or {}
+        applied = result.get("applied_params") or {}
         return {
             "output": result.get("output_path"),
             "checks": checks,
             "phash": checks.get("phash"),
             "phash_passed": bool(checks.get("phash", {}).get("passed")),
-            "applied_level": (result.get("applied_params") or {}).get("level"),
+            "applied_level": applied.get("level"),
+            "tts_applied": bool(applied.get("tts_applied")),
+            "tts_voice": applied.get("tts_voice"),
         }
     if name == "batch_fission":
         wrapper = result.get("matrix") or {}

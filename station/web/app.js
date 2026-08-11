@@ -596,7 +596,7 @@ function renderTools(tools) {
     return '<article class="tool-axis-item" data-tool-id="' + index + '" data-tool-tier="' + tool.tier + '" tabindex="0" ' +
       'style="--tool-tier:' + colors.stroke + ";--tool-fill:" + colors.fill + '">' +
       '<span class="tool-axis-index">' + (index + 1) + "</span>" +
-      '<div><div class="tool-name">' + escapeHtml(tool.name) + '</div><div class="tool-desc">' + escapeHtml(tool.description || "暂无说明") + "</div></div>" +
+      '<div><div class="tool-name">' + escapeHtml(toolLabel(tool.name)) + '</div><div class="tool-desc">' + escapeHtml(tool.description || "暂无说明") + "</div></div>" +
       '<span class="tool-axis-tag">' + TIER_LABEL[tool.tier] + "</span>" +
     "</article>";
   }).join("");
@@ -654,7 +654,7 @@ function renderToolAxis(tools) {
     svg.appendChild(toolAxisNode("path", {
       d: bandPath(from, to), fill: colors.fill, stroke: colors.stroke, "stroke-width": 1,
       class: "tool-axis-segment", tabindex: 0, "data-tool-id": index, "data-tool-tier": tool.tier,
-      "aria-label": (index + 1) + "，" + tool.name + "，" + TIER_LABEL[tool.tier],
+      "aria-label": (index + 1) + "，" + toolLabel(tool.name) + "，" + TIER_LABEL[tool.tier],
     }));
     const labelPoint = point(labelRadius, (from + to) / 2);
     const number = toolAxisNode("text", { x: labelPoint.x, y: labelPoint.y + 3, fill: colors.stroke, class: "tool-axis-number", "data-tool-id": index, "data-tool-tier": tool.tier });
@@ -893,6 +893,7 @@ function renderProbe(p) {
     ["时长", (p.duration != null ? p.duration : "?") + " s"],
     ["视频编码", p.video_codec || "?"],
     ["音频编码", p.audio_codec || "—"],
+    ["字幕轨道", p.has_subtitle ? ("内嵌 · " + (p.subtitle_codec || "?")) : "无"],
     ["码率", p.bit_rate ? Math.round(p.bit_rate / 1000) + " kbps" : "?"],
     ["体积", (p.size_mb != null ? p.size_mb : "?") + " MB"],
     ["MD5", p.md5 || "?"],
@@ -937,6 +938,42 @@ function syncFlipModeState() {
 /* ---------------------------------------------------------------------------
    去重（dedup_video）—— 走人工决策流 + 自检报告
    --------------------------------------------------------------------------- */
+/** 🆕 读取 TTS 参数（自动模式=提取+改写，手动模式=用户文案） */
+function readTTS() {
+  const modeBtn = document.querySelector("#tts-mode-switch .tts-mode-btn.active");
+  const isAuto = modeBtn && modeBtn.getAttribute("data-mode") === "auto";
+  const elVoice = document.getElementById("tts-voice");
+  const elSpeed = document.getElementById("tts-speed");
+
+  if (isAuto) {
+    // 自动模式：checkbox 控制是否启用改写
+    var chkRewrite = document.getElementById("chk-rewrite");
+    var enabled = chkRewrite && chkRewrite.checked;
+    var template = "";
+    if (enabled) {
+      var elTemplate = document.getElementById("tts-template");
+      template = elTemplate ? elTemplate.value.trim() : "";
+    }
+    return {
+      tts_text: null,
+      rewrite_template: template,  // 空 = 不改写，非空 =元宝改写
+      rewrite_topic: (document.getElementById("tts-topic") || {}).value || "",
+      tts_voice: elVoice ? elVoice.value : "冰糖",
+      tts_speed: elSpeed ? parseFloat(elSpeed.value) || 1.0 : 1.0,
+    };
+  } else {
+    // 手动模式：必须用户填了文案才启用 TTS
+    const elText = document.getElementById("tts-text");
+    const text = (elText && elText.value || "").trim();
+    if (!text) return null;
+    return {
+      tts_text: text,
+      tts_voice: elVoice ? elVoice.value : "冰糖",
+      tts_speed: elSpeed ? parseFloat(elSpeed.value) || 1.0 : 1.0,
+    };
+  }
+}
+
 async function doDedup() {
   const src = currentAsset();
   if (!src || !requireProbedAsset(src)) return;
@@ -947,6 +984,9 @@ async function doDedup() {
   }
   const args = { src, level, dimensions };
   if (flip_mode) args.flip_mode = flip_mode;
+  // 🆕 TTS
+  const tts = readTTS();
+  if (tts) Object.assign(args, tts);
   setWorkflowStep(3);
   try {
     await withBusy(el.btnDedup, "开始单条去重", async () => {
@@ -1035,6 +1075,15 @@ function renderDedup(d) {
   const trimLine = applied.trim_skipped
     ? "去头尾   : 跳过（" + (applied.trim_skip_reason || "原时长过短") + "）\n"
     : "";
+  const sourceLabels = { user: "手动输入", subtitle: "字幕提取", asr: "ASR 识别", subtitle_rewrite: "字幕+改写", asr_rewrite: "ASR+改写", subtitle_fallback: "字幕(改写失败)", asr_fallback: "ASR(改写失败)" };
+  const ttsProcess = applied.tts_process
+    ? ("TTS 流程  : " + applied.tts_process + "\n")
+    : "";
+  const ttsLine = applied.tts_text
+    ? ("TTS 配音 : " + (applied.tts_applied ? "[已替换]" : "[失败]") +
+       " 音色=" + (applied.tts_voice || "冰糖") +
+       " 文本=" + (applied.tts_text || "—") + "\n")
+    : "";
   const detail =
     "输出文件 : " + (d.output_path || "?") + "\n" +
     "源  MD5  : " + (src.md5 || "?") + "\n" +
@@ -1044,6 +1093,8 @@ function renderDedup(d) {
     "时长     : " + (src.duration != null ? src.duration : "?") + "s  →  " +
       (out.duration != null ? out.duration : "?") + "s\n" +
     trimLine +
+    ttsProcess +
+    ttsLine +
     "帧率     : " + (d.fps != null ? d.fps : "?") + " fps\n" +
     "job_id   : " + (d.job_id || "—") + "\n" +
     "应用参数 : " + JSON.stringify(applied);
@@ -1055,8 +1106,8 @@ function renderDedup(d) {
 function setCheck(node, ok) {
   node.classList.remove("pass", "fail");
   const mk = node.querySelector(".check-mark");
-  if (ok === true) { node.classList.add("pass"); mk.textContent = "✓"; }
-  else if (ok === false) { node.classList.add("fail"); mk.textContent = "✕"; }
+  if (ok === true) { node.classList.add("pass"); mk.innerHTML = '<svg class="ico-14" style="color:var(--audit)" aria-label="通过"><use href="#ico-checkmark"/></svg>'; }
+  else if (ok === false) { node.classList.add("fail"); mk.innerHTML = '<svg class="ico-14" style="color:var(--warned)" aria-label="未通过"><use href="#ico-xmark"/></svg>'; }
   else { mk.textContent = "—"; }
 }
 
@@ -1081,6 +1132,8 @@ async function doFission() {
 
   const args = { src, count, level, dimensions, task_id: newFissionTaskId() };
   if (flip_mode) args.flip_mode = flip_mode;
+  const tts = readTTS();
+  if (tts) Object.assign(args, tts);
   setWorkflowStep(3);
   try {
     await withBusy(el.btnFission, "开始裂变", async () => {
@@ -1149,14 +1202,14 @@ function renderFission(d) {
     badges.push('<span class="fission-badge warn">任务已取消</span>');
   } else {
     badges.push('<span class="fission-badge ' + (uniq ? "" : "warn") + '">' +
-      (uniq ? "MD5 全部互不相同 ✓" : "存在重复 MD5 ✕") + "</span>");
+      (uniq ? 'MD5 全部互不相同 <svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg>' : '存在重复 MD5 <svg class="ico-14" style="color:var(--warned)"><use href="#ico-xmark"/></svg>') + "</span>");
     if (matrix) {
       badges.push('<span class="fission-badge ' + (allPass ? "" : "warn") + '">' +
-        (allPass ? "距离矩阵全部达标 ✓" : "存在过近对 ✕") + "</span>");
+        (allPass ? '距离矩阵全部达标 <svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg>' : '存在过近对 <svg class="ico-14" style="color:var(--warned)"><use href="#ico-xmark"/></svg>') + "</span>");
     }
     if (ssim && ssim.available !== false) {
       badges.push('<span class="fission-badge ' + (ssimAllPass ? "" : "warn") + '">' +
-        (ssimAllPass ? "SSIM 全部达标 ✓" : "存在 SSIM 过近对 ✕") + "</span>");
+        (ssimAllPass ? 'SSIM 全部达标 <svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg>' : '存在 SSIM 过近对 <svg class="ico-14" style="color:var(--warned)"><use href="#ico-xmark"/></svg>') + "</span>");
     }
   }
   const countText = cancelled
@@ -1249,7 +1302,7 @@ function renderFissionExplainer(d, allPass) {
 
   el.fissionExplainer.innerHTML =
     '<div class="explainer-status ' + statusClass + '">' +
-      '<span class="explainer-status-mark" aria-hidden="true">' + (ready ? "✓" : "!") + "</span>" +
+      '<span class="explainer-status-mark" aria-hidden="true">' + (ready ? '<svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg>' : '<svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg>') + "</span>" +
       '<div><strong>' + statusTitle + '</strong><p>' + statusText + "</p></div>" +
     "</div>" +
     '<div class="explainer-grid">' +
@@ -1275,7 +1328,7 @@ function renderSeparation(sep, allPass) {
   legs.push("时间错位：" + (sep.time_leg === "present" ? "有" : "无（trim 全部跳过）"));
   legs.push("flip 分散：" + (sep.flip_spread ? "是" : "否"));
   el.fissionSeparation.innerHTML =
-    '<span class="sep-icon">⚠</span>' +
+    '<span class="sep-icon"><svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg></span>' +
     '<span class="sep-text">' + escapeHtml(sep.hint) + "（" + legs.join(" · ") + "）</span>";
   el.fissionSeparation.classList.remove("hidden");
 }
@@ -1401,7 +1454,7 @@ function memoryDateKey(t) {
 function memoryMatches(r) {
   const date = el.memoryDate.value;
   const query = el.memorySearch.value.trim().toLocaleLowerCase("zh-CN");
-  const text = [r.tool, r.summary, kindLabel(r.kind), r.kind].join(" ").toLocaleLowerCase("zh-CN");
+  const text = [toolLabel(r.tool), r.tool, r.summary, kindLabel(r.kind), r.kind].join(" ").toLocaleLowerCase("zh-CN");
   return (!date || memoryDateKey(r.t) === date) && (!query || text.includes(query));
 }
 function renderMemory() {
@@ -1414,24 +1467,37 @@ function renderMemory() {
     .map((record, sourceIndex) => ({ record, sourceIndex }))
     .filter((item) => memoryMatches(item.record))
     .sort((a, b) => a.record.t - b.record.t);
-  el.memoryCount.textContent = visible.length === list.length
+  // 🆕 合并连续周期：探测之后紧跟着去重 → 吞掉探测只留去重结果
+  const merged = [];
+  for (let i = 0; i < visible.length; i++) {
+    const cur = visible[i];
+    const next = visible[i + 1];
+    if (cur.record.tool === "probe_video" && next && next.record.tool === "dedup_video" && next.record.t - cur.record.t < 60000) {
+      continue; // 跳过探测条目，仅保留去重
+    }
+    if (cur.record.tool === "probe_video" && next && next.record.tool === "batch_fission" && next.record.t - cur.record.t < 60000) {
+      continue; // 探测→裂变同理
+    }
+    merged.push(cur);
+  }
+  el.memoryCount.textContent = merged.length === list.length
     ? list.length + " 条记录"
-    : visible.length + " / " + list.length + " 条";
+    : merged.length + " / " + list.length + " 条";
   const dateContext = list
     .map((record, sourceIndex) => ({ record, sourceIndex }))
     .filter((item) => !el.memoryDate.value || memoryDateKey(item.record.t) === el.memoryDate.value)
     .sort((a, b) => a.record.t - b.record.t);
   renderMemoryArc(visible, dateContext);
-  if (!visible.length) {
+  if (!merged.length) {
     el.timeline.innerHTML = '<div class="tl-empty">' + (list.length ? "没有符合筛选条件的操作记录。" : "暂无操作记录。完成探测或生成后，这里会记录关键步骤。") + "</div>";
     return;
   }
-  el.timeline.innerHTML = visible.map((item, index) => {
+  el.timeline.innerHTML = merged.map((item, index) => {
     const r = item.record;
     const cls = "t-" + (r.kind || "audit");
     const memoryId = r.t + "-" + item.sourceIndex;
     return '<div class="tl-item ' + cls + '" data-memory-id="' + memoryId + '" tabindex="0">' +
-      '<div class="tl-head"><span class="tl-tool"><span class="tl-index">' + (index + 1) + "</span>" + escapeHtml(r.tool || "?") + "</span>" +
+      '<div class="tl-head"><span class="tl-tool"><span class="tl-index">' + (index + 1) + "</span>" + escapeHtml(toolLabel(r.tool)) + "</span>" +
         '<span class="tl-time">' + fmtTime(r.t) + "</span></div>" +
       '<div class="tl-summary"><span class="tl-tag">' + kindLabel(r.kind) + "</span>" + escapeHtml(r.summary || "") + "</div>" +
     "</div>";
@@ -1559,6 +1625,22 @@ function clearMemorySelection() {
 function kindLabel(k) {
   return { audit: "审计", warned: "确认执行", blocked: "阻断", error: "错误", cancel: "已取消", human: "人工决策" }[k] || "记录";
 }
+function toolLabel(t) {
+  const map = {
+    dedup_video: "单条去重",
+    batch_fission: "批量裂变",
+    probe_video: "素材探测",
+    list_assets: "刷新素材",
+    list_voices: "查看音色",
+    list_watermark_templates: "查看水印",
+    remove_watermark: "去除水印",
+    download: "下载产物",
+    rewrite_copy: "改写文案",
+    get_job: "查询任务",
+    delete_output: "删除产物",
+  };
+  return map[t] || t.replace(/_/g, " ");
+}
 function clearMemory() {
   saveMemory([]);
   renderMemory();
@@ -1574,7 +1656,11 @@ function escapeHtml(s) {
 }
 function short(s) { return s ? String(s).slice(0, 10) + "…" : "?"; }
 function baseName(p) { return p ? String(p).replace(/\\/g, "/").split("/").pop() : "?"; }
-function mark(v) { return v === true ? "✓" : v === false ? "✕" : "?"; }
+function mark(v) {
+  if (v === true) return '<svg class="ico-14" style="color:var(--audit)" aria-label="通过"><use href="#ico-checkmark"/></svg>';
+  if (v === false) return '<svg class="ico-14" style="color:var(--warned)" aria-label="未通过"><use href="#ico-xmark"/></svg>';
+  return "?";
+}
 function fmtTime(t) {
   const d = new Date(t);
   const p = (n) => String(n).padStart(2, "0");
@@ -1689,6 +1775,208 @@ el.levelSeg.addEventListener("click", (e) => {
 // flip 勾选 → 启用 flip_mode 下拉
 el.dimGrid.querySelector('input[data-dim="flip"]').addEventListener("change", syncFlipModeState);
 syncFlipModeState();
+
+// 🆕 TTS 预设文案快捷填入（手动模式用）
+document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var text = this.getAttribute("data-text") || "";
+    var elText = document.getElementById("tts-text");
+    if (elText) { elText.value = text; elText.focus(); }
+  });
+});
+
+// 🆕 TTS 模式切换（自动提取+AI 改写 ↔ 手动输入）
+(function initTtsMode() {
+  var autoGroup = document.getElementById("tts-auto-group");
+  var manualGroup = document.getElementById("tts-manual-group");
+  var modeBtns = document.querySelectorAll("#tts-mode-switch .tts-mode-btn");
+
+  modeBtns.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      modeBtns.forEach(function (b) {
+        b.classList.remove("active");
+        b.style.background = "transparent";
+        b.style.color = "var(--gray-600)";
+        b.style.boxShadow = "none";
+        b.style.fontWeight = "500";
+      });
+      this.classList.add("active");
+      this.style.background = "var(--bg)";
+      this.style.color = "var(--text)";
+      this.style.boxShadow = "0 1px 3px rgba(0,0,0,.08)";
+      this.style.fontWeight = "600";
+
+      var mode = this.getAttribute("data-mode");
+      if (autoGroup) autoGroup.style.display = mode === "auto" ? "" : "none";
+      if (manualGroup) manualGroup.style.display = mode === "manual" ? "" : "none";
+    });
+  });
+
+  // 🆕元宝改写开关：勾选 → 显示模板 textarea，不勾 → 隐藏并清空
+  var chkRewrite = document.getElementById("chk-rewrite");
+  var templateWrap = document.getElementById("tts-template-wrap");
+  var rewriteHint = document.getElementById("tts-rewrite-hint");
+  function syncRewriteUI() {
+    var on = chkRewrite && chkRewrite.checked;
+    if (templateWrap) templateWrap.style.display = on ? "" : "none";
+    //元宝登录按钮和预览按钮：勾上就显示，不做假登录检测
+    var elActions = document.getElementById("tts-rewrite-actions");
+    if (elActions) elActions.style.display = on ? "" : "none";
+    if (rewriteHint) rewriteHint.textContent = on
+      ? "已启用改写。先点「元宝登录」扫码登录，再点「AI 改写预览」生成文案。"
+      : "未启用改写。系统会用字幕/ASR 原文直接生成配音。";
+  }
+  if (chkRewrite) {
+    chkRewrite.addEventListener("change", syncRewriteUI);
+    syncRewriteUI();  // 初始状态
+  }
+
+  // 🆕 改写模板：预设按钮把示例文本填入 textarea（用户可自由编辑）
+  var TEMPLATE_PRESETS = {
+    "带货": "你是带货主播。把原文改写为口播带货文案：突出产品卖点、制造紧迫感、引导下单。语气热情有感染力。",
+    "解说": "你是知识解说博主。把原文改写为解说旁白：逻辑清晰、深入浅出、善用设问引导。语气沉稳专业。",
+    "Vlog": "你是生活 Vlog 博主。把原文改写为 Vlog 口播：自然随性、像在跟朋友聊天。语气轻松真实。",
+  };
+  document.querySelectorAll(".tts-template-fill").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var key = this.getAttribute("data-template");
+      var text = TEMPLATE_PRESETS[key];
+      var elTemplate = document.getElementById("tts-template");
+      if (elTemplate && text) {
+        elTemplate.value = text;
+        elTemplate.focus();
+      }
+    });
+  });
+  // 🆕 清空模板按钮
+  var btnClear = document.getElementById("btn-template-clear");
+  if (btnClear) {
+    btnClear.addEventListener("click", function () {
+      var elTemplate = document.getElementById("tts-template");
+      if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
+    });
+  }
+  // 🆕元宝登录按钮（已废弃，全切元宝）
+  // var btnLogin = document.getElementById("btn-deepseek-login");
+  // ...
+  // DS login handler removed — use yuanbao only
+  // 🆕元宝登录按钮
+  var ybBtn = document.getElementById("btn-yuanbao-login");
+  if (ybBtn) {
+    ybBtn.addEventListener("click", async function () {
+      var lab = this.textContent;
+      this.textContent = "\u23f3 \u6253\u5f00\u5143\u5b9d...";
+      this.disabled = true;
+      try {
+        var r = await callTool("yuanbao_login", {});
+        toast(r.data ? r.data.message : "\u5143\u5b9d\u767b\u5f55\u5df2\u542f\u52a8", "ok");
+      } catch (e) {
+        toast("\u5931\u8d25: " + (e.message || e), "err");
+      } finally {
+        this.textContent = lab;
+        this.disabled = false;
+      }
+    });
+  }
+  // 🆕元宝改写预览按钮
+  var btnPreview = document.getElementById("btn-rewrite-preview");
+  var previewBox = document.getElementById("rewrite-preview");
+  if (btnPreview) {
+    btnPreview.addEventListener("click", async function () {
+      var src = currentAsset();
+      if (!src) { toast("请先上传并探测视频素材", "warn"); return; }
+      var elTemplate = document.getElementById("tts-template");
+      var template = elTemplate ? elTemplate.value.trim() : "";
+      var elTopic = document.getElementById("tts-topic");
+      var topic = elTopic ? elTopic.value.trim() : "";
+      var origLabel = this.textContent;
+      this.disabled = true;
+
+      // 阶段1：提取文案
+      this.textContent = "提取视频文案中...";
+      try {
+        var result = await callTool("rewrite_copy", { src: src, template: template || "", topic: topic });
+
+        if (result.kind !== "ok" || !result.data) {
+          var errText = result.text || "未知错误";
+          if (/未登录|登录态|login/i.test(errText)) {
+            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">元宝未登录</div><div style="font-size:13px;color:var(--gray-300);margin-bottom:8px;">请先点击左侧的「元宝登录」按钮，在浏览器里扫码登录后再试。</div>';
+            previewBox.style.display = "";
+            toast("元宝未登录，请先点击「元宝登录」按钮", "err");
+          } else if (/无字幕|ASR|未识别|提取文案|无法提取/i.test(errText)) {
+            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">无法提取文案</div><div style="font-size:13px;color:var(--gray-300);">' + errText + '</div>';
+            previewBox.style.display = "";
+            toast("视频无可用文案，请切到手动模式输入", "warn");
+          } else {
+            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">改写失败</div><div style="font-size:13px;color:var(--gray-300);">' + errText + '</div>';
+            previewBox.style.display = "";
+            toast("改写失败：" + errText, "err");
+          }
+          return;
+        }
+
+        var d = result.data;
+        if (d.rewritten && previewBox) {
+          var durText = d.duration ? ' (视频 ' + Math.round(d.duration) + 's，上限 ' + d.max_chars + ' 字)' : '';
+          // 🆕 砂纸纹理底纹 — 包住原文和改写后两块
+          var sandpaperSvg =
+            '<svg class="sandpaper-svg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">' +
+              '<defs><filter id="sandTexture">' +
+                '<feTurbulence result="sand" seed="20" numOctaves="4" baseFrequency="0.6" type="fractalNoise"></feTurbulence>' +
+                '<feColorMatrix values="0.8 0 0 0 0.1  0 0.7 0 0 0.05  0 0 0.6 0 0.02  0 0 0 1 0" type="matrix"></feColorMatrix>' +
+              '</filter></defs>' +
+              '<rect filter="url(#sandTexture)" width="100%" height="100%"></rect>' +
+            '</svg>';
+          function spBlock(inner) {
+            return '<div class="sandpaper-pattern">' + sandpaperSvg + inner + '</div>';
+          }
+          var originalHtml = '<div class="rp-original">📄 原文 (' + (d.source || '') + ')：' + escapeHtml(d.original || '') + '</div>';
+          var rewrittenHtml = '<div class="rp-rewritten">' + escapeHtml(d.rewritten) + '<span class="rp-meta">(' + d.rewritten.length + '字)</span></div>';
+          previewBox.dataset.rewritten = d.rewritten;  // 供「确认使用」直接读取
+          previewBox.innerHTML =
+            '<div class="rp-title">✦元宝改写结果<span class="rp-meta">' + durText + '</span></div>' +
+            spBlock(originalHtml) +
+            spBlock(rewrittenHtml) +
+            '<div class="rp-actions">' +
+            '<button type="button" onclick="confirmRewriteText()" class="btn btn-mini" style="background:#16845B;color:#fff;"><svg class="ico-16" style="color:#6EE7B7"><use href=\'#ico-check\'/></svg> 确认使用此文案</button>' +
+            '<button type="button" onclick="cancelRewritePreview()" class="btn btn-mini" style="background:#444;color:#fff;"><svg class="ico-16" style="color:#FFA0A0"><use href=\'#ico-xcircle\'/></svg> 不用</button>' +
+            '</div>';
+          previewBox.style.display = "";
+          toast("元宝改写完成", "ok");
+        } else {
+          var diagMsg = d.error || "";
+          previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">未获得改写结果</div>' +
+            (diagMsg ? '<div style="font-size:11px;color:var(--gray-300);margin-bottom:6px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,monospace;background:rgba(255,255,255,.04);padding:6px 8px;border-radius:4px;">' + escapeHtml(diagMsg) + '</div>' : '') +
+            '<div style="font-size:12px;color:var(--gray-400);">请确认已登录元宝后再试。</div>';
+          previewBox.style.display = "";
+          toast("元宝未返回改写结果", "warn");
+        }
+      } catch (e) {
+        previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">请求失败</div><div style="font-size:13px;color:var(--gray-300);">' + (e.message || '网络错误') + '</div>';
+        previewBox.style.display = "";
+        toast("改写请求失败：" + (e.message || e), "err");
+      } finally {
+        this.textContent = origLabel;
+        this.disabled = false;
+      }
+    });
+  }
+  // 🆕 确认/丢弃改写文案（全局函数，由动态生成的按钮调用）
+  window.confirmRewriteText = function () {
+    var previewBox = document.getElementById("rewrite-preview");
+    var content = (previewBox.dataset.rewritten || "").trim();
+    if (!content) { toast("未找到改写文案", "warn"); return; }
+    // 切到手动模式
+    document.querySelector('.tts-mode-btn[data-mode="manual"]').click();
+    var elText = document.getElementById("tts-text");
+    if (elText) { elText.value = content; elText.focus(); }
+    previewBox.style.display = "none";
+    toast("文案已填入，请点击「开始单条去重」", "ok");
+  };
+  window.cancelRewritePreview = function () {
+    document.getElementById("rewrite-preview").style.display = "none";
+  };
+})();
 
 el.modalConfirm.addEventListener("click", () => closeModal(true));
 el.modalCancel.addEventListener("click", () => closeModal(false));

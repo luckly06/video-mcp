@@ -1,11 +1,30 @@
-# 02 · 系统详细设计说明书（DD, Detailed Design）
+# video-uniqueness-DD · v1.1
 
 > 视频去重工位 station · 去重维度补齐迭代（第 2 版）
 >
-> **业务唯一依据**：[../01-需求分析/02-PRD.md](../01-需求分析/02-PRD.md)（PRD）。**架构依据**：[01-SAD](01-系统总体架构设计【SAD（System Architecture Design）】.md)。本 DD 不新增/删除/修改需求。
+> **业务唯一依据**：[../01-需求分析/02-PRD.md](../01-需求分析/02-PRD.md)（PRD）。**架构依据**：[SAD](01-系统总体架构设计【SAD（System Architecture Design）】.md)（P0 冻结）。本 DD 不新增/删除/修改需求。
 > **设计范围**：SAD 出全景，DD**聚焦本期 P0 增量**（crop/flip/speed/trim + pHash 自检升级 + rules 分级 + Web UI），既有已上线能力（画面调整/微旋转/去水印/裂变框架）仅在被增量触及处描述。
 > **技术栈**：Python 3 标准库 + 原生 JS + ffmpeg（vendor 自包含），本地单用户，无 DB/无远程账户/无 Cookie。
 > **粒度**：所有设计可直接映射为「面向 AI 的原子级开发订单」。每模块设计完立即输出 Feature 与 Task Prompt。
+>
+> ---
+>
+> ## · 版本治理（2026-08-10 起生效）
+>
+> | 规则 | 说明 |
+> |---|---|
+> | **SAD 冻结** | `01-系统总体架构设计【SAD】.md` — P0 阶段起冻结，不原地修改 |
+> | **小迭代** | 已有模块设计细节调整 / 参数·流程·接口优化 / 不改变架构边界 → 原地扩写 + 升版本号（如 `video-uniqueness-DD-v1.2.md`） |
+> | **大扩展** | 新增功能模块 / 系统能力 / 架构范围 / 对原 DD 产生较大影响的扩展 → 不直接修改主 DD，通过 Addendum 增量补充 |
+> | **Addendum 命名** | `video-uniqueness_dd_v{主版本}/video-uniqueness_dd_p{N}_addendum.md`（如 `video-uniqueness_dd_v1.1/video-uniqueness_dd_p1_addendum.md`） |
+> | **历史保留** | 大版本之间保留历史版本文件，不允许无记录覆盖修改 |
+>
+> ### 版本链
+>
+> | 版本 | 文件 | 说明 |
+> |---|---|---|
+> | v1.1（当前） | `video-uniqueness-DD-v1.1.md` | 第 2 版：crop/flip/speed/trim + pHash 自检升级 + SSIM 三重门 + rules 分级 + Web UI |
+> | p1 | → 已迁至 `docs/05-扩展功能/changes/add-tts-audio-replace/` | 模块六：云 TTS 音频轨道替换（MiMo v2.5） |
 
 ---
 

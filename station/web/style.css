@@ -39,8 +39,8 @@ body {
   background: var(--surface-page);
   color: var(--text-primary);
   font-family: "Noto Sans SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.55;
 }
 button, input, select { font: inherit; }
 button, a, select, input { -webkit-tap-highlight-color: transparent; }
@@ -53,12 +53,78 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 code, pre, .probe-val, .dedup-detail, .tool-name, .wl-tag, .fission-md5, .modal-op-name, .modal-op-params {
   font-family: "Consolas", "SFMono-Regular", monospace;
 }
+/* SVG 内联图标 */
+.ico-16 { width: 16px; height: 16px; vertical-align: -3px; flex-shrink: 0; }
+.ico-14 { width: 14px; height: 14px; vertical-align: -2px; flex-shrink: 0; }
+.ico-20 { width: 20px; height: 20px; vertical-align: -4px; flex-shrink: 0; }
+.brand-mascot { flex-shrink: 0; margin-right: 2px; }
 code {
   color: var(--text-primary);
   background: var(--surface-muted);
   padding: 2px 5px;
   border-radius: 5px;
   font-size: 12px;
+}
+/* 改写预览区 — 深色卡片 + 高对比文字 */
+#rewrite-preview {
+  margin-top: 12px;
+  padding: 16px 18px;
+  border: 1px solid #2E5C3D;
+  border-radius: 10px;
+  background: #1A2E22 !important;
+  background-image: none !important;
+  color: #E8F5EC;
+  box-shadow: 0 2px 12px rgba(0,0,0,.15);
+}
+#rewrite-preview .rp-title { font-size: 13px; color: #6EE7B7; font-weight: 600; margin-bottom: 8px; }
+/* 原文 / 改写后 文本块 — 坐在 .sandpaper-pattern 砂纸底纹之上 */
+#rewrite-preview .rp-original {
+  font-size: 12px;
+  color: #F5DDB8;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(245, 221, 184, .22);
+  background: #2D1A0D;
+  border-radius: 8px;
+}
+#rewrite-preview .rp-rewritten {
+  font-size: 14px;
+  color: #FFFFFF;
+  padding: 12px 14px;
+  line-height: 1.75;
+  letter-spacing: .2px;
+}
+#rewrite-preview .rp-meta { font-size: 11px; color: #F5DDB8; margin-left: 6px; opacity: .82; }
+#rewrite-preview .rp-actions { display: flex; gap: 10px; margin-top: 4px; }
+#rewrite-preview .rp-error {
+  font-size: 13px;
+  color: #FFC0C0;
+  background: #3B1F1F;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-top: 4px;
+}
+/* 砂纸纹理底纹（Uiverse.io / chase2k25）— 给原文/改写后做底 */
+#rewrite-preview .sandpaper-pattern {
+  position: relative;
+  width: 100%;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #755139;
+}
+#rewrite-preview .sandpaper-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  opacity: 0.85;
+  pointer-events: none;
+}
+#rewrite-preview .sandpaper-pattern > .rp-original,
+#rewrite-preview .sandpaper-pattern > .rp-rewritten {
+  position: relative;
+  z-index: 1;
 }
 
 .conn-banner {
@@ -122,6 +188,7 @@ code {
 .btn-success { color: #fff; border-color: var(--success); background: var(--success); }
 .btn-success:hover { border-color: #0E9F70; background: #0E9F70; }
 .btn-large { min-height: 42px; padding: 9px 18px; }
+.btn-mini { padding: 3px 10px; font-size: 12px; border-radius: 12px; }
 .btn-icon { width: 36px; padding: 7px; }
 .btn-icon svg { margin: 0; }
 .btn-text { min-height: 30px; padding: 4px 0; border: 0; background: transparent; color: var(--brand-primary-dark); }
@@ -347,10 +414,10 @@ code {
 .tl-item.t-cancel .tl-index { border-color: #64748B; background: #D8DEE7; color: #64748B; }
 .tl-item.t-human .tl-index { border-color: #248E87; background: #AFE2DF; color: #248E87; }
 .tl-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 3px; }
-.tl-tool { min-width: 0; overflow: hidden; color: var(--text-primary); font: 500 10px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.tl-time { color: var(--text-tertiary); font-size: 9px; white-space: nowrap; }
-.tl-summary { color: var(--text-secondary); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
-.tl-tag { display: inline-block; margin-right: 5px; padding: 1px 5px; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-tertiary); font-size: 9px; }
+.tl-tool { min-width: 0; overflow: hidden; color: var(--text-primary); font-weight: 600; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.tl-time { color: var(--text-tertiary); font-size: 10px; white-space: nowrap; }
+.tl-summary { color: var(--text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.tl-tag { display: inline-block; margin-right: 5px; padding: 1px 5px; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-tertiary); font-size: 10px; }
 .memory-foot { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); font-size: 10px; line-height: 1.55; }
 .tool-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 13px; }
 .tool-filter { min-height: 28px; padding: 4px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: #fff; color: var(--text-secondary); cursor: pointer; font-size: 10px; }
@@ -374,7 +441,7 @@ code {
 .tool-axis-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: start; gap: 7px; min-width: 0; padding: 8px; border: 1px solid var(--border-subtle); border-left: 3px solid var(--tool-tier); border-radius: 7px; background: #fff; cursor: pointer; }
 .tool-axis-item:hover, .tool-axis-item.is-active { border-color: var(--tool-tier); background: #FFFBF3; }
 .tool-axis-index { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--tool-tier); border-radius: 5px; background: var(--tool-fill); color: var(--tool-tier); font: 600 9px Consolas, monospace; }
-.tool-name { min-width: 0; color: var(--text-primary); font-size: 10px; font-weight: 600; overflow-wrap: anywhere; }
+.tool-name { min-width: 0; color: var(--text-primary); font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
 .tool-desc { margin-top: 3px; color: var(--text-tertiary); font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
 .tool-axis-tag { padding: 1px 5px; border-radius: 999px; background: var(--tool-fill); color: var(--tool-tier); font-size: 9px; white-space: nowrap; }
 .tool-detail { margin-top: 11px; padding: 10px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface-muted); }
@@ -504,4 +571,37 @@ code {
 }
 #progress-text {
   display: block; margin-top: 6px; font-size: 12px; color: var(--text-secondary);
+}
+
+/* ── TTS 语音合成输入框 ── */
+.tts-textarea {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  min-height: 64px;
+  padding: 10px 14px;
+  background: #fff;
+  border: 1px solid #d4d4d8;
+  border-radius: 10px;
+  color: #18181b;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color .12s, box-shadow .2s, background .2s;
+}
+.tts-textarea::placeholder {
+  color: #8b8b95;
+}
+.tts-textarea:hover {
+  border-color: #18181b;
+}
+.tts-textarea:focus {
+  border-color: transparent;
+  background:
+    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(90deg, #e8429b, #9b5be8, #3fc7e8, #b8f25f, #f5b946) border-box;
+  box-shadow: 0 0 0 3px rgba(63,199,232,.32);
 }
