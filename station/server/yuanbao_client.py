@@ -117,7 +117,7 @@ async def main():
         qr_b64 = screenshot_b64
         try:
             # 评估页面里所有 canvas 和 img 的位置，挑最大的
-            qr_rect = await page.evaluate("""() => {
+            qr_rect = await page.evaluate("""() => {{
                 // 找所有可能是 QR 码的元素
                 const candidates = [
                     ...document.querySelectorAll('canvas'),
@@ -125,16 +125,16 @@ async def main():
                     ...document.querySelectorAll('[class*="qrcode-img"], [class*="qrbox"]'),
                 ];
                 let best = null, bestSize = 0;
-                for (const el of candidates) {
+                for (const el of candidates) {{
                     const r = el.getBoundingClientRect();
                     const sz = r.width * r.height;
-                    if (sz > 5000 && sz > bestSize) {  // 至少 5万像素
-                        best = {x: r.x, y: r.y, w: r.width, h: r.height};
+                    if (sz > 5000 && sz > bestSize) {{  // 至少 5万像素
+                        best = {{x: r.x, y: r.y, w: r.width, h: r.height}};
                         bestSize = sz;
-                    }
-                }
+                    }}
+                }}
                 return best;
-            }""")
+            }}""")
             if qr_rect:
                 # 裁剪该区域（加 padding）
                 pad = 20
