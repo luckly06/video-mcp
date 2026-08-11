@@ -136,12 +136,46 @@ async def main():
     topic = {topic}
     vision_desc = ""
 
+    async def upload_frames(fs, label=""):
+        """把帧图传到元宝输入框。优先走 file_chooser（点击上传按钮触发原生对话框），
+        兜底走 set_input_files（直接设 hidden input）。"""
+        if not fs:
+            return False
+        fs3 = fs[:3]
+        # 策略 A：找上传触发元素 → file_chooser
+        triggers = [
+            'button[class*="upload"]', '[class*="upload-btn"]',
+            '[class*="file-upload"]', '[class*="attach"]',
+            '[aria-label*="上传"]', 'button:has(svg)',
+        ]
+        for sel in triggers:
+            el = page.locator(sel).first
+            if await el.count() > 0:
+                try:
+                    async with page.expect_file_chooser(timeout=3000) as fc:
+                        await el.click()
+                    chooser = await fc.value
+                    await chooser.set_files(fs3)
+                    print(f"[yuanbao-upload{{label}}] file_chooser ok via '{{sel}}'", file=sys.stderr)
+                    return True
+                except Exception:
+                    continue
+        # 策略 B：直接设 hidden input
+        inp = page.locator('input[type="file"]').first
+        if await inp.count() > 0:
+            try:
+                await inp.set_input_files(fs3)
+                print(f"[yuanbao-upload{{label}}] set_input_files ok", file=sys.stderr)
+                return True
+            except Exception as e2:
+                print(f"[yuanbao-upload{{label}}] set_input_files err: {{e2}}", file=sys.stderr)
+        print(f"[yuanbao-upload{{label}}] FAILED - no upload method worked", file=sys.stderr)
+        return False
+
     if frames:
         try:
-            inp = page.locator('input[type="file"]').first
-            if await inp.count() > 0:
-                # 🔧 一次性传所有帧，不要循环覆盖
-                await inp.set_input_files(frames[:3])
+            ok = await upload_frames(frames, "-vision")
+            if ok:
                 await asyncio.sleep(3)
                 sel = 'textarea[placeholder*="输入"],div[contenteditable="true"]'
                 ed = page.locator(sel).first
@@ -170,12 +204,11 @@ async def main():
     raw = {raw_text}
     pmt = _R._build_prompt(raw, template={tmpl}, max_chars={max_chars}, topic=topic)
 
-    # 🔧 改写步骤：先重新传图（元宝每条消息需要独立附图片），再发改写提示词
+    # 🔧 改写步骤：先重新传图，再发改写提示词
     if frames:
         try:
-            inp = page.locator('input[type="file"]').first
-            if await inp.count() > 0:
-                await inp.set_input_files(frames[:3])
+            ok = await upload_frames(frames, "-rewrite")
+            if ok:
                 await asyncio.sleep(3)
         except Exception as e:
             print(f"[yuanbao-rewrite-upload] error: {{e}}", file=sys.stderr)
