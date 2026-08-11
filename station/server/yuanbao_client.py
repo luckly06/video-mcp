@@ -139,14 +139,23 @@ async def main():
         print(json.dumps({{"error":"未登录"}}, ensure_ascii=False))
         return
 
-    # === 图片上传：MutationObserver 等 React 动态创建 file input ===
+    # === 图片上传：点 + 弹菜单 → 点"图片" → 等 file input ===
     frames = {frames}
     if frames:
-        ub_cnt = await page.locator('div[class*="UploadFileSelector_iconContainer"]').count()
-        print(f"[yuanbao] UploadFileSelector count={{ub_cnt}}", file=sys.stderr)
-        if ub_cnt > 0:
+        ub = page.locator('div[class*="UploadFileSelector_iconContainer"]').first
+        if await ub.count() > 0:
             try: await page.screenshot(path=r"{station_dir}" + "/yb_before_click.png")
             except: pass
+            await ub.click()
+            await asyncio.sleep(1)
+            try: await page.screenshot(path=r"{station_dir}" + "/yb_menu_open.png")
+            except: pass
+            # 点"图片"菜单项（菜单含三选项：图片/本地文件/腾讯文档）
+            pic = page.locator('div[class*="agent-chat-upload"]').filter(has_text="图片").first
+            if await pic.count() == 0:
+                pic = page.locator('text="图片"').first
+            print(f"[yuanbao] 图片菜单 count={{await pic.count()}}", file=sys.stderr)
+            # MutationObserver 等 file input 出现 — 点击图片后触发
             hob = await page.evaluate("""() => {{
                 return new Promise((resolve) => {{
                     let done = false;
@@ -159,18 +168,19 @@ async def main():
                             }}
                         }}
                     }});
-                    obs.observe(document.body, {{childList:true, subtree:true}});
-                    const btn = document.querySelector('div[class*="UploadFileSelector_iconContainer"]');
-                    if (btn) btn.click();
-                    else resolve(false);
+                    obs.observe(document.body, {{childList:true, subtree:true, attributes:true, attributeFilter:['type','style','class']}});
+                    // 找"图片"菜单并点击
+                    const items = [...document.querySelectorAll('div')];
+                    const pic = items.find(el => el.children.length===0 && el.textContent.trim()==='图片');
+                    if (pic) pic.click();
                     setTimeout(() => {{ if (!done) {{ obs.disconnect(); resolve(false); }} }}, 8000);
                 }});
             }}""")
-            print(f"[yuanbao] MutationObserver={{hob}}", file=sys.stderr)
+            print(f"[yuanbao] file input observer={{hob}}", file=sys.stderr)
             if hob:
                 await asyncio.sleep(0.5)
                 n = await page.locator('input[type="file"]').count()
-                print(f"[yuanbao] file inputs={{n}}", file=sys.stderr)
+                print(f"[yuanbao] file inputs found={{n}}", file=sys.stderr)
                 if n > 0:
                     try:
                         await page.locator('input[type="file"]').last.set_input_files(frames[:3])
