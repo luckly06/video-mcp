@@ -384,11 +384,10 @@ def _build_prompt(original_text, template=None, max_chars=None, topic=None):
     # 动态字数约束：根据视频时长计算最大字数（中文 TTS 约 3 字/秒）
     sys_lines = SYSTEM_PROMPT.strip().split("\n")
     if max_chars:
-        # 替换硬编码的"30-100 字，适合 15-60 秒"为实际约束
         new_lines = []
         for line in sys_lines:
             if "30-100 字" in line:
-                new_lines.append(f"4. **时长适配**：不超过 {max_chars} 字（视频仅 {max_chars//3} 秒），精炼表达核心信息")
+                new_lines.append(f"4. **时长适配**：严格不超过 {max_chars} 字（视频仅 {max_chars//3} 秒），精炼表达核心信息。多余的字请删掉。")
             else:
                 new_lines.append(line)
         parts.append("\n".join(new_lines))
@@ -396,6 +395,9 @@ def _build_prompt(original_text, template=None, max_chars=None, topic=None):
         parts.append(SYSTEM_PROMPT)
 
     parts.append("需要改写的原文：" + original_text)
+    # 🆕 结尾再强调一次字数限制（语言模型对最后一句约束最敏感）
+    if max_chars:
+        parts.append(f"⚠️ 重要：你输出的文案务必控制在 {max_chars} 字以内，不要超出。")
     return "\n\n".join(parts)
 
 
