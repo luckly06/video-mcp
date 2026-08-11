@@ -1894,27 +1894,61 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
     return callTool(toolName, args);
   };
 
-  // 🆕元宝登录按钮（已废弃，全切元宝）
-  // var btnLogin = document.getElementById("btn-deepseek-login");
-  // ...
-  // DS login handler removed — use yuanbao only
-  // 🆕元宝登录按钮
+  // 🆕元宝登录按钮 — 服务端无头 Chromium → 返回 QR 码 → 用户扫码
   var ybBtn = document.getElementById("btn-yuanbao-login");
   if (ybBtn) {
     ybBtn.addEventListener("click", async function () {
       var lab = this.textContent;
-      this.textContent = "\u23f3 \u6253\u5f00\u5143\u5b9d...";
+      this.textContent = "⏳ 正在获取登录码...";
       this.disabled = true;
       try {
-        var r = await ybCall("yuanbao_login", {});
-        toast(r.data ? r.data.message : "\u5143\u5b9d\u767b\u5f55\u5df2\u542f\u52a8", "ok");
+        var r = await callTool("yuanbao_login", {});
+        var d = r.data || {};
+        if (d.logged_in) {
+          toast("已登录元宝 ✅", "ok");
+        } else if (d.qr_b64 || d.screenshot_b64) {
+          // 显示二维码供用户扫码
+          var imgSrc = "data:image/png;base64," + (d.qr_b64 || d.screenshot_b64);
+          var qrHtml = '<div style="text-align:center;padding:16px;">'
+            + '<p style="margin:0 0 12px;font-size:14px;font-weight:600;">📱 请用手机扫描下方二维码登录元宝</p>'
+            + '<img src="' + imgSrc + '" style="max-width:280px;max-height:280px;border:1px solid var(--border);border-radius:8px;" />'
+            + '<p style="margin:8px 0 0;font-size:11px;color:var(--gray-400);">扫码后点「检查登录」确认</p>'
+            + '<button id="btn-yb-check-login" class="btn btn-mini" style="margin-top:10px;background:var(--brand);color:#fff;">✅ 检查登录状态</button>'
+            + '</div>';
+          var pb = document.getElementById("rewrite-preview");
+          if (pb) { pb.style.display = "block"; pb.innerHTML = qrHtml; }
+          // 绑定检查按钮
+          setTimeout(function () {
+            var ck = document.getElementById("btn-yb-check-login");
+            if (ck) ck.addEventListener("click", checkYbLogin);
+          }, 100);
+        } else if (d.error) {
+          toast("失败: " + d.error, "err");
+        } else {
+          toast("已启动登录流程，请稍候", "info");
+        }
       } catch (e) {
-        toast("\u5931\u8d25: " + (e.message || e), "err");
+        toast("失败: " + (e.message || e), "err");
       } finally {
         this.textContent = lab;
         this.disabled = false;
       }
     });
+  }
+  // 检查元宝登录状态
+  async function checkYbLogin() {
+    try {
+      var r = await callTool("yuanbao_status", {});
+      if (r.data && r.data.profile_exists) {
+        toast("登录成功 ✅", "ok");
+        var pb = document.getElementById("rewrite-preview");
+        if (pb) { pb.style.display = "none"; pb.innerHTML = ""; }
+      } else {
+        toast("尚未登录，请扫码后稍等几秒再试", "warn");
+      }
+    } catch (e) {
+      toast("检查失败: " + (e.message || e), "err");
+    }
   }
   // 🆕元宝改写预览按钮
   var btnPreview = document.getElementById("btn-rewrite-preview");

@@ -57,6 +57,105 @@ async def main():
 asyncio.run(main())
 '''
 
+# ======== 服务器端无头登录（QR 码扫描）========
+SERVER_LOGIN_TEMPLATE = '''\
+import asyncio, json, sys, base64, io, traceback
+from pathlib import Path
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+from playwright.async_api import async_playwright
+
+async def main():
+    profile = Path(r"{profile}")
+    profile.mkdir(parents=True, exist_ok=True)
+    
+    # 自动选择浏览器：Linux 用 chromium，Windows 用 msedge
+    try:
+        import platform
+        if platform.system() == "Linux":
+            browser = await async_playwright().start().chromium.launch_persistent_context(
+                user_data_dir=str(profile),
+                headless=True,
+                executable_path="/usr/bin/chromium",
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu",
+                      "--disable-blink-features=AutomationControlled"])
+        else:
+            browser = await async_playwright().start().chromium.launch_persistent_context(
+                user_data_dir=str(profile),
+                headless=False,
+                channel="{channel}",
+                args=["--disable-blink-features=AutomationControlled"])
+    except Exception as e:
+        print(json.dumps({{"error": f"browser launch fail: {{e}}"}}, ensure_ascii=False))
+        return
+    
+    page = browser.pages[0] if browser.pages else await browser.new_page()
+    try:
+        await page.goto("https://yuanbao.tencent.com/", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(5)  # 等登录页加载完成（含 QR 码）
+        
+        # 检测是否已登录
+        if not any(k in page.url.lower() for k in ("/login", "/sign_in", "passport")):
+            print(json.dumps({{"ok": True, "logged_in": True}}, ensure_ascii=False))
+            # 保持浏览器不关（profile 持久化 cookie）
+            return
+        
+        # 截取登录页截图（含二维码）
+        screenshot_bytes = await page.screenshot(type="png", full_page=False)
+        screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+        
+        # 尝试裁剪出 QR 码区域
+        qr_b64 = screenshot_b64  # 默认返回整页
+        try:
+            qr_el = page.locator('canvas, img[src*="qrcode"], img[src*="qr"], [class*="qrcode"], [class*="qr"]').first
+            if await qr_el.count() > 0:
+                qr_bytes = await qr_el.screenshot(type="png")
+                qr_b64 = base64.b64encode(qr_bytes).decode("ascii")
+        except:
+            pass
+        
+        print(json.dumps({{
+            "ok": True, "logged_in": False,
+            "screenshot_b64": screenshot_b64,
+            "qr_b64": qr_b64,
+        }}, ensure_ascii=False))
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        print(json.dumps({{"error": str(e)}}, ensure_ascii=False))
+    finally:
+        # 不关 browser！等下一次 check/login 复用 profile
+        pass
+
+asyncio.run(main())
+'''
+
+
+def login_server():
+    """服务器端无头登录：返回 QR 码截图给前端让用户扫码"""
+    channel = _pick_channel()
+    script = SERVER_LOGIN_TEMPLATE.format(profile=PROFILE_DIR, channel=channel)
+    fd, tmp = tempfile.mkstemp(suffix=".py", prefix="vu_sl_")
+    os.close(fd)
+    Path(tmp).write_text(script, encoding="utf-8")
+    try:
+        r = subprocess.run([_venv_python(), tmp], capture_output=True,
+                           text=True, timeout=120, cwd=str(_HERE.parent))
+        if r.stdout.strip():
+            try:
+                return json.loads(r.stdout.strip().split("\n")[-1])
+            except json.JSONDecodeError:
+                return {"error": f"parse fail: {r.stdout[:200]}", "stderr": r.stderr[:500]}
+        return {"error": "no output", "stderr": r.stderr[:500]}
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        try: Path(tmp).unlink()
+        except: pass
+
 
 def login():
     channel = _pick_channel()

@@ -406,7 +406,7 @@ def _exec_tool(name, args):
             import yuanbao_client as YB  # noqa: E402
             result = YB.vision_and_rewrite(
                 None, args["text"],
-                rewrite_template=template_param, topic=topic, headless=False
+                rewrite_template=template_param, topic=topic, headless=True
             )
             return {
                 "original": args["text"],
@@ -449,7 +449,7 @@ def _exec_tool(name, args):
             frames, raw_text,
             rewrite_template=template_param,
             max_chars=max_chars, topic=topic,
-            headless=False
+            headless=True
         )
         return {
             "original": raw_text, "source": source,
@@ -476,8 +476,13 @@ def _exec_tool(name, args):
         return {"profile_exists": has_p, "hint": "已登录 (profile 已建立)" if has_p else "未登录，请点击「DeepSeek 登录」按钮"}
     if name == "yuanbao_login":
         import yuanbao_client as YB  # noqa: E402
-        success = YB.login()
-        return {"login_ok": success, "message": "登录成功，元宝已就绪" if success else "登录超时或取消，请重试"}
+        result = YB.login_server()
+        return {"login_ok": result.get("ok", False),
+                "logged_in": result.get("logged_in", False),
+                "qr_b64": result.get("qr_b64", ""),
+                "screenshot_b64": result.get("screenshot_b64", ""),
+                "error": result.get("error", ""),
+                "message": "已登录" if result.get("logged_in") else "请扫码登录元宝"}
     if name == "yuanbao_status":
         import yuanbao_client as YB  # noqa: E402
         has_p = YB.has_profile()
