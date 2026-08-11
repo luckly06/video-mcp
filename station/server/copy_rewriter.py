@@ -28,6 +28,9 @@ Chromium 对 user_data_dir 有单例锁，Edge/Chrome 开着时 Playwright 无�
 import asyncio
 import logging
 import os
+import re
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -55,6 +58,106 @@ REWRITE_TEMPLATES = {
     "解说": "你是知识解说博主。改写为解说旁白：逻辑清晰、深入浅出、善用设问引导。语气沉稳专业。",
     "Vlog": "你是生活 Vlog 博主。改写为 Vlog 口播：自然随性、像在跟朋友聊天。语气轻松真实。",
 }
+
+# ============ 视觉上下文 · 帧提取 + DeepSeek 网页识图 ============
+
+def _extract_frames(video_path, ffmpeg_path, n=5):
+    """用 ffmpeg 从视频均匀抽取 n 帧 JPEG，返回帧文件路径列表。"""
+    import subprocess
+    import tempfile
+
+    try:
+        result = subprocess.run(
+            [str(ffmpeg_path), "-i", str(video_path), "-f", "null", "-"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except Exception:
+        return []
+    duration = 60.0
+    m = re.search(r"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)", result.stderr or "")
+    if m:
+        duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3)) + int(m.group(4)) / 100
+    if duration <= 0:
+        return []
+
+    frames_dir = Path(tempfile.mkdtemp(prefix="vu_frames_"))
+    frames = []
+    try:
+        margin = min(0.5, duration * 0.05)
+        step = max(1.0, (duration - 2 * margin) / n)
+        for i in range(n):
+            ts = margin + i * step
+            if ts >= duration - 0.1:
+                break
+            out = frames_dir / f"frame_{i:02d}.jpg"
+            rc = subprocess.run(
+                [str(ffmpeg_path), "-y", "-ss", str(ts), "-i", str(video_path),
+                 "-vframes", "1", "-q:v", "8", "-vf", "scale=512:-1", str(out)],
+                capture_output=True, timeout=10,
+            )
+            if rc.returncode == 0 and out.stat().st_size > 500:
+                frames.append(str(out))
+        return frames
+    except Exception:
+        return []
+
+
+async def _vision_describe(page, frames):
+    """在已登录 DeepSeek 页面识图模式上传帧并获取画面描述。失败返回 ''。"""
+    if not frames:
+        return ""
+    prompt = "请用一句话描述这些画面里拍的是什么场景、有什么人物或动作"
+
+    try:
+        # 1) 切到识图模式
+        img_tab = await page.query_selector('button:has-text("识图")')
+        if img_tab:
+            await img_tab.click()
+            await asyncio.sleep(0.5)
+
+        # 2) 上传第一帧
+        file_input = page.locator('input[type="file"]').first
+        await file_input.set_input_files(frames[0])
+        await asyncio.sleep(2)  # 等上传+处理
+
+        # 3) 填入 prompt 并发送
+        editor = page.locator("textarea[name='search'], textarea").first
+        await editor.click()
+        await editor.fill(prompt)
+        await asyncio.sleep(0.3)
+        await page.keyboard.press("Enter")
+
+        # 4) 等待识图回复
+        start = time.monotonic()
+        result = ""
+        while time.monotonic() - start < 30:
+            still_gen = await page.evaluate("""
+                () => [...document.querySelectorAll('[role="button"], button')]
+                    .some(b => /停止|stop/i.test(b.textContent || ''))
+            """)
+            if not still_gen:
+                desc = await page.evaluate("""
+                    () => {
+                        const marks = document.querySelectorAll('.ds-markdown');
+                        return marks.length ? marks[marks.length - 1].innerText.trim() : '';
+                    }
+                """)
+                if desc:
+                    result = desc
+                    break
+            await asyncio.sleep(1.5)
+
+        # 5) 切回快速模式
+        chat_tab = await page.query_selector('button:has-text("快速")')
+        if chat_tab:
+            await chat_tab.click()
+            await asyncio.sleep(0.3)
+
+        return result
+    except Exception as e:
+        logger.warning(f"视觉描述失败: {e}")
+        return ""
+
 
 # ---------------------------------------------------------------------------
 # OpenTeam DeepSeek selector（原样搬运 src/content/sites/deepseek.ts）
@@ -475,7 +578,7 @@ async def _launch(p, channel, headless=True):
         raise RewriteError(f"浏览器启动失败: {msg[:150]}")
 
 
-async def _rewrite_async(original_text, template=None, timeout=60, headless=True, max_chars=None, topic=None):
+async def _rewrite_async(original_text, template=None, timeout=60, headless=True, max_chars=None, topic=None, frames=None):
     """异步版：Playwright 操控 DeepSeek 网页，返回改写后文案。
 
     失败一律抛 RewriteError（携带用户可读原因），由 rewrite() 统一捕获。
@@ -531,7 +634,7 @@ async def _rewrite_async(original_text, template=None, timeout=60, headless=True
                 pass
 
 
-def rewrite(original_text, template=None, timeout=60, headless=True, max_chars=None, topic=None):
+def rewrite(original_text, template=None, timeout=60, headless=True, max_chars=None, topic=None, frames=None):
     """同步封装：调用 DeepSeek 改写文案。
 
     Args:
@@ -555,7 +658,8 @@ def rewrite(original_text, template=None, timeout=60, headless=True, max_chars=N
     try:
         return asyncio.run(_rewrite_async(original_text, template=template,
                                           timeout=timeout, headless=headless,
-                                          max_chars=max_chars, topic=topic))
+                                          max_chars=max_chars, topic=topic,
+                                          frames=frames))
     except RewriteError as e:
         _last_error = str(e)
         logger.error(f"DeepSeek 改写失败: {e}")

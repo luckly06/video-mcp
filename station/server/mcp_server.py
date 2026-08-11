@@ -403,13 +403,17 @@ def _exec_tool(name, args):
         src_path = P._resolve_safe(src_name, P.VIDEO_DIR, must_exist=True)
         raw_text = None
         source = ""
-        # 提取优先级：字幕 > (将来: 识图) > ASR
+        # 提取优先级：字幕 > 视觉识图 > ASR
         if info.get("has_subtitle"):
             sub_text, _ = P.get_subtitle_text(str(src_path))
             if sub_text:
                 raw_text = sub_text
                 source = "subtitle"
-        # ASR 兜底（Phase 2 替换为视觉识图）
+        # 🆕 无字幕 → 视觉识图（帧提取 + DeepSeek 网页识图）
+        frames = None
+        if not raw_text and REWRITER.has_profile():
+            frames = REWRITER._extract_frames(str(src_path), P.FFMPEG, n=3)
+        # ASR 兜底（无画面描述时用）
         if not raw_text and info.get("audio_codec"):
             import asr_client as ASR  # noqa: E402
             if ASR.is_available():
@@ -419,7 +423,7 @@ def _exec_tool(name, args):
                     source = "asr"
         if not raw_text:
             raise P.PipelineError("视频无字幕且 ASR 未识别到文字，无法提取文案。请用手动输入。")
-        rewritten = REWRITER.rewrite(raw_text, template=template_param, headless=False, max_chars=max_chars)
+        rewritten = REWRITER.rewrite(raw_text, template=template_param, headless=False, max_chars=max_chars, topic=topic, frames=frames)
         return {"original": raw_text, "source": source, "rewritten": rewritten, "error": REWRITER.get_last_error(), "max_chars": max_chars, "duration": duration}
     if name == "deepseek_login":
         import copy_rewriter as REWRITER  # noqa: E402
