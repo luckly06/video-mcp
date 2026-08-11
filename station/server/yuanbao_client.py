@@ -132,101 +132,12 @@ async def main():
         print(json.dumps({{"error":"未登录"}}, ensure_ascii=False))
         return
 
-    frames = {frames}
-    topic = {topic}
-    vision_desc = ""
-
-    async def upload_frames(fs, label=""):
-        """元宝上传：click UploadFileSelector → file_chooser。用 page.wait_for_event
-        异步等文件对话框（React 组件可能延迟创建对话框）。"""
-        if not fs:
-            return False
-        fs3 = fs[:3]
-        try:
-            await page.wait_for_selector('div[contenteditable="true"]', timeout=15000)
-        except Exception:
-            pass
-        # 策略 A：page.evaluate 直调 click，用 wait_for_event 异步等 filechooser
-        sel_ub = 'div[class*="UploadFileSelector_iconContainer"]'
-        ub = page.locator(sel_ub).first
-        if await ub.count() == 0:
-            print(f"[yuanbao-upload{{label}}] no UploadFileSelector", file=sys.stderr)
-            return False
-        try:
-            fc_task = asyncio.ensure_future(page.wait_for_event('filechooser'))
-            await page.evaluate("""
-                (sel) => {{
-                    const el = document.querySelector(sel);
-                    if (el) {{ el.dispatchEvent(new MouseEvent('click', {{bubbles:true,cancelable:true}})); }}
-                }}
-            """, sel_ub)
-            fc = await asyncio.wait_for(fc_task, timeout=20)
-            await fc.set_files(fs3)
-            print(f"[yuanbao-upload{{label}}] UploadFileSelector ok, {{len(fs3)}} files", file=sys.stderr)
-            return True
-        except asyncio.TimeoutError:
-            print(f"[yuanbao-upload{{label}}] filechooser timed out", file=sys.stderr)
-            fc_task.cancel()
-        except Exception as e1:
-            print(f"[yuanbao-upload{{label}}] UploadFileSelector err: {{e1}}", file=sys.stderr)
-            try: fc_task.cancel()
-            except: pass
-        # 策略 B：Playwright click
-        try:
-            async with page.expect_file_chooser(timeout=15000) as fc:
-                await ub.click(force=True)
-            chooser = await fc.value
-            await chooser.set_files(fs3)
-            print(f"[yuanbao-upload{{label}}] playwright click ok", file=sys.stderr)
-            return True
-        except Exception as e2:
-            print(f"[yuanbao-upload{{label}}] playwright click err: {{e2}}", file=sys.stderr)
-        print(f"[yuanbao-upload{{label}}] FAILED", file=sys.stderr)
-        return False
-
-    if frames:
-        try:
-            ok = await upload_frames(frames, "-vision")
-            if ok:
-                await asyncio.sleep(3)
-                sel = 'textarea[placeholder*="输入"],div[contenteditable="true"]'
-                ed = page.locator(sel).first
-                if await ed.count() > 0:
-                    await ed.click()
-                    await ed.fill(PROMPT_VISION)
-                    await asyncio.sleep(0.5)
-                    bl = await page.locator('.hyc-common-markdown,[class*="answer"],[class*="reply"],[class*="bubble"]').count()
-                    await page.keyboard.press("Enter")
-                    t0 = asyncio.get_event_loop().time()
-                    while asyncio.get_event_loop().time() - t0 < 60:
-                        if not await is_generating(page):
-                            t = await read_last_reply(page, bl)
-                            if t:
-                                vision_desc = t
-                                break
-                        await asyncio.sleep(1.5)
-                    # 合并用户填的话题和元宝识图结果
-                    if vision_desc:
-                        topic = (topic + "。画面：" + vision_desc) if topic else vision_desc
-        except Exception as e:
-            print(f"[yuanbao-vision] error: {{e}}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-            sys.stderr.flush()
-
     raw = {raw_text}
+    topic = {topic}
     pmt = _R._build_prompt(raw, template={tmpl}, max_chars={max_chars}, topic=topic)
 
-    # 🔧 改写步骤：先重新传图，再发改写提示词
-    if frames:
-        try:
-            ok = await upload_frames(frames, "-rewrite")
-            if ok:
-                await asyncio.sleep(3)
-        except Exception as e:
-            print(f"[yuanbao-rewrite-upload] error: {{e}}", file=sys.stderr)
-            sys.stderr.flush()
-
     sel = 'textarea[placeholder*="输入"],div[contenteditable="true"]'
+    await page.wait_for_selector(sel, timeout=15000)
     ed = page.locator(sel).first
     await ed.click()
     await asyncio.sleep(0.3)
@@ -244,10 +155,11 @@ async def main():
                 break
         await asyncio.sleep(1.5)
 
-        # CDP 模式：disconnect 即可，浏览器进程不会关
+    # CDP disconnect
     await browser.close()
     await p.stop()
-    print(json.dumps({{"rewritten": rw or None, "vision_desc": vision_desc, "error": ""}}, ensure_ascii=False))
+    print(json.dumps({{"rewritten": rw or None, "vision_desc": "", "error": ""}}, ensure_ascii=False))
+
 
 asyncio.run(main())
 '''
