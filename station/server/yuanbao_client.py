@@ -140,9 +140,8 @@ async def main():
         try:
             inp = page.locator('input[type="file"]').first
             if await inp.count() > 0:
-                for f in frames[:3]:
-                    await inp.set_input_files(f)
-                    await asyncio.sleep(0.5)
+                # 🔧 一次性传所有帧，不要循环覆盖
+                await inp.set_input_files(frames[:3])
                 await asyncio.sleep(3)
                 sel = 'textarea[placeholder*="输入"],div[contenteditable="true"]'
                 ed = page.locator(sel).first
@@ -170,6 +169,18 @@ async def main():
 
     raw = {raw_text}
     pmt = _R._build_prompt(raw, template={tmpl}, max_chars={max_chars}, topic=topic)
+
+    # 🔧 改写步骤：先重新传图（元宝每条消息需要独立附图片），再发改写提示词
+    if frames:
+        try:
+            inp = page.locator('input[type="file"]').first
+            if await inp.count() > 0:
+                await inp.set_input_files(frames[:3])
+                await asyncio.sleep(3)
+        except Exception as e:
+            print(f"[yuanbao-rewrite-upload] error: {{e}}", file=sys.stderr)
+            sys.stderr.flush()
+
     sel = 'textarea[placeholder*="输入"],div[contenteditable="true"]'
     ed = page.locator(sel).first
     await ed.click()
