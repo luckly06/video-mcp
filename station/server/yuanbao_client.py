@@ -98,11 +98,14 @@ async def is_generating(page):
         ".some(b => /停止|stop/i.test(b.textContent || ''))")
 
 async def read_last_reply(page, bl):
+    """读最后一条回复，跳过元宝的中间状态文案（'正在分析图片'/'正在搜索'等）。"""
     a = page.locator('.hyc-common-markdown,[class*="answer"],[class*="reply"],[class*="bubble"]')
     cnt = await a.count()
     if cnt > bl:
         t = (await a.nth(cnt - 1).inner_text()).strip()
-        if t and len(t) > 2:
+        skip_keywords = ["正在分析", "正在搜索", "正在生成", "正在思考", "正在处理", "图片识别中",
+                         "analyzing", "searching", "generating", "thinking", "processing"]
+        if t and len(t) > 2 and not any(kw in t for kw in skip_keywords):
             return t
     return ""
 
@@ -162,7 +165,10 @@ async def main():
                 chooser = await fc.value
                 await chooser.set_files(frames[:3])
                 print(f"[yuanbao] file_chooser ok", file=sys.stderr)
-                await asyncio.sleep(2)
+                # 等图片在输入框里出现（元宝会在 editor 里显示缩略图）
+                await asyncio.sleep(5)
+                try: await page.screenshot(path=r"{station_dir}" + "/yb_images_attached.png")
+                except: pass
             except Exception as eu:
                 print(f"[yuanbao] file_chooser err: {{eu}}", file=sys.stderr)
                 # 兜底：等 file input 出现用 set_input_files
