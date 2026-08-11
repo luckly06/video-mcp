@@ -113,15 +113,47 @@ async def main():
             return false;
         }}""")
         
-        # 尝试裁剪出 QR 码
+        # 尝试裁剪出 QR 码：找最大的 canvas 或 qrcode 元素
         qr_b64 = screenshot_b64
         try:
-            qr_el = page.locator('canvas, img[src*="qrcode"], img[src*="qr"], [class*="qrcode"], [class*="qr"]').first
-            if await qr_el.count() > 0:
-                qr_bytes = await qr_el.screenshot(type="png")
-                qr_b64 = base64.b64encode(qr_bytes).decode("ascii")
-        except:
-            pass
+            # 评估页面里所有 canvas 和 img 的位置，挑最大的
+            qr_rect = await page.evaluate("""() => {
+                // 找所有可能是 QR 码的元素
+                const candidates = [
+                    ...document.querySelectorAll('canvas'),
+                    ...document.querySelectorAll('[class*="qrcode"], [class*="QrCode"], [class*="qr-code"]'),
+                    ...document.querySelectorAll('[class*="qrcode-img"], [class*="qrbox"]'),
+                ];
+                let best = null, bestSize = 0;
+                for (const el of candidates) {
+                    const r = el.getBoundingClientRect();
+                    const sz = r.width * r.height;
+                    if (sz > 5000 && sz > bestSize) {  // 至少 5万像素
+                        best = {x: r.x, y: r.y, w: r.width, h: r.height};
+                        bestSize = sz;
+                    }
+                }
+                return best;
+            }""")
+            if qr_rect:
+                # 裁剪该区域（加 padding）
+                pad = 20
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(screenshot_bytes))
+                x = max(0, int(qr_rect['x'] - pad))
+                y = max(0, int(qr_rect['y'] - pad))
+                w = min(img.width - x, int(qr_rect['w'] + pad*2))
+                h = min(img.height - y, int(qr_rect['h'] + pad*2))
+                if w > 100 and h > 100:
+                    cropped = img.crop((x, y, x+w, y+h))
+                    # 放大一倍，便于扫码
+                    cropped = cropped.resize((cropped.width*2, cropped.height*2), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    cropped.save(buf, 'PNG')
+                    qr_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception as ex:
+            print(f"QR crop fallback: {ex}", file=sys.stderr)
         
         print(json.dumps({{
             "ok": True,

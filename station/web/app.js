@@ -1856,44 +1856,6 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
     });
   }
-  // 🆕 检测本地元宝代理（用户本机跑 yuanbao_local_proxy.py）
-  var YB_PROXY = null;  // null=检测中, false=不可用, "http://localhost:9224"=可用
-  (async function detectYbProxy() {
-    try {
-      var r = await fetch("http://localhost:9224/health");
-      if (r.ok) {
-        YB_PROXY = "http://localhost:9224";
-        console.log("[yb] 本地代理可用:", YB_PROXY);
-      }
-    } catch (_) { YB_PROXY = false; }
-    // 更新 UI 状态
-    var badge = document.getElementById("yb-proxy-badge");
-    if (badge) {
-      badge.textContent = YB_PROXY ? "✅ 本地代理" : "⚠️ 离线代理";
-      badge.className = YB_PROXY ? "badge badge-green" : "badge badge-yellow";
-    }
-    var hint = document.getElementById("yb-proxy-hint");
-    if (hint && !YB_PROXY) {
-      hint.style.display = "block";
-    }
-  })();
-
-  // 🆕从本地代理调元宝（如果可用），否则走服务器 MCP
-  window.ybCall = async function (toolName, args) {
-    if (YB_PROXY) {
-      var ep = toolName === "yuanbao_login" ? "/login" : "/rewrite";
-      var r = await fetch(YB_PROXY + ep, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(args || {}),
-      });
-      var data = await r.json();
-      if (!r.ok || data.error) throw new Error(data.error || "proxy error");
-      return {data: data};
-    }
-    return callTool(toolName, args);
-  };
-
   // 🆕元宝登录按钮 — 服务端无头 Chromium → 返回 QR 码 → 用户扫码
   var ybBtn = document.getElementById("btn-yuanbao-login");
   if (ybBtn) {
@@ -1911,7 +1873,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
           var imgSrc = "data:image/png;base64," + (d.qr_b64 || d.screenshot_b64);
           var qrHtml = '<div style="text-align:center;padding:16px;">'
             + '<p style="margin:0 0 12px;font-size:14px;font-weight:600;">📱 请用手机扫描下方二维码登录元宝</p>'
-            + '<img src="' + imgSrc + '" style="max-width:280px;max-height:280px;border:1px solid var(--border);border-radius:8px;" />'
+            + '<img src="' + imgSrc + '" style="width:340px;height:340px;background:#fff;padding:20px;border:1px solid var(--border);border-radius:8px;display:block;margin:0 auto;" />'
             + '<p style="margin:8px 0 0;font-size:11px;color:var(--gray-400);">扫码后点「检查登录」确认</p>'
             + '<button id="btn-yb-check-login" class="btn btn-mini" style="margin-top:10px;background:var(--brand);color:#fff;">✅ 检查登录状态</button>'
             + '</div>';
@@ -1967,7 +1929,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       // 阶段1：提取文案
       this.textContent = "提取视频文案中...";
       try {
-        var result = await ybCall("rewrite_copy", { src: src, template: template || "", topic: topic });
+        var result = await callTool("rewrite_copy", { src: src, template: template || "", topic: topic });
 
         if (result.kind !== "ok" || !result.data) {
           var errText = result.text || "未知错误";

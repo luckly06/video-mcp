@@ -252,15 +252,10 @@
 
               <!-- 🆕 元宝 改写预览 -->
                 <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;" id="tts-rewrite-actions">
-                <span id="yb-proxy-badge" class="badge badge-yellow" style="display:inline-block;font-size:10px;padding:2px 6px;">检测中...</span>
                 <button type="button" id="btn-yuanbao-login" class="btn btn-mini" style="background:var(--brand);color:#fff;"><svg class="ico-16" style="color:#F59E0B" aria-hidden="true"><use href="#ico-login"/></svg> 元宝登录</button>
-                <span style="font-size:11px;color:var(--warned);" id="tts-login-hint">← 首次使用先点这里，浏览器扫码登录（只需一次）</span>
+                <span style="font-size:11px;color:var(--warned);">← 首次使用先扫码登录</span>
                 <button type="button" id="btn-rewrite-preview" class="btn btn-primary"><svg class="ico-16" style="color:#A855F7" aria-hidden="true"><use href="#ico-sparkle"/></svg> AI 改写预览<span style="font-size:10px;opacity:.6;margin-left:4px;">元宝识图+改写</span></button>
-                <span style="font-size:11px;color:var(--warned);" id="tts-login-hint">← 首次使用先点这里，浏览器扫码登录</span>
               </div>
-              <p id="yb-proxy-hint" style="display:none;margin:6px 0 0;font-size:11px;color:var(--warned);">
-                ⚠️ 未检测到本地代理。请在本机运行 <code>python station/yuanbao_local_proxy.py</code> 以启用元宝功能。
-              </p>
               <div id="rewrite-preview" style="display:none;margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);">
                 <!-- JS 动态填充结果或错误 -->
               </div>
