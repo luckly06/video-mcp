@@ -71,7 +71,6 @@ async def main():
     profile = Path(r"{profile}")
     profile.mkdir(parents=True, exist_ok=True)
     
-    # 自动选择浏览器：Linux 用 chromium，Windows 用 msedge
     try:
         import platform
         if platform.system() == "Linux":
@@ -97,125 +96,128 @@ async def main():
     try:
         await page.goto("https://yuanbao.tencent.com/", wait_until="domcontentloaded", timeout=30000)
         await page.wait_for_timeout(3000)
-        # 等待 QR 码 canvas 或 img 出现（最长 10s）
+        
+        # 检查是否已登录（chat 页面无登录弹窗）
+        has_login = await page.evaluate("""() => {{
+            return !!document.querySelector('iframe.hyc-wechat-login, [class*=\"login\"][class*=\"dialog\"], [class*=\"Login\"]');
+        }}""")
+        
+        if not has_login:
+            # 已登录
+            print(json.dumps({{"ok": True, "logged_in": True}}, ensure_ascii=False))
+            await browser.close()
+            return
+        
+        # === 获取 QR 码截图 ===
         try:
-            await page.wait_for_selector(
-                'canvas, img[src*="qr"], img[src*="qrcode"], [class*="qrcode"], [class*="qr-code"], [class*="qrbox"]',
-                timeout=10000, state='visible')
+            await page.wait_for_selector('iframe.hyc-wechat-login', timeout=10000, state='visible')
         except:
             pass
-        await page.wait_for_timeout(2000)  # 等 QR 完全渲染
-
-        # 始终截取页面截图（含可能存在的 QR 码/登录弹窗）
+        await page.wait_for_timeout(2000)
+        
         screenshot_bytes = await page.screenshot(type="png", full_page=False)
         screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
         
-        # 检测页面是否有登录入口（QR码/手机号输入框）
-        has_login_form = await page.evaluate("""() => {{
-            // 检测 QR 码相关元素
-            if (document.querySelector('canvas, img[src*="qr"], [class*="qrcode"], [class*="qr"], [class*="login"], [class*="Login"]'))
-                return true;
-            // 检测手机号输入框
-            if (document.querySelector('input[type="tel"], input[placeholder*="手机"], input[placeholder*="phone"]'))
-                return true;
-            return false;
-        }}""")
-        
-        # 尝试裁剪出 QR 码：找最大的 canvas 或 qrcode 元素
+        # 裁剪 iframe 区域
         qr_b64 = screenshot_b64
         try:
-            # 评估页面里所有 canvas 和 img 的位置，挑最大的
-            qr_rect = await page.evaluate("""() => {{
-                // 元宝的 QR 码在 iframe 里（open.weixin.qq.com/connect/qrconnect）
-                const ifr = document.querySelector('iframe.hyc-wechat-login, iframe[src*="qrconnect"], iframe[src*="weixin.qq.com"]');
-                if (ifr) {{
-                    const r = ifr.getBoundingClientRect();
-                    return {{x: r.x, y: r.y, w: r.width, h: r.height}};
-                }}
-                // 兜底：找所有 canvas 和 img
-                const candidates = [
-                    ...document.querySelectorAll('canvas'),
-                    ...document.querySelectorAll('img[src*="qr"], img[src*="QR"], img[src*="base64"]'),
-                    ...document.querySelectorAll('[class*="qrcode"], [class*="QrCode"], [class*="qr-code"]'),
-                ];
-                let best = null, bestSize = 0;
-                for (const el of candidates) {{
-                    const r = el.getBoundingClientRect();
-                    const sz = r.width * r.height;
-                    if (sz > 10000 && r.width >= 100 && r.height >= 100 && sz > bestSize) {{
-                        const ratio = Math.max(r.width, r.height) / Math.min(r.width, r.height);
-                        if (ratio < 1.5) {{
-                            best = {{x: r.x, y: r.y, w: r.width, h: r.height}};
-                            bestSize = sz;
-                        }}
-                    }}
-                }}
-                return best;
-            }}""")
-            if qr_rect:
-                # 裁剪该区域（加 padding）
-                pad = 20
-                from PIL import Image
-                import io
-                img = Image.open(io.BytesIO(screenshot_bytes))
-                x = max(0, int(qr_rect['x'] - pad))
-                y = max(0, int(qr_rect['y'] - pad))
-                w = min(img.width - x, int(qr_rect['w'] + pad*2))
-                h = min(img.height - y, int(qr_rect['h'] + pad*2))
-                if w > 100 and h > 100:
+            qr_iframe = page.locator('iframe.hyc-wechat-login, iframe[src*="qrconnect"]').first
+            if await qr_iframe.count() > 0:
+                qr_box = await qr_iframe.bounding_box()
+                if qr_box:
+                    from PIL import Image
+                    import io
+                    img = Image.open(io.BytesIO(screenshot_bytes))
+                    pad = 30
+                    x = max(0, int(qr_box['x']-pad))
+                    y = max(0, int(qr_box['y']-pad-50))  # 留标题空间
+                    w = min(img.width-x, int(qr_box['width']+pad*2))
+                    h = min(img.height-y, int(qr_box['height']+pad*2+50))
                     cropped = img.crop((x, y, x+w, y+h))
-                    # 放大一倍，便于扫码
                     cropped = cropped.resize((cropped.width*2, cropped.height*2), Image.LANCZOS)
-                    buf = io.BytesIO()
-                    cropped.save(buf, 'PNG')
+                    buf = io.BytesIO(); cropped.save(buf, 'PNG')
                     qr_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception as ex:
-            print(f"QR crop fallback: {{ex}}", file=sys.stderr)
+        except:
+            pass
         
+        # 先返回 QR 码给前端
         print(json.dumps({{
-            "ok": True,
-            "logged_in": not has_login_form,
-            "has_login_form": has_login_form,
-            "screenshot_b64": screenshot_b64,
-            "qr_b64": qr_b64,
+            "ok": True, "logged_in": False, "has_login_form": True,
+            "screenshot_b64": screenshot_b64, "qr_b64": qr_b64,
         }}, ensure_ascii=False))
+        sys.stdout.flush()
+        
+        # === 等待用户扫码（最长 120s）===
+        for _ in range(80):  # 80 * 1.5s = 120s
+            await asyncio.sleep(1.5)
+            logged = not await page.evaluate("""() => {{
+                return !!document.querySelector('iframe.hyc-wechat-login, [class*=\"login\"][class*=\"dialog\"]');
+            }}""")
+            if logged:
+                # 登录成功！cookie 已被写入 profile
+                await page.wait_for_timeout(2000)  # 等 cookie flush
+                await browser.close()
+                print(json.dumps({{"ok": True, "logged_in": True, "msg": "login success"}}, ensure_ascii=False))
+                return
+        
+        # 超时
+        await browser.close()
+        print(json.dumps({{"ok": False, "error": "login timeout (120s)"}}, ensure_ascii=False))
+        
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         print(json.dumps({{"error": str(e)}}, ensure_ascii=False))
-    finally:
-        # 关闭浏览器，释放 profile 锁，cookie 已写入磁盘
-        try:
-            await browser.close()
-        except:
-            pass
+        try: await browser.close()
+        except: pass
 
 asyncio.run(main())
 '''
 
 
 def login_server():
-    """服务器端无头登录：返回 QR 码截图给前端让用户扫码"""
+    """服务器端无头登录：返回 QR 码截图给前端，浏览器后台等扫码完成"""
     channel = _pick_channel()
     script = SERVER_LOGIN_TEMPLATE.format(profile=PROFILE_DIR, channel=channel)
     fd, tmp = tempfile.mkstemp(suffix=".py", prefix="vu_sl_")
     os.close(fd)
     Path(tmp).write_text(script, encoding="utf-8")
+    
+    # 用 Popen 非阻塞读取：第一行是 QR，第二行是登录结果
+    proc = subprocess.Popen([_venv_python(), tmp],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, cwd=str(_HERE.parent))
+    
+    # 读第一行 JSON（QR 码）
     try:
-        r = subprocess.run([_venv_python(), tmp], capture_output=True,
-                           text=True, timeout=120, cwd=str(_HERE.parent))
-        if r.stdout.strip():
-            try:
-                return json.loads(r.stdout.strip().split("\n")[-1])
-            except json.JSONDecodeError:
-                return {"error": f"parse fail: {r.stdout[:200]}", "stderr": r.stderr[:500]}
-        return {"error": "no output", "stderr": r.stderr[:500]}
-    except subprocess.TimeoutExpired:
-        return {"error": "timeout"}
-    except Exception as e:
-        return {"error": str(e)}
-    finally:
+        first_line = proc.stdout.readline()
+    except:
+        proc.kill()
         try: Path(tmp).unlink()
         except: pass
+        return {"error": "no output from login subprocess"}
+    
+    first = json.loads(first_line.strip()) if first_line.strip() else {"error": "empty output"}
+    first["_pid"] = proc.pid
+    
+    # 启动后台线程等登录结果（120s）
+    import threading
+    def _wait_login():
+        try:
+            remaining = proc.stdout.readline()
+            result = json.loads(remaining.strip()) if remaining.strip() else {"error": "no result"}
+            proc.wait(timeout=10)
+        except:
+            result = {"error": "subprocess wait failed"}
+        finally:
+            try: Path(tmp).unlink()
+            except: pass
+        # 把结果写到 profile 旁的标记文件
+        marker = Path(PROFILE_DIR) / "login_result.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(result, ensure_ascii=False))
+    
+    threading.Thread(target=_wait_login, daemon=True).start()
+    return first
 
 
 def login():

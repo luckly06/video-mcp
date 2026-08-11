@@ -484,9 +484,17 @@ def _exec_tool(name, args):
                 "error": result.get("error", ""),
                 "message": "已登录" if result.get("logged_in") else "请扫码登录元宝"}
     if name == "yuanbao_status":
-        import yuanbao_client as YB  # noqa: E402
+        import yuanbao_client as YB, json, os  # noqa: E402
         has_p = YB.has_profile()
-        return {"profile_exists": has_p, "hint": "已登录" if has_p else "未登录，请点击「元宝登录」按钮"}
+        # 检查登录等待结果
+        marker = os.path.join(YB.PROFILE_DIR, "login_result.json")
+        result = {}
+        if os.path.exists(marker):
+            try: result = json.loads(open(marker).read()); os.remove(marker)
+            except: pass
+        logged_in = result.get("logged_in", False) if result else False
+        return {"profile_exists": has_p or logged_in, "logged_in": logged_in,
+                "hint": "已登录" if (has_p or logged_in) else "未登录，请点击「元宝登录」按钮"}
     if name == "get_job":
         jobs = _load_jobs()
         j = jobs.get(args["job_id"])
