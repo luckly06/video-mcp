@@ -139,7 +139,7 @@ async def main():
         print(json.dumps({{"error":"未登录"}}, ensure_ascii=False))
         return
 
-    # === 图片上传：点 + 弹菜单 → 点"图片" → 等 file input ===
+    # === 图片上传：点 + 弹菜单 → Playwright click"图片" → expect file_chooser ===
     frames = {frames}
     if frames:
         ub = page.locator('div[class*="UploadFileSelector_iconContainer"]').first
@@ -150,44 +150,32 @@ async def main():
             await asyncio.sleep(1)
             try: await page.screenshot(path=r"{station_dir}" + "/yb_menu_open.png")
             except: pass
-            # 点"图片"菜单项（菜单含三选项：图片/本地文件/腾讯文档）
-            pic = page.locator('div[class*="agent-chat-upload"]').filter(has_text="图片").first
+            # 用 Playwright 真鼠标事件点"图片"菜单（React 需要完整 MouseEvent）
+            pic = page.get_by_text("图片", exact=True).first
             if await pic.count() == 0:
-                pic = page.locator('text="图片"').first
+                pic = page.locator('div').filter(has_text="图片").first
             print(f"[yuanbao] 图片菜单 count={{await pic.count()}}", file=sys.stderr)
-            # MutationObserver 等 file input 出现 — 点击图片后触发
-            hob = await page.evaluate("""() => {{
-                return new Promise((resolve) => {{
-                    let done = false;
-                    const obs = new MutationObserver((mutations) => {{
-                        for (const m of mutations) {{
-                            for (const node of m.addedNodes) {{
-                                if (node.nodeType===1 && node.tagName==='INPUT' && node.type==='file') {{
-                                    if (!done) {{ done=true; obs.disconnect(); resolve(true); return; }}
-                                }}
-                            }}
-                        }}
-                    }});
-                    obs.observe(document.body, {{childList:true, subtree:true, attributes:true, attributeFilter:['type','style','class']}});
-                    // 找"图片"菜单并点击
-                    const items = [...document.querySelectorAll('div')];
-                    const pic = items.find(el => el.children.length===0 && el.textContent.trim()==='图片');
-                    if (pic) pic.click();
-                    setTimeout(() => {{ if (!done) {{ obs.disconnect(); resolve(false); }} }}, 8000);
-                }});
-            }}""")
-            print(f"[yuanbao] file input observer={{hob}}", file=sys.stderr)
-            if hob:
-                await asyncio.sleep(0.5)
+            try:
+                # 点图片时预期触发原生文件对话框 → Playwright 拦截
+                async with page.expect_file_chooser(timeout=10000) as fc:
+                    await pic.click(force=True)
+                chooser = await fc.value
+                await chooser.set_files(frames[:3])
+                print(f"[yuanbao] file_chooser ok", file=sys.stderr)
+                await asyncio.sleep(2)
+            except Exception as eu:
+                print(f"[yuanbao] file_chooser err: {{eu}}", file=sys.stderr)
+                # 兜底：等 file input 出现用 set_input_files
+                await asyncio.sleep(1)
                 n = await page.locator('input[type="file"]').count()
-                print(f"[yuanbao] file inputs found={{n}}", file=sys.stderr)
+                print(f"[yuanbao] file inputs={{n}}", file=sys.stderr)
                 if n > 0:
                     try:
                         await page.locator('input[type="file"]').last.set_input_files(frames[:3])
                         print(f"[yuanbao] set_input_files ok", file=sys.stderr)
                         await asyncio.sleep(2)
-                    except Exception as eu:
-                        print(f"[yuanbao] set_input_files err: {{eu}}", file=sys.stderr)
+                    except Exception as eu2:
+                        print(f"[yuanbao] set_input_files err: {{eu2}}", file=sys.stderr)
             try: await page.screenshot(path=r"{station_dir}" + "/yb_after_click.png")
             except: pass
 
