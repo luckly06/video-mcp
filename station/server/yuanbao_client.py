@@ -80,6 +80,7 @@ async def main():
                 headless=True,
                 executable_path="/usr/bin/chromium",
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu",
+                      "--disable-encryption-cookies",
                       "--disable-blink-features=AutomationControlled"])
         else:
             pw = await async_playwright().start()
@@ -284,6 +285,7 @@ async def main():
             headless=True,
             executable_path="/usr/bin/chromium",
             args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu",
+                  "--disable-encryption-cookies",
                   "--disable-blink-features=AutomationControlled"])
         page = browser_ctx.pages[0] if browser_ctx.pages else await browser_ctx.new_page()
     else:
