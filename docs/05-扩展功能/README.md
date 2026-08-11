@@ -329,7 +329,8 @@ mv changes/<change-id> changes/archive/$(date +%Y-%m-%d)-<change-id>
 
 | Change ID | 说明 | 影响级别 | 进度 |
 |---|---|---|---|
-| add-tts-audio-replace | MiMo TTS v2.5 音频轨道替换（客户端封装 + ffmpeg 合并 + 字幕提取 + 时长对齐） | B | 开发中 (4/4) |
-| add-asr-copy-rewrite | sherpa-onnx 本地 ASR + DeepSeek 文案改写（含用户自由模板） | B | 开发中 (11/12) |
+| add-vision-context | 自动视频画面描述：ffmpeg 帧提取 + DeepSeek 网页识图 → 视觉上下文注入改写 prompt | B | 设计阶段 |
+| add-tts-audio-replace | 已归档 → `changes/archive/2026-08-11-add-tts-audio-replace/` | — | 已归档 |
+| add-asr-copy-rewrite | 已归档 → `changes/archive/2026-08-11-add-asr-copy-rewrite/` | — | 已归档 |
 
 > 进度取值：`设计阶段` / `开发中 (x/y)` / `待验收` / `待归档`
