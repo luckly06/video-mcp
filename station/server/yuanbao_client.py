@@ -269,29 +269,41 @@ async def read_last_reply(page, bl):
 async def main():
     profile = Path(r"{profile}")
     profile.mkdir(parents=True, exist_ok=True)
-    import subprocess, socket
-    # 复用已有浏览器：先试着连 CDP，连上就不启新的
-    CDP_URL = "http://127.0.0.1:9223"
-    need_launch = False
-    try:
-        s = socket.create_connection(("127.0.0.1", 9223), timeout=2)
-        s.close()
-    except Exception:
-        need_launch = True
-    if need_launch:
-        subprocess.Popen([
-            r"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-            "--remote-debugging-port=9223",
-            "--user-data-dir=" + str(profile),
-            "--no-first-run", "--no-default-browser-check",
-            "--disable-blink-features=AutomationControlled",
-        ] + (["--headless=new"] if {headless} else []),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        await asyncio.sleep(3)
-    p = await async_playwright().start()
-    browser = await p.chromium.connect_over_cdp(CDP_URL)
-    ctx = browser.contexts[0]
-    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+    import platform, subprocess, socket
+    
+    # 服务器（Linux）用无头 Chromium persistent context，Windows 用 CDP + Edge
+    if platform.system() == "Linux":
+        p = await async_playwright().start()
+        browser_ctx = await p.chromium.launch_persistent_context(
+            user_data_dir=str(profile),
+            headless=True,
+            executable_path="/usr/bin/chromium",
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu",
+                  "--disable-blink-features=AutomationControlled"])
+        page = browser_ctx.pages[0] if browser_ctx.pages else await browser_ctx.new_page()
+    else:
+        CDP_URL = "http://127.0.0.1:9223"
+        need_launch = False
+        try:
+            s = socket.create_connection(("127.0.0.1", 9223), timeout=2)
+            s.close()
+        except Exception:
+            need_launch = True
+        if need_launch:
+            subprocess.Popen([
+                r"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+                "--remote-debugging-port=9223",
+                "--user-data-dir=" + str(profile),
+                "--no-first-run", "--no-default-browser-check",
+                "--disable-blink-features=AutomationControlled",
+            ] + (["--headless=new"] if {headless} else []),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            await asyncio.sleep(3)
+        p = await async_playwright().start()
+        browser_ctx = await p.chromium.connect_over_cdp(CDP_URL)
+        ctx = browser_ctx.contexts[0]
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+    
     await page.goto("https://yuanbao.tencent.com/", wait_until="domcontentloaded", timeout=30000)
     await asyncio.sleep(2)
 
@@ -373,7 +385,9 @@ async def main():
                     t = t2  # 文本还在变，继续等
         await asyncio.sleep(1.5)
 
-    # CDP disconnect — browser stays open for reuse
+    # CDP disconnect / close persistent context
+    if platform.system() == "Linux":
+        await browser_ctx.close()
     await p.stop()
     print(json.dumps({{"rewritten": rw or None, "vision_desc": "", "error": ""}}, ensure_ascii=False))
 
