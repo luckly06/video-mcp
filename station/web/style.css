@@ -358,6 +358,9 @@ code {
 .explainer-action ol { margin: 6px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 11px; line-height: 1.65; }
 .fission-badge { padding: 4px 8px; border: 1px solid #B7E4D0; border-radius: 999px; background: var(--audit-bg); color: var(--audit); font-size: 11px; }
 .fission-badge.warn { border-color: #F1D295; background: var(--warned-bg); color: var(--warned); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+.badge-green { background: #D1FAE5; color: #065F46; }
+.badge-yellow { background: #FEF3C7; color: #92400E; }
 .fission-list { display: grid; gap: 7px; }
 .fission-item { display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-muted); color: var(--text-primary); font-size: 12px; text-align: left; }
 .artifact-item { cursor: pointer; }

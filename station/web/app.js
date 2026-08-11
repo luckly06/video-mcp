@@ -1856,6 +1856,44 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
     });
   }
+  // 🆕 检测本地元宝代理（用户本机跑 yuanbao_local_proxy.py）
+  var YB_PROXY = null;  // null=检测中, false=不可用, "http://localhost:9224"=可用
+  (async function detectYbProxy() {
+    try {
+      var r = await fetch("http://localhost:9224/health");
+      if (r.ok) {
+        YB_PROXY = "http://localhost:9224";
+        console.log("[yb] 本地代理可用:", YB_PROXY);
+      }
+    } catch (_) { YB_PROXY = false; }
+    // 更新 UI 状态
+    var badge = document.getElementById("yb-proxy-badge");
+    if (badge) {
+      badge.textContent = YB_PROXY ? "✅ 本地代理" : "⚠️ 离线代理";
+      badge.className = YB_PROXY ? "badge badge-green" : "badge badge-yellow";
+    }
+    var hint = document.getElementById("yb-proxy-hint");
+    if (hint && !YB_PROXY) {
+      hint.style.display = "block";
+    }
+  })();
+
+  // 🆕从本地代理调元宝（如果可用），否则走服务器 MCP
+  window.ybCall = async function (toolName, args) {
+    if (YB_PROXY) {
+      var ep = toolName === "yuanbao_login" ? "/login" : "/rewrite";
+      var r = await fetch(YB_PROXY + ep, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(args || {}),
+      });
+      var data = await r.json();
+      if (!r.ok || data.error) throw new Error(data.error || "proxy error");
+      return {data: data};
+    }
+    return callTool(toolName, args);
+  };
+
   // 🆕元宝登录按钮（已废弃，全切元宝）
   // var btnLogin = document.getElementById("btn-deepseek-login");
   // ...
@@ -1868,7 +1906,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       this.textContent = "\u23f3 \u6253\u5f00\u5143\u5b9d...";
       this.disabled = true;
       try {
-        var r = await callTool("yuanbao_login", {});
+        var r = await ybCall("yuanbao_login", {});
         toast(r.data ? r.data.message : "\u5143\u5b9d\u767b\u5f55\u5df2\u542f\u52a8", "ok");
       } catch (e) {
         toast("\u5931\u8d25: " + (e.message || e), "err");
@@ -1895,7 +1933,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       // 阶段1：提取文案
       this.textContent = "提取视频文案中...";
       try {
-        var result = await callTool("rewrite_copy", { src: src, template: template || "", topic: topic });
+        var result = await ybCall("rewrite_copy", { src: src, template: template || "", topic: topic });
 
         if (result.kind !== "ok" || !result.data) {
           var errText = result.text || "未知错误";
