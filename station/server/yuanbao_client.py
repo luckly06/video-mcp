@@ -136,7 +136,7 @@ async def main():
     topic = {topic}
     vision_desc = ""
 
-    if frames and not topic:
+    if frames:
         try:
             inp = page.locator('input[type="file"]').first
             if await inp.count() > 0:
@@ -160,7 +160,9 @@ async def main():
                                 vision_desc = t
                                 break
                         await asyncio.sleep(1.5)
-                    topic = topic or vision_desc
+                    # 合并用户填的话题和元宝识图结果
+                    if vision_desc:
+                        topic = (topic + "。画面：" + vision_desc) if topic else vision_desc
         except Exception as e:
             print(f"[yuanbao-vision] error: {{e}}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)

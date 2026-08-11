@@ -430,10 +430,8 @@ def _exec_tool(name, args):
             if sub_text:
                 raw_text = sub_text
                 source = "subtitle"
-        # 🆕 无字幕 → 视觉识图（帧提取 → 元宝描述）
-        frames = None
-        if not raw_text:
-            frames = REWRITER._extract_frames(str(src_path), P.FFMPEG, n=3)
+        # 🆕 始终提取帧截图给元宝识图，不依赖是否有字幕/ASR
+        frames = REWRITER._extract_frames(str(src_path), P.FFMPEG, n=3)
         # ASR 兜底（无画面描述时用）
         if not raw_text and info.get("audio_codec"):
             import asr_client as ASR  # noqa: E402
