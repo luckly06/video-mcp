@@ -8,6 +8,8 @@ output/*
 !output/.gitkeep
 station/logs/*
 !station/logs/.gitkeep
+station/logs/.deepseek-profile/
+station/logs/.yuanbao-profile/
 .claude/settings.local.json
 **/.claude/settings.local.json
 __pycache__/

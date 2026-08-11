@@ -269,6 +269,18 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
         "_tier": "audit",
     },
+    {
+        "name": "yuanbao_login",
+        "description": "打开浏览器扫码登录腾讯元宝（只需一次）。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
+    },
+    {
+        "name": "yuanbao_status",
+        "description": "🆕 查询腾讯元宝登录状态。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
+    },
 ]
 
 TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
@@ -389,10 +401,19 @@ def _exec_tool(name, args):
         import copy_rewriter as REWRITER  # noqa: E402
         template_param = args.get("template")
         topic = args.get("topic")          # 🆕 视频内容简述
-        # 方式1：手动提供文案
+        # 方式1：手动文案 → 元宝改写
         if args.get("text"):
-            rewritten = REWRITER.rewrite(args["text"], template=template_param, headless=False, topic=topic)
-            return {"original": args["text"], "rewritten": rewritten, "error": REWRITER.get_last_error()}
+            import yuanbao_client as YB  # noqa: E402
+            result = YB.vision_and_rewrite(
+                None, args["text"],
+                rewrite_template=template_param, topic=topic, headless=False
+            )
+            return {
+                "original": args["text"],
+                "rewritten": result.get("rewritten"),
+                "vision_desc": result.get("vision_desc", ""),
+                "error": result.get("error", ""),
+            }
         # 方式2：传入 src，自动提取文案 + 根据视频时长限制字数
         src_name = args.get("src")
         if not src_name:
@@ -409,9 +430,9 @@ def _exec_tool(name, args):
             if sub_text:
                 raw_text = sub_text
                 source = "subtitle"
-        # 🆕 无字幕 → 视觉识图（帧提取 + DeepSeek 网页识图）
+        # 🆕 无字幕 → 视觉识图（帧提取 → 元宝描述）
         frames = None
-        if not raw_text and REWRITER.has_profile():
+        if not raw_text:
             frames = REWRITER._extract_frames(str(src_path), P.FFMPEG, n=3)
         # ASR 兜底（无画面描述时用）
         if not raw_text and info.get("audio_codec"):
@@ -422,9 +443,23 @@ def _exec_tool(name, args):
                     raw_text = asr_text
                     source = "asr"
         if not raw_text:
-            raise P.PipelineError("视频无字幕且 ASR 未识别到文字，无法提取文案。请用手动输入。")
-        rewritten = REWRITER.rewrite(raw_text, template=template_param, headless=False, max_chars=max_chars, topic=topic, frames=frames)
-        return {"original": raw_text, "source": source, "rewritten": rewritten, "error": REWRITER.get_last_error(), "max_chars": max_chars, "duration": duration}
+            raw_text = ""  # 允许无原文，靠视觉理解
+        
+        # 🆕 元宝全链路：识图 + 改写
+        import yuanbao_client as YB  # noqa: E402
+        result = YB.vision_and_rewrite(
+            frames, raw_text,
+            rewrite_template=template_param,
+            max_chars=max_chars, topic=topic,
+            headless=False
+        )
+        return {
+            "original": raw_text, "source": source,
+            "rewritten": result.get("rewritten"),
+            "vision_desc": result.get("vision_desc", ""),
+            "error": result.get("error", ""),
+            "max_chars": max_chars, "duration": duration,
+        }
     if name == "deepseek_login":
         import copy_rewriter as REWRITER  # noqa: E402
         # 后台线程跑登录（不阻塞 MCP 响应），前端轮询 deepseek_status 等结果
@@ -441,6 +476,14 @@ def _exec_tool(name, args):
         import copy_rewriter as REWRITER  # noqa: E402
         has_p = REWRITER.has_profile()
         return {"profile_exists": has_p, "hint": "已登录 (profile 已建立)" if has_p else "未登录，请点击「DeepSeek 登录」按钮"}
+    if name == "yuanbao_login":
+        import yuanbao_client as YB  # noqa: E402
+        success = YB.login()
+        return {"login_ok": success, "message": "登录成功，元宝已就绪" if success else "登录超时或取消，请重试"}
+    if name == "yuanbao_status":
+        import yuanbao_client as YB  # noqa: E402
+        has_p = YB.has_profile()
+        return {"profile_exists": has_p, "hint": "已登录" if has_p else "未登录，请点击「元宝登录」按钮"}
     if name == "get_job":
         jobs = _load_jobs()
         j = jobs.get(args["job_id"])

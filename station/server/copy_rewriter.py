@@ -105,7 +105,9 @@ def _extract_frames(video_path, ffmpeg_path, n=5):
 async def _vision_describe(page, frames):
     """在已登录 DeepSeek 页面识图模式上传帧并获取画面描述。失败返回 ''。"""
     if not frames:
+        logger.info("[vision] 无帧，跳过")
         return ""
+    logger.info(f"[vision] 开始识图, {len(frames)} 帧: {frames[0]}")
     prompt = "请用一句话描述这些画面里拍的是什么场景、有什么人物或动作"
 
     try:
@@ -114,11 +116,21 @@ async def _vision_describe(page, frames):
         if img_tab:
             await img_tab.click()
             await asyncio.sleep(0.5)
+            logger.info("[vision] 已切换到识图模式")
+        else:
+            logger.warning("[vision] 未找到识图按钮")
 
         # 2) 上传第一帧
         file_input = page.locator('input[type="file"]').first
-        await file_input.set_input_files(frames[0])
-        await asyncio.sleep(2)  # 等上传+处理
+        count = await file_input.count()
+        logger.info(f"[vision] 找到 file input: {count} 个")
+        if count > 0:
+            await file_input.set_input_files(frames[0])
+            await asyncio.sleep(2)
+            logger.info("[vision] 已上传帧")
+        else:
+            logger.warning("[vision] 未找到 file input")
+            return ""
 
         # 3) 填入 prompt 并发送
         editor = page.locator("textarea[name='search'], textarea").first
@@ -620,6 +632,29 @@ async def _rewrite_async(original_text, template=None, timeout=60, headless=True
                     "DeepSeek 未登录或登录态已过期：请运行 "
                     "`python station/server/copy_rewriter.py --login`"
                 )
+
+            # 🆕 视觉理解：无 topic 但有 frames → 元宝识图
+            vision_desc = ""
+            if frames and not topic:
+                import yuanbao_client as YB  # noqa: E402
+                if YB.is_available():
+                    logger.info(f"[vision] 进入元宝识图通道, {len(frames)} 帧")
+                    vision_desc = await _vision_describe(page, frames)
+                    if not vision_desc:
+                        # 元宝识图失败 → 用 DeepSeek 识图兜底
+                        logger.info("[vision] 元宝失败，尝试 DeepSeek 识图")
+                        vision_desc = await _vision_describe(page, frames)
+                    if vision_desc:
+                        logger.info(f"[vision] 描述: {len(vision_desc)} 字")
+                    else:
+                        logger.warning("[vision] 两个通道均失败")
+                else:
+                    # 元宝不可用 → 直接 DeepSeek 识图
+                    logger.info("[vision] 元宝不可用，直接用 DeepSeek 识图")
+                    vision_desc = await _vision_describe(page, frames)
+
+            # 拼装 prompt（含视觉上下文）
+            prompt = _build_prompt(original_text, template=template, max_chars=max_chars, topic=topic or vision_desc)
 
             # 记录发送前的回复容器数量作为位置基线
             baseline = await page.evaluate(_js("return responseContainers().length;"), None)

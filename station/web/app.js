@@ -1819,33 +1819,11 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
   function syncRewriteUI() {
     var on = chkRewrite && chkRewrite.checked;
     if (templateWrap) templateWrap.style.display = on ? "" : "none";
-    var btnPreview = document.getElementById("btn-rewrite-preview");
-    var btnLogin = document.getElementById("btn-deepseek-login");
-    if (on) {
-      // 启用改写时，查 DeepSeek 登录状态
-      callTool("deepseek_status", {}).then(function (r) {
-        if (r.kind === "ok" && r.data && r.data.profile_exists) {
-          if (btnPreview) btnPreview.style.display = "";
-          if (btnLogin) btnLogin.style.display = "none";
-          document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg> 已登录';
-        } else {
-          if (btnPreview) btnPreview.style.display = "none";
-          if (btnLogin) btnLogin.style.display = "";
-          document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg> 未登录，请先点左侧登录';
-          var hint = document.getElementById("tts-login-hint");
-          if (hint) hint.style.display = "";
-        }
-      }).catch(function () {
-        if (btnPreview) btnPreview.style.display = "none";
-        if (btnLogin) btnLogin.style.display = "";
-      });
-    } else {
-      if (btnPreview) btnPreview.style.display = "none";
-      if (btnLogin) btnLogin.style.display = "none";
-      document.getElementById("deepseek-status").textContent = "";
-    }
+    // 元宝登录按钮和预览按钮：勾上就显示，不做假登录检测
+    var elActions = document.getElementById("tts-rewrite-actions");
+    if (elActions) elActions.style.display = on ? "" : "none";
     if (rewriteHint) rewriteHint.textContent = on
-      ? "已启用改写。去重时会先用 DeepSeek 按模板改写字幕/ASR 原文，再 TTS 配音。"
+      ? "已启用改写。先点「元宝登录」扫码登录，再点「AI 改写预览」生成文案。"
       : "未启用改写。系统会用字幕/ASR 原文直接生成配音。";
   }
   if (chkRewrite) {
@@ -1878,41 +1856,27 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
     });
   }
-  // 🆕 DeepSeek 登录按钮
-  var btnLogin = document.getElementById("btn-deepseek-login");
-  if (btnLogin) {
-    btnLogin.addEventListener("click", async function () {
-      var origLabel = this.textContent;
-      this.textContent = "⏳ 正在打开浏览器...";
+  // 🆕 DeepSeek 登录按钮（已废弃，全切元宝）
+  // var btnLogin = document.getElementById("btn-deepseek-login");
+  // ...
+  // DS login handler removed — use yuanbao only
+  // 🆕 元宝登录按钮
+  var ybBtn = document.getElementById("btn-yuanbao-login");
+  if (ybBtn) {
+    ybBtn.addEventListener("click", async function () {
+      var lab = this.textContent;
+      this.textContent = "\u23f3 \u6253\u5f00\u5143\u5b9d...";
       this.disabled = true;
       try {
-        var result = await callTool("deepseek_login", {});
-        toast(result.data ? result.data.message : "登录已启动", "ok");
-        // 5 秒后自动检测登录状态
-        setTimeout(checkDeepSeekStatus, 5000);
+        var r = await callTool("yuanbao_login", {});
+        toast(r.data ? r.data.message : "\u5143\u5b9d\u767b\u5f55\u5df2\u542f\u52a8", "ok");
       } catch (e) {
-        toast("登录启动失败：" + (e.message || e), "err");
+        toast("\u5931\u8d25: " + (e.message || e), "err");
       } finally {
-        this.textContent = origLabel;
+        this.textContent = lab;
         this.disabled = false;
       }
     });
-  }
-  // 🆕 登录状态检测（供 rewrite 开启时复用）
-  async function checkDeepSeekStatus() {
-    try {
-      var r = await callTool("deepseek_status", {});
-      if (r.kind === "ok" && r.data && r.data.profile_exists) {
-        document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg> 已登录';
-        var bp = document.getElementById("btn-rewrite-preview");
-        var bl = document.getElementById("btn-deepseek-login");
-        if (bp) bp.style.display = "";
-        if (bl) bl.style.display = "none";
-        return true;
-      }
-    } catch (_) {}
-    document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg> 未登录';
-    return false;
   }
   // 🆕 DeepSeek 改写预览按钮
   var btnPreview = document.getElementById("btn-rewrite-preview");
@@ -1938,9 +1902,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
           if (/未登录|登录态|login/i.test(errText)) {
             previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">DeepSeek 未登录</div><div style="font-size:13px;color:var(--gray-300);margin-bottom:8px;">请先点击左侧的「DeepSeek 登录」按钮，在浏览器里扫码登录后再试。</div>';
             previewBox.style.display = "";
-            document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg> 未登录，请点击登录按钮';
-            var bp = document.getElementById("btn-rewrite-preview"); if (bp) bp.style.display = "none";
-            var bl = document.getElementById("btn-deepseek-login"); if (bl) bl.style.display = "";
+            toast("元宝未登录，请先点击「元宝登录」按钮", "err");
           } else if (/无字幕|ASR|未识别|提取文案|无法提取/i.test(errText)) {
             previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">无法提取文案</div><div style="font-size:13px;color:var(--gray-300);">' + errText + '</div>';
             previewBox.style.display = "";
