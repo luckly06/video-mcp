@@ -96,8 +96,16 @@ async def main():
     page = browser.pages[0] if browser.pages else await browser.new_page()
     try:
         await page.goto("https://yuanbao.tencent.com/", wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(5)
-        
+        await page.wait_for_timeout(3000)
+        # 等待 QR 码 canvas 或 img 出现（最长 10s）
+        try:
+            await page.wait_for_selector(
+                'canvas, img[src*="qr"], img[src*="qrcode"], [class*="qrcode"], [class*="qr-code"], [class*="qrbox"]',
+                timeout=10000, state='visible')
+        except:
+            pass
+        await page.wait_for_timeout(2000)  # 等 QR 完全渲染
+
         # 始终截取页面截图（含可能存在的 QR 码/登录弹窗）
         screenshot_bytes = await page.screenshot(type="png", full_page=False)
         screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
