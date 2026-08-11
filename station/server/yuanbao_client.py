@@ -200,13 +200,20 @@ async def main():
     bl = await page.locator('.hyc-common-markdown,[class*="answer"],[class*="reply"],[class*="bubble"]').count()
     await page.keyboard.press("Enter")
     rw = ""
+    last_text = ""
     t0 = asyncio.get_event_loop().time()
     while asyncio.get_event_loop().time() - t0 < {timeout}:
         if not await is_generating(page):
             t = await read_last_reply(page, bl)
             if t:
-                rw = _R._clean_reply(t) or t
-                break
+                # 等文本稳定：隔 2 秒再读一次，不变才接受
+                await asyncio.sleep(2)
+                if not await is_generating(page):
+                    t2 = await read_last_reply(page, bl)
+                    if t2 == t:
+                        rw = _R._clean_reply(t) or t
+                        break
+                    t = t2  # 文本还在变，继续等
         await asyncio.sleep(1.5)
 
     # CDP disconnect — browser stays open for reuse
