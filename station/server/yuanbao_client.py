@@ -137,59 +137,66 @@ async def main():
     vision_desc = ""
 
     async def upload_frames(fs, label=""):
-        """把帧图传到元宝输入框。1) 等页面就绪 2) DOM dump 诊断 3) 多层上传"""
+        """把帧图传到元宝输入框。元宝是 Next.js，没有原生 input[type=file]，
+        而是用 UploadFileSelector_iconContainer 组件。点击它 → file_chooser 拦截。"""
         if not fs:
             return False
         fs3 = fs[:3]
-        # 等聊天输入框出现（页面已就绪）
-        sel = 'textarea[placeholder*="输入"],div[contenteditable="true"]'
+        # 等聊天输入框出现
         try:
-            await page.wait_for_selector(sel, timeout=15000)
+            await page.wait_for_selector('div[contenteditable="true"]', timeout=15000)
         except Exception:
             pass
-        # 诊断：列出所有 file input + 保存 DOM 到文件供分析
+        # 诊断
         cnt = await page.locator('input[type="file"]').count()
-        print(f"[yuanbao-upload{{label}}] found {{cnt}} file input(s)", file=sys.stderr)
-        # 🆕 dump 页面 DOM
+        print(f"[yuanbao-upload{{label}}] file inputs: {{cnt}}", file=sys.stderr)
+        # DOM dump
         try:
             html = await page.content()
             dump = Path(r"{station_dir}") / f"yuanbao_page_{{label.strip('-')}}.html"
             dump.write_text(html, encoding="utf-8")
-            print(f"[yuanbao-upload{{label}}] DOM saved to {{dump}}", file=sys.stderr)
         except Exception:
             pass
-        inp = page.locator('input[type="file"]').first
-        # 策略 A：page.evaluate 直调 click（绕过 Playwright actionability），拦截 file_chooser
-        try:
-            js = """() => {{
-                var el = document.querySelector('input[type="file"]');
-                if (el) el.click();
-            }}"""
-            async with page.expect_file_chooser(timeout=8000) as fc:
-                await page.evaluate(js)
-            chooser = await fc.value
-            await chooser.set_files(fs3)
-            print(f"[yuanbao-upload{{label}}] file_chooser ok, {{len(fs3)}} files", file=sys.stderr)
-            return True
-        except Exception as e1:
-            print(f"[yuanbao-upload{{label}}] file_chooser err: {{e1}}", file=sys.stderr)
-        # 策略 B：兜底 Playwright click + file_chooser
-        try:
-            async with page.expect_file_chooser(timeout=5000) as fc:
-                await inp.click(force=True)
-            chooser = await fc.value
-            await chooser.set_files(fs3)
-            print(f"[yuanbao-upload{{label}}] click+file_chooser ok", file=sys.stderr)
-            return True
-        except Exception as e2:
-            print(f"[yuanbao-upload{{label}}] click+file_chooser err: {{e2}}", file=sys.stderr)
-        # 策略 C：set_input_files
-        try:
-            await inp.set_input_files(fs3)
-            print(f"[yuanbao-upload{{label}}] set_input_files ok", file=sys.stderr)
-            return True
-        except Exception as e3:
-            print(f"[yuanbao-upload{{label}}] set_input_files err: {{e3}}", file=sys.stderr)
+        # 策略 A：元宝专属 — 点击 UploadFileSelector 图标
+        sel_ub = 'div[class*="UploadFileSelector_iconContainer"]'
+        ub = page.locator(sel_ub).first
+        if await ub.count() > 0:
+            try:
+                async with page.expect_file_chooser(timeout=8000) as fc:
+                    await ub.click()
+                chooser = await fc.value
+                await chooser.set_files(fs3)
+                print(f"[yuanbao-upload{{label}}] UploadFileSelector ok, {{len(fs3)}} files", file=sys.stderr)
+                return True
+            except Exception as e1:
+                print(f"[yuanbao-upload{{label}}] UploadFileSelector err: {{e1}}", file=sys.stderr)
+        # 策略 B：点击 attachment 区域
+        att = page.locator('div[class*="attachment"]').first
+        if await att.count() > 0:
+            try:
+                async with page.expect_file_chooser(timeout=5000) as fc:
+                    await att.click()
+                chooser = await fc.value
+                await chooser.set_files(fs3)
+                print(f"[yuanbao-upload{{label}}] attachment ok", file=sys.stderr)
+                return True
+            except Exception as e2:
+                print(f"[yuanbao-upload{{label}}] attachment err: {{e2}}", file=sys.stderr)
+        # 策略 C：兜底 page.evaluate + file_chooser
+        if cnt > 0:
+            try:
+                js = """() => {{
+                    var el = document.querySelector('input[type="file"]');
+                    if (el) el.click();
+                }}"""
+                async with page.expect_file_chooser(timeout=5000) as fc:
+                    await page.evaluate(js)
+                chooser = await fc.value
+                await chooser.set_files(fs3)
+                print(f"[yuanbao-upload{{label}}] evaluate ok", file=sys.stderr)
+                return True
+            except Exception as e3:
+                print(f"[yuanbao-upload{{label}}] evaluate err: {{e3}}", file=sys.stderr)
         print(f"[yuanbao-upload{{label}}] ALL FAILED", file=sys.stderr)
         return False
 
