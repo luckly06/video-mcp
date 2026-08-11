@@ -137,39 +137,33 @@ async def main():
     vision_desc = ""
 
     async def upload_frames(fs, label=""):
-        """把帧图传到元宝输入框。优先走 file_chooser（点击上传按钮触发原生对话框），
-        兜底走 set_input_files（直接设 hidden input）。"""
+        """把帧图传到元宝输入框。click input[type=file] 触发原生对话框，
+        Playwright 拦截 file_chooser 设文件。"""
         if not fs:
             return False
         fs3 = fs[:3]
-        # 策略 A：找上传触发元素 → file_chooser
-        triggers = [
-            'button[class*="upload"]', '[class*="upload-btn"]',
-            '[class*="file-upload"]', '[class*="attach"]',
-            '[aria-label*="上传"]', 'button:has(svg)',
-        ]
-        for sel in triggers:
-            el = page.locator(sel).first
-            if await el.count() > 0:
-                try:
-                    async with page.expect_file_chooser(timeout=3000) as fc:
-                        await el.click()
-                    chooser = await fc.value
-                    await chooser.set_files(fs3)
-                    print(f"[yuanbao-upload{{label}}] file_chooser ok via '{{sel}}'", file=sys.stderr)
-                    return True
-                except Exception:
-                    continue
-        # 策略 B：直接设 hidden input
         inp = page.locator('input[type="file"]').first
-        if await inp.count() > 0:
-            try:
-                await inp.set_input_files(fs3)
-                print(f"[yuanbao-upload{{label}}] set_input_files ok", file=sys.stderr)
-                return True
-            except Exception as e2:
-                print(f"[yuanbao-upload{{label}}] set_input_files err: {{e2}}", file=sys.stderr)
-        print(f"[yuanbao-upload{{label}}] FAILED - no upload method worked", file=sys.stderr)
+        if await inp.count() == 0:
+            print(f"[yuanbao-upload{{label}}] no input[type=file] found", file=sys.stderr)
+            return False
+        # 策略 A：click input → 拦截原生文件对话框 → 设文件
+        try:
+            async with page.expect_file_chooser(timeout=5000) as fc:
+                await inp.click(force=True)
+            chooser = await fc.value
+            await chooser.set_files(fs3)
+            print(f"[yuanbao-upload{{label}}] file_chooser ok, {{len(fs3)}} files", file=sys.stderr)
+            return True
+        except Exception as e1:
+            print(f"[yuanbao-upload{{label}}] file_chooser err: {{e1}}", file=sys.stderr)
+        # 策略 B：兜底 set_input_files
+        try:
+            await inp.set_input_files(fs3)
+            print(f"[yuanbao-upload{{label}}] set_input_files ok", file=sys.stderr)
+            return True
+        except Exception as e2:
+            print(f"[yuanbao-upload{{label}}] set_input_files err: {{e2}}", file=sys.stderr)
+        print(f"[yuanbao-upload{{label}}] FAILED", file=sys.stderr)
         return False
 
     if frames:
