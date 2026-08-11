@@ -806,7 +806,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
             if rewrite_template and REWRITER.is_available():
                 print(f"[TTS] 🚀 开始 DeepSeek 改写 (模板长度={len(rewrite_template)})...", flush=True)
-                rewritten = REWRITER.rewrite(raw_text, template=rewrite_template)
+                rewritten = REWRITER.rewrite(raw_text, template=rewrite_template, headless=False)
                 if rewritten:
                     print(f"[TTS] ✅ DeepSeek 改写完成: {len(rewritten)} 字", flush=True)
                     process_steps.append(f"DeepSeek 改写: ✅ 成功 ({len(rewritten)} 字)")

@@ -118,7 +118,18 @@ function findSendButton() {
   const editor = document.querySelector(SEL.editor);
   const composer = (editor && editor.closest(SEL.composer)) || document.body;
   const candidates = [...composer.querySelectorAll(SEL.sendButton)];
-  return candidates.reverse().find(isSendButton) || null;
+  const exact = candidates.reverse().find(isSendButton);
+  if (exact) return exact;
+  // 兜底：找任意未禁用且不是附件/语音的圆形主按钮
+  return [...composer.querySelectorAll('[role="button"], button')].find(btn => {
+    if (btn.getAttribute('aria-disabled') === 'true') return false;
+    if (btn instanceof HTMLButtonElement && btn.disabled) return false;
+    if (labelMatches(btn, /attach|upload|file|camera|image|voice|microphone|附件|上传|图片|语音/)) return false;
+    if (!isVisibleInteractive(btn)) return false;
+    // 极简判断：可选中的可交互元素，且在当前可视区域内
+    const rect = btn.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }) || null;
 }
 
 // openteam deepseek.findDeepSeekStopButton — 存在停止按钮 = 还在生成
@@ -308,40 +319,24 @@ async def _fill_and_send(page, prompt, input_timeout=15.0):
             raise RewriteError(f"DeepSeek 页面未打开（当前 {diag.get('url') or 'about:blank'}），请检查网络")
         raise RewriteError("未找到 DeepSeek 输入框 — 可能未登录，请在浏览器里登录 chat.deepseek.com 后重试")
 
-    # 2) 注入文本（openteam setTextareaText：value + InputEvent，不是 innerHTML）
-    await page.evaluate(_js("""
-        const editor = document.querySelector(SEL.editor);
-        if (!editor) throw new Error('未找到 DeepSeek 输入框');
-        editor.focus();
-        editor.value = arg;
-        editor.dispatchEvent(new InputEvent('input', {
-          bubbles: true, inputType: 'insertText', data: arg
-        }));
-        editor.dispatchEvent(new Event('change', { bubbles: true }));
-    """), prompt)
+    # 2) 注入文本：用 Playwright 原生 fill()（走真实键盘事件，触发 React 的onChange）
+    editor = page.locator(SEL_EDITOR).first
+    await editor.click()
+    await editor.fill(prompt)
 
-    # 3) 校验文本已被接受（openteam 的一致性断言）
+    # 3) 校验文本已被接受
     actual = await page.evaluate(_js("""
         const editor = document.querySelector(SEL.editor);
         return editor ? editor.value : '';
     """), None)
     if _normalize(actual) != _normalize(prompt):
-        raise RewriteError("文案未成功写入 DeepSeek 输入框（页面结构可能已改版）")
+        raise RewriteError(f"文案未成功写入输入框（实际长度 {len(actual)}）")
 
-    # 4) 轮询等待可点击的发送按钮（openteam waitForDeepSeekSendButton）
-    deadline = time.monotonic() + input_timeout
-    while True:
-        clicked = await page.evaluate(_js("""
-            const btn = findSendButton();
-            if (!btn) return false;
-            btn.click();
-            return true;
-        """), None)
-        if clicked:
-            return
-        if time.monotonic() > deadline:
-            raise RewriteError("DeepSeek 发送按钮暂不可用，请稍后重试")
-        await asyncio.sleep(0.05)
+    # 4) 发送：按真实 Enter 键
+    await editor.focus()
+    await asyncio.sleep(0.2)
+    await page.keyboard.press("Enter")
+    await asyncio.sleep(0.5)
 
 
 async def _wait_reply(page, baseline_count, timeout=60.0):
@@ -397,7 +392,20 @@ async def _wait_reply(page, baseline_count, timeout=60.0):
                 logger.warning("DeepSeek 回复超时但已停止生成，返回已抓取文本")
                 return stable_text
             if not saw_generating:
-                raise RewriteError("DeepSeek 未开始回复 — 可能未登录或请求被拒绝")
+                # 抓取页面诊断信息，帮助定位问题
+                diag = await page.evaluate(_js("""
+                    const editor = document.querySelector(SEL.editor);
+                    return {
+                      url: location.href,
+                      title: document.title,
+                      hasTextarea: !!editor,
+                      textareaValue: editor ? (editor.value || '').slice(0, 80) : '',
+                      buttonCount: document.querySelectorAll('button, [role="button"]').length,
+                      bodyText: (document.body ? document.body.innerText : '').slice(0, 200),
+                    };
+                """), None)
+                raise RewriteError(
+                    f"DeepSeek 未开始回复 — {json.dumps(diag or {}, ensure_ascii=False)}")
             raise RewriteError(f"DeepSeek 回复超时（{timeout:.0f}s）")
 
         await asyncio.sleep(POLL_INTERVAL)

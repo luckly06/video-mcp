@@ -1105,8 +1105,8 @@ function renderDedup(d) {
 function setCheck(node, ok) {
   node.classList.remove("pass", "fail");
   const mk = node.querySelector(".check-mark");
-  if (ok === true) { node.classList.add("pass"); mk.textContent = "✓"; }
-  else if (ok === false) { node.classList.add("fail"); mk.textContent = "✕"; }
+  if (ok === true) { node.classList.add("pass"); mk.innerHTML = '<svg class="ico-14" style="color:var(--audit)" aria-label="通过"><use href="#ico-checkmark"/></svg>'; }
+  else if (ok === false) { node.classList.add("fail"); mk.innerHTML = '<svg class="ico-14" style="color:var(--warned)" aria-label="未通过"><use href="#ico-xmark"/></svg>'; }
   else { mk.textContent = "—"; }
 }
 
@@ -1201,14 +1201,14 @@ function renderFission(d) {
     badges.push('<span class="fission-badge warn">任务已取消</span>');
   } else {
     badges.push('<span class="fission-badge ' + (uniq ? "" : "warn") + '">' +
-      (uniq ? "MD5 全部互不相同 ✓" : "存在重复 MD5 ✕") + "</span>");
+      (uniq ? 'MD5 全部互不相同 <svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg>' : '存在重复 MD5 <svg class="ico-14" style="color:var(--warned)"><use href="#ico-xmark"/></svg>') + "</span>");
     if (matrix) {
       badges.push('<span class="fission-badge ' + (allPass ? "" : "warn") + '">' +
-        (allPass ? "距离矩阵全部达标 ✓" : "存在过近对 ✕") + "</span>");
+        (allPass ? '距离矩阵全部达标 <svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg>' : '存在过近对 <svg class="ico-14" style="color:var(--warned)"><use href="#ico-xmark"/></svg>') + "</span>");
     }
     if (ssim && ssim.available !== false) {
       badges.push('<span class="fission-badge ' + (ssimAllPass ? "" : "warn") + '">' +
-        (ssimAllPass ? "SSIM 全部达标 ✓" : "存在 SSIM 过近对 ✕") + "</span>");
+        (ssimAllPass ? 'SSIM 全部达标 <svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg>' : '存在 SSIM 过近对 <svg class="ico-14" style="color:var(--warned)"><use href="#ico-xmark"/></svg>') + "</span>");
     }
   }
   const countText = cancelled
@@ -1301,7 +1301,7 @@ function renderFissionExplainer(d, allPass) {
 
   el.fissionExplainer.innerHTML =
     '<div class="explainer-status ' + statusClass + '">' +
-      '<span class="explainer-status-mark" aria-hidden="true">' + (ready ? "✓" : "!") + "</span>" +
+      '<span class="explainer-status-mark" aria-hidden="true">' + (ready ? '<svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg>' : '<svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg>') + "</span>" +
       '<div><strong>' + statusTitle + '</strong><p>' + statusText + "</p></div>" +
     "</div>" +
     '<div class="explainer-grid">' +
@@ -1327,7 +1327,7 @@ function renderSeparation(sep, allPass) {
   legs.push("时间错位：" + (sep.time_leg === "present" ? "有" : "无（trim 全部跳过）"));
   legs.push("flip 分散：" + (sep.flip_spread ? "是" : "否"));
   el.fissionSeparation.innerHTML =
-    '<span class="sep-icon">⚠</span>' +
+    '<span class="sep-icon"><svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg></span>' +
     '<span class="sep-text">' + escapeHtml(sep.hint) + "（" + legs.join(" · ") + "）</span>";
   el.fissionSeparation.classList.remove("hidden");
 }
@@ -1655,7 +1655,11 @@ function escapeHtml(s) {
 }
 function short(s) { return s ? String(s).slice(0, 10) + "…" : "?"; }
 function baseName(p) { return p ? String(p).replace(/\\/g, "/").split("/").pop() : "?"; }
-function mark(v) { return v === true ? "✓" : v === false ? "✕" : "?"; }
+function mark(v) {
+  if (v === true) return '<svg class="ico-14" style="color:var(--audit)" aria-label="通过"><use href="#ico-checkmark"/></svg>';
+  if (v === false) return '<svg class="ico-14" style="color:var(--warned)" aria-label="未通过"><use href="#ico-xmark"/></svg>';
+  return "?";
+}
 function fmtTime(t) {
   const d = new Date(t);
   const p = (n) => String(n).padStart(2, "0");
@@ -1814,6 +1818,31 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
   function syncRewriteUI() {
     var on = chkRewrite && chkRewrite.checked;
     if (templateWrap) templateWrap.style.display = on ? "" : "none";
+    var btnPreview = document.getElementById("btn-rewrite-preview");
+    var btnLogin = document.getElementById("btn-deepseek-login");
+    if (on) {
+      // 启用改写时，查 DeepSeek 登录状态
+      callTool("deepseek_status", {}).then(function (r) {
+        if (r.kind === "ok" && r.data && r.data.profile_exists) {
+          if (btnPreview) btnPreview.style.display = "";
+          if (btnLogin) btnLogin.style.display = "none";
+          document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg> 已登录';
+        } else {
+          if (btnPreview) btnPreview.style.display = "none";
+          if (btnLogin) btnLogin.style.display = "";
+          document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg> 未登录，请先点左侧登录';
+          var hint = document.getElementById("tts-login-hint");
+          if (hint) hint.style.display = "";
+        }
+      }).catch(function () {
+        if (btnPreview) btnPreview.style.display = "none";
+        if (btnLogin) btnLogin.style.display = "";
+      });
+    } else {
+      if (btnPreview) btnPreview.style.display = "none";
+      if (btnLogin) btnLogin.style.display = "none";
+      document.getElementById("deepseek-status").textContent = "";
+    }
     if (rewriteHint) rewriteHint.textContent = on
       ? "已启用改写。去重时会先用 DeepSeek 按模板改写字幕/ASR 原文，再 TTS 配音。"
       : "未启用改写。系统会用字幕/ASR 原文直接生成配音。";
@@ -1848,6 +1877,134 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
     });
   }
+  // 🆕 DeepSeek 登录按钮
+  var btnLogin = document.getElementById("btn-deepseek-login");
+  if (btnLogin) {
+    btnLogin.addEventListener("click", async function () {
+      var origLabel = this.textContent;
+      this.textContent = "⏳ 正在打开浏览器...";
+      this.disabled = true;
+      try {
+        var result = await callTool("deepseek_login", {});
+        toast(result.data ? result.data.message : "登录已启动", "ok");
+        // 5 秒后自动检测登录状态
+        setTimeout(checkDeepSeekStatus, 5000);
+      } catch (e) {
+        toast("登录启动失败：" + (e.message || e), "err");
+      } finally {
+        this.textContent = origLabel;
+        this.disabled = false;
+      }
+    });
+  }
+  // 🆕 登录状态检测（供 rewrite 开启时复用）
+  async function checkDeepSeekStatus() {
+    try {
+      var r = await callTool("deepseek_status", {});
+      if (r.kind === "ok" && r.data && r.data.profile_exists) {
+        document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--audit)"><use href="#ico-checkmark"/></svg> 已登录';
+        var bp = document.getElementById("btn-rewrite-preview");
+        var bl = document.getElementById("btn-deepseek-login");
+        if (bp) bp.style.display = "";
+        if (bl) bl.style.display = "none";
+        return true;
+      }
+    } catch (_) {}
+    document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg> 未登录';
+    return false;
+  }
+  // 🆕 DeepSeek 改写预览按钮
+  var btnPreview = document.getElementById("btn-rewrite-preview");
+  var previewBox = document.getElementById("rewrite-preview");
+  if (btnPreview) {
+    btnPreview.addEventListener("click", async function () {
+      var src = currentAsset();
+      if (!src) { toast("请先上传并探测视频素材", "warn"); return; }
+      var elTemplate = document.getElementById("tts-template");
+      var template = elTemplate ? elTemplate.value.trim() : "";
+      var origLabel = this.textContent;
+      this.disabled = true;
+
+      // 阶段1：提取文案
+      this.textContent = "提取视频文案中...";
+      try {
+        var result = await callTool("rewrite_copy", { src: src, template: template || "" });
+
+        if (result.kind !== "ok" || !result.data) {
+          var errText = result.text || "未知错误";
+          if (/未登录|登录态|login/i.test(errText)) {
+            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">DeepSeek 未登录</div><div style="font-size:13px;color:var(--gray-300);margin-bottom:8px;">请先点击左侧的「DeepSeek 登录」按钮，在浏览器里扫码登录后再试。</div>';
+            previewBox.style.display = "";
+            document.getElementById("deepseek-status").innerHTML = '<svg class="ico-14" style="color:var(--warned)"><use href="#ico-alert"/></svg> 未登录，请点击登录按钮';
+            var bp = document.getElementById("btn-rewrite-preview"); if (bp) bp.style.display = "none";
+            var bl = document.getElementById("btn-deepseek-login"); if (bl) bl.style.display = "";
+          } else if (/无字幕|ASR|未识别|提取文案|无法提取/i.test(errText)) {
+            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">无法提取文案</div><div style="font-size:13px;color:var(--gray-300);">' + errText + '</div>';
+            previewBox.style.display = "";
+            toast("视频无可用文案，请切到手动模式输入", "warn");
+          } else {
+            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">改写失败</div><div style="font-size:13px;color:var(--gray-300);">' + errText + '</div>';
+            previewBox.style.display = "";
+            toast("改写失败：" + errText, "err");
+          }
+          return;
+        }
+
+        var d = result.data;
+        if (d.rewritten && previewBox) {
+          previewBox.innerHTML =
+            '<div style="font-size:12px;color:#4ECB71;font-weight:600;margin-bottom:6px;">DeepSeek 改写结果</div>' +
+            '<div style="font-size:11px;color:var(--gray-400);margin-bottom:4px;">原文 (' + (d.source || '') + ')：' + escapeHtml(d.original || '') + '</div>' +
+            '<div style="font-size:13px;color:#E2F5E8;margin-bottom:8px;line-height:1.6;">' + escapeHtml(d.rewritten) + '</div>' +
+            '<div style="display:flex;gap:8px;">' +
+            '<button type="button" onclick="confirmRewriteText()" class="btn btn-mini" style="background:#16845B;color:#fff;"><svg class="ico-16" style="color:#6EE7B7"><use href=\'#ico-check\'/></svg> 确认使用此文案</button>' +
+            '<button type="button" onclick="cancelRewritePreview()" class="btn btn-mini"><svg class="ico-16" style="color:#EF4444"><use href=\'#ico-xcircle\'/></svg> 不用</button>' +
+            '</div>';
+          previewBox.style.display = "";
+          toast("DeepSeek 改写完成", "ok");
+        } else {
+          var diagMsg = d.error || "";
+          previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">未获得改写结果</div>' +
+            (diagMsg ? '<div style="font-size:11px;color:var(--gray-300);margin-bottom:6px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,monospace;background:rgba(255,255,255,.04);padding:6px 8px;border-radius:4px;">' + escapeHtml(diagMsg) + '</div>' : '') +
+            '<div style="font-size:12px;color:var(--gray-400);">请确认已登录 DeepSeek 后再试。</div>';
+          previewBox.style.display = "";
+          toast("DeepSeek 未返回改写结果", "warn");
+        }
+      } catch (e) {
+        previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">请求失败</div><div style="font-size:13px;color:var(--gray-300);">' + (e.message || '网络错误') + '</div>';
+        previewBox.style.display = "";
+        toast("改写请求失败：" + (e.message || e), "err");
+      } finally {
+        this.textContent = origLabel;
+        this.disabled = false;
+      }
+    });
+  }
+  // 🆕 确认/丢弃改写文案（全局函数，由动态生成的按钮调用）
+  window.confirmRewriteText = function () {
+    var text = (document.getElementById("rewrite-preview").innerText || "").trim();
+    // 提取改写文案（跳过标题行）
+    var lines = text.split("\n");
+    var content = "";
+    var found = false;
+    for (var i = 0; i < lines.length; i++) {
+      if (found) content += lines[i] + "\n";
+      if (lines[i].indexOf("原文") === 0) { found = true; continue; }
+      // 跳过按钮文字行
+      if (lines[i] === "确认使用此文案" || lines[i] === "不用") continue;
+    }
+    if (!content.trim()) { toast("未找到改写文案", "warn"); return; }
+    content = content.replace(/\n*(确认使用此文案|不用)\n*/g, "").trim();
+    // 切到手动模式
+    document.querySelector('.tts-mode-btn[data-mode="manual"]').click();
+    var elText = document.getElementById("tts-text");
+    if (elText) { elText.value = content; elText.focus(); }
+    document.getElementById("rewrite-preview").style.display = "none";
+    toast("文案已填入，请点击「开始单条去重」", "ok");
+  };
+  window.cancelRewritePreview = function () {
+    document.getElementById("rewrite-preview").style.display = "none";
+  };
 })();
 
 el.modalConfirm.addEventListener("click", () => closeModal(true));

@@ -244,14 +244,28 @@ TOOLS = [
     },
     {
         "name": "rewrite_copy",
-        "description": "🆕 DeepSeek 改写文案：用已登录的 DeepSeek 网页会话改写短视频配音文案（零 API 成本）。会打开浏览器窗口，需先关闭 Edge/Chrome 避免 profile 锁。",
+        "description": "🆕 DeepSeek 改写预览：传入视频文件名或直接文案，自动提取字幕/ASR 后用 DeepSeek 改写为配音文案。会打开浏览器窗口，需先关闭 Edge/Chrome。返回 {original, rewritten} 供用户预览确认。",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "text": {"type": "string", "description": "需要改写的原始文案文本"},
+                "text": {"type": "string", "description": "手动提供的原始文案（优先级高于 src 自动提取）"},
+                "src": {"type": "string", "description": "视频文件名；设置后自动提取字幕或 ASR 得到原文"},
+                "template": {"type": "string", "description": "改写模板（带货/解说/Vlog 或自定义）"},
             },
-            "required": ["text"],
+            "required": [],
         },
+        "_tier": "audit",
+    },
+    {
+        "name": "deepseek_login",
+        "description": "🆕 首次使用前打开浏览器扫码登录 DeepSeek（只需一次）。会弹出浏览器窗口，登录后自动关闭。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "warned",
+    },
+    {
+        "name": "deepseek_status",
+        "description": "🆕 查询 DeepSeek 登录状态：是否已登录、profile 是否已建立。",
+        "inputSchema": {"type": "object", "properties": {}},
         "_tier": "audit",
     },
 ]
@@ -371,8 +385,53 @@ def _exec_tool(name, args):
         return {"voices": TTS_V.list_voices(), "available": TTS_V.is_available()}
     if name == "rewrite_copy":
         import copy_rewriter as REWRITER  # noqa: E402
-        rewritten = REWRITER.rewrite(args["text"])
-        return {"rewritten": rewritten, "original": args["text"]}
+        template_param = args.get("template")
+        # 方式1：手动提供文案
+        if args.get("text"):
+            rewritten = REWRITER.rewrite(args["text"], template=template_param, headless=False)
+            return {"original": args["text"], "rewritten": rewritten, "error": REWRITER.get_last_error()}
+        # 方式2：传入 src，自动提取文案
+        src_name = args.get("src")
+        if not src_name:
+            raise P.PipelineError("请提供 text（手动文案）或 src（视频文件名）")
+        info = P.probe_video(src_name)
+        src_path = P._resolve_safe(src_name, P.VIDEO_DIR, must_exist=True)
+        raw_text = None
+        source = ""
+        # 字幕提取
+        if info.get("has_subtitle"):
+            sub_text, _ = P.get_subtitle_text(str(src_path))
+            if sub_text:
+                raw_text = sub_text
+                source = "subtitle"
+        # ASR 兜底
+        if not raw_text and info.get("audio_codec"):
+            import asr_client as ASR  # noqa: E402
+            if ASR.is_available():
+                asr_text = ASR.transcribe_video(str(src_path), P.FFMPEG)
+                if asr_text:
+                    raw_text = asr_text
+                    source = "asr"
+        if not raw_text:
+            raise P.PipelineError("视频无字幕且 ASR 未识别到文字，无法提取文案。请用手动输入。")
+        rewritten = REWRITER.rewrite(raw_text, template=template_param, headless=False)
+        return {"original": raw_text, "source": source, "rewritten": rewritten, "error": REWRITER.get_last_error()}
+    if name == "deepseek_login":
+        import copy_rewriter as REWRITER  # noqa: E402
+        # 后台线程跑登录（不阻塞 MCP 响应），前端轮询 deepseek_status 等结果
+        import threading
+        def _bg_login():
+            try:
+                REWRITER.login()
+            except Exception as e:
+                print(f"[deepseek_login] 登录失败: {e}")
+        t = threading.Thread(target=_bg_login, daemon=True)
+        t.start()
+        return {"message": "浏览器已打开，请在浏览器窗口里完成 DeepSeek 登录（扫码或账号密码）。登录后浏览器会自动关闭。"}
+    if name == "deepseek_status":
+        import copy_rewriter as REWRITER  # noqa: E402
+        has_p = REWRITER.has_profile()
+        return {"profile_exists": has_p, "hint": "已登录 (profile 已建立)" if has_p else "未登录，请点击「DeepSeek 登录」按钮"}
     if name == "get_job":
         jobs = _load_jobs()
         j = jobs.get(args["job_id"])

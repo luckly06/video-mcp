@@ -8,6 +8,51 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- SVG 图标精灵表（Lucide 风格，无 Emoji） -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="ico-package" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12.89 1.45l8 4A2 2 0 0 1 22 7.24v9.53a2 2 0 0 1-1.11 1.79l-8 4a2 2 0 0 1-1.79 0l-8-4a2 2 0 0 1-1.1-1.8V7.24a2 2 0 0 1 1.11-1.79l8-4a2 2 0 0 1 1.78 0Z"/><path d="M2.32 6.16L12 11l9.68-4.84"/><path d="M12 22.76V11"/>
+    </symbol>
+    <symbol id="ico-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+    </symbol>
+    <symbol id="ico-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+    </symbol>
+    <symbol id="ico-sparkle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/>
+    </symbol>
+    <symbol id="ico-login" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+    </symbol>
+    <symbol id="ico-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10Z"/><path d="m9 12 2 2 4-4"/>
+    </symbol>
+    <symbol id="ico-xcircle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>
+    </symbol>
+    <symbol id="ico-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </symbol>
+    <symbol id="ico-checkmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="4 12 10 18 20 6"/>
+    </symbol>
+    <symbol id="ico-xmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+    </symbol>
+    <symbol id="ico-mascot" viewBox="0 0 64 64">
+      <circle cx="32" cy="32" r="28" fill="#2D1B69" stroke="#7C5CFC" stroke-width="2"/>
+      <rect x="22" y="18" width="20" height="16" rx="4" fill="#7C5CFC" opacity="0.3"/>
+      <circle cx="32" cy="26" r="4" fill="none" stroke="#A78BFA" stroke-width="2"/>
+      <circle cx="32" cy="26" r="1.5" fill="#A78BFA"/>
+      <line x1="26" y1="22" x2="18" y2="16" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="38" y1="22" x2="46" y2="16" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+      <rect x="24" y="37" width="16" height="6" rx="3" fill="#7C5CFC" opacity="0.5"/>
+      <line x1="14" y1="44" x2="20" y2="40" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="50" y1="44" x2="44" y2="40" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+    </symbol>
+  </svg>
+</body>
   <div id="conn-banner" class="conn-banner hidden" role="status" aria-live="polite">
     <span class="conn-dot" aria-hidden="true"></span>
     <span id="conn-text">正在连接服务…</span>
@@ -16,7 +61,20 @@
 
   <header class="topbar">
     <div class="brand-group">
-      <div class="brand-mark" aria-hidden="true">VU</div>
+      <svg class="brand-mascot" viewBox="0 0 48 48" aria-hidden="true" width="42" height="42">
+        <rect x="6" y="12" width="36" height="24" rx="6" fill="#7C5CFC" opacity="0.15"/>
+        <rect x="8" y="14" width="32" height="20" rx="4" fill="#7C5CFC" opacity="0.3"/>
+        <circle cx="24" cy="24" r="8" fill="none" stroke="#7C5CFC" stroke-width="2.5"/>
+        <circle cx="24" cy="24" r="3" fill="#7C5CFC"/>
+        <line x1="19" y1="19" x2="14" y2="14" stroke="#7C5CFC" stroke-width="2" stroke-linecap="round"/>
+        <line x1="29" y1="19" x2="34" y2="14" stroke="#7C5CFC" stroke-width="2" stroke-linecap="round"/>
+        <line x1="19" y1="29" x2="14" y2="34" stroke="#7C5CFC" stroke-width="2" stroke-linecap="round"/>
+        <line x1="29" y1="29" x2="34" y2="34" stroke="#7C5CFC" stroke-width="2" stroke-linecap="round"/>
+        <rect x="14" y="6" width="4" height="5" rx="1" fill="#A78BFA"/>
+        <rect x="30" y="6" width="4" height="5" rx="1" fill="#A78BFA"/>
+        <rect x="12" y="23" width="3" height="3" rx="0.5" fill="#C4B5FD"/>
+        <rect x="33" y="23" width="3" height="3" rx="0.5" fill="#C4B5FD"/>
+      </svg>
       <div>
         <h1>视频去重工位</h1>
         <p>本地素材处理与验收</p>
@@ -180,21 +238,32 @@
                 <textarea id="tts-template" class="tts-textarea" rows="3" placeholder="例如：你是带货主播，把原文改写为口播带货文案，突出卖点、引导下单，语气热情有感染力。&#10;&#10;这段提示词会作为 DeepSeek 的「自定义指令」，和系统默认要求、视频原文一起发送。"></textarea>
                 <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;align-items:center;">
                   <span style="font-size:12px;color:var(--gray-500);white-space:nowrap;">快速填入示例：</span>
-                  <button type="button" class="btn btn-mini tts-template-fill" data-template="带货">📦 带货</button>
-                  <button type="button" class="btn btn-mini tts-template-fill" data-template="解说">🎙️ 解说</button>
-                  <button type="button" class="btn btn-mini tts-template-fill" data-template="Vlog">📱 Vlog</button>
+                <button type="button" class="btn btn-mini tts-template-fill" data-template="带货"><svg class="ico-16" style="color:#F59E0B" aria-hidden="true"><use href="#ico-package"/></svg> 带货</button>
+                <button type="button" class="btn btn-mini tts-template-fill" data-template="解说"><svg class="ico-16" style="color:#3B82F6" aria-hidden="true"><use href="#ico-mic"/></svg> 解说</button>
+                <button type="button" class="btn btn-mini tts-template-fill" data-template="Vlog"><svg class="ico-16" style="color:#10B981" aria-hidden="true"><use href="#ico-phone"/></svg> Vlog</button>
                   <button type="button" class="btn btn-mini" id="btn-template-clear" style="margin-left:auto;">清空</button>
                 </div>
               </div>
               <p class="field-help" style="margin:6px 0 0;" id="tts-rewrite-hint">未启用改写。系统会用字幕/ASR 原文直接生成配音。</p>
+
+              <!-- 🆕 DeepSeek 改写预览 -->
+              <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;" id="tts-rewrite-actions">
+                <button type="button" id="btn-deepseek-login" class="btn btn-mini" style="background:var(--brand);color:#fff;"><svg class="ico-16" style="color:#A78BFA" aria-hidden="true"><use href="#ico-login"/></svg> 第1步：DeepSeek 登录</button>
+                <span style="font-size:11px;color:var(--warned);" id="tts-login-hint">← 首次使用先点这里，浏览器扫码登录</span>
+                <button type="button" id="btn-rewrite-preview" class="btn btn-primary" style="display:none;"><svg class="ico-16" style="color:#A855F7" aria-hidden="true"><use href="#ico-sparkle"/></svg> 第2步：DeepSeek 改写预览</button>
+                <span id="deepseek-status" style="font-size:11px;color:var(--gray-400);"></span>
+              </div>
+              <div id="rewrite-preview" style="display:none;margin-top:10px;padding:10px 12px;border:1px solid #B7E4D0;border-radius:8px;background:#162B20;">
+                <!-- JS 动态填充结果或错误 -->
+              </div>
             </div>
 
             <!-- 手动模式：文案输入 -->
             <div id="tts-manual-group" style="display:none;">
               <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;" id="tts-presets">
-                <button type="button" class="btn btn-mini tts-preset-btn" data-text="大家好，今天给大家带来一款超值好物，赶紧点击下方链接看看吧！">📦 带货</button>
-                <button type="button" class="btn btn-mini tts-preset-btn" data-text="你有没有想过，为什么有些人总能轻松搞定难题？其实秘诀只有一个……">🎙️ 解说</button>
-                <button type="button" class="btn btn-mini tts-preset-btn" data-text="今天去了一个好地方，随手拍了一段，分享给你们！喜欢的话记得点赞关注哦。">📱 Vlog</button>
+                <button type="button" class="btn btn-mini tts-preset-btn" data-text="大家好，今天给大家带来一款超值好物，赶紧点击下方链接看看吧！"><svg class="ico-16" style="color:#F59E0B" aria-hidden="true"><use href="#ico-package"/></svg> 带货</button>
+                <button type="button" class="btn btn-mini tts-preset-btn" data-text="你有没有想过，为什么有些人总能轻松搞定难题？其实秘诀只有一个……"><svg class="ico-16" style="color:#3B82F6" aria-hidden="true"><use href="#ico-mic"/></svg> 解说</button>
+                <button type="button" class="btn btn-mini tts-preset-btn" data-text="今天去了一个好地方，随手拍了一段，分享给你们！喜欢的话记得点赞关注哦。"><svg class="ico-16" style="color:#10B981" aria-hidden="true"><use href="#ico-phone"/></svg> Vlog</button>
               </div>
               <textarea id="tts-text" class="tts-textarea" rows="3" placeholder="输入配音文案，比如：&#10;大家好，今天给大家分享一个超实用的干货，记得点赞收藏！&#10;&#10;也可以点上方快捷按钮一键填入。留空则不启用配音。"></textarea>
             </div>

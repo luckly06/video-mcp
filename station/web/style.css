@@ -53,6 +53,11 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 code, pre, .probe-val, .dedup-detail, .tool-name, .wl-tag, .fission-md5, .modal-op-name, .modal-op-params {
   font-family: "Consolas", "SFMono-Regular", monospace;
 }
+/* SVG 内联图标 */
+.ico-16 { width: 16px; height: 16px; vertical-align: -3px; flex-shrink: 0; }
+.ico-14 { width: 14px; height: 14px; vertical-align: -2px; flex-shrink: 0; }
+.ico-20 { width: 20px; height: 20px; vertical-align: -4px; flex-shrink: 0; }
+.brand-mascot { flex-shrink: 0; margin-right: 2px; }
 code {
   color: var(--text-primary);
   background: var(--surface-muted);
