@@ -118,19 +118,24 @@ async def main():
         try:
             # 评估页面里所有 canvas 和 img 的位置，挑最大的
             qr_rect = await page.evaluate("""() => {{
-                // 找所有可能是 QR 码的元素
+                // 找所有可能是 QR 码的元素（canvas 或 img）
                 const candidates = [
                     ...document.querySelectorAll('canvas'),
-                    ...document.querySelectorAll('[class*="qrcode"], [class*="QrCode"], [class*="qr-code"]'),
-                    ...document.querySelectorAll('[class*="qrcode-img"], [class*="qrbox"]'),
+                    ...document.querySelectorAll('img[src*="qr"], img[src*="QR"], img[src*="base64"]'),
+                    ...document.querySelectorAll('[class*="qrcode"], [class*="QrCode"], [class*="qr-code"], [class*="qrcode-img"], [class*="qrbox"], [class*="QR"], [class*="qrImg"]'),
                 ];
                 let best = null, bestSize = 0;
                 for (const el of candidates) {{
                     const r = el.getBoundingClientRect();
                     const sz = r.width * r.height;
-                    if (sz > 5000 && sz > bestSize) {{  // 至少 5万像素
-                        best = {{x: r.x, y: r.y, w: r.width, h: r.height}};
-                        bestSize = sz;
+                    // 方形、最小尺寸 100x100 = 10000 像素
+                    if (sz > 10000 && r.width >= 100 && r.height >= 100 && sz > bestSize) {{
+                        // 还要近似方形（QR 码都是方形的）
+                        const ratio = Math.max(r.width, r.height) / Math.min(r.width, r.height);
+                        if (ratio < 1.5) {{
+                            best = {{x: r.x, y: r.y, w: r.width, h: r.height}};
+                            bestSize = sz;
+                        }}
                     }}
                 }}
                 return best;
