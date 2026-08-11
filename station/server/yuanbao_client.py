@@ -75,14 +75,16 @@ async def main():
     try:
         import platform
         if platform.system() == "Linux":
-            browser = await async_playwright().start().chromium.launch_persistent_context(
+            pw = await async_playwright().start()
+            browser = await pw.chromium.launch_persistent_context(
                 user_data_dir=str(profile),
                 headless=True,
                 executable_path="/usr/bin/chromium",
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu",
                       "--disable-blink-features=AutomationControlled"])
         else:
-            browser = await async_playwright().start().chromium.launch_persistent_context(
+            pw = await async_playwright().start()
+            browser = await pw.chromium.launch_persistent_context(
                 user_data_dir=str(profile),
                 headless=False,
                 channel="{channel}",
