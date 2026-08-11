@@ -956,7 +956,7 @@ function readTTS() {
     }
     return {
       tts_text: null,
-      rewrite_template: template,  // 空 = 不改写，非空 = DeepSeek 改写
+      rewrite_template: template,  // 空 = 不改写，非空 =元宝改写
       rewrite_topic: (document.getElementById("tts-topic") || {}).value || "",
       tts_voice: elVoice ? elVoice.value : "冰糖",
       tts_speed: elSpeed ? parseFloat(elSpeed.value) || 1.0 : 1.0,
@@ -1812,14 +1812,14 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
     });
   });
 
-  // 🆕 DeepSeek 改写开关：勾选 → 显示模板 textarea，不勾 → 隐藏并清空
+  // 🆕元宝改写开关：勾选 → 显示模板 textarea，不勾 → 隐藏并清空
   var chkRewrite = document.getElementById("chk-rewrite");
   var templateWrap = document.getElementById("tts-template-wrap");
   var rewriteHint = document.getElementById("tts-rewrite-hint");
   function syncRewriteUI() {
     var on = chkRewrite && chkRewrite.checked;
     if (templateWrap) templateWrap.style.display = on ? "" : "none";
-    // 元宝登录按钮和预览按钮：勾上就显示，不做假登录检测
+    //元宝登录按钮和预览按钮：勾上就显示，不做假登录检测
     var elActions = document.getElementById("tts-rewrite-actions");
     if (elActions) elActions.style.display = on ? "" : "none";
     if (rewriteHint) rewriteHint.textContent = on
@@ -1856,11 +1856,11 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
     });
   }
-  // 🆕 DeepSeek 登录按钮（已废弃，全切元宝）
+  // 🆕元宝登录按钮（已废弃，全切元宝）
   // var btnLogin = document.getElementById("btn-deepseek-login");
   // ...
   // DS login handler removed — use yuanbao only
-  // 🆕 元宝登录按钮
+  // 🆕元宝登录按钮
   var ybBtn = document.getElementById("btn-yuanbao-login");
   if (ybBtn) {
     ybBtn.addEventListener("click", async function () {
@@ -1878,7 +1878,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       }
     });
   }
-  // 🆕 DeepSeek 改写预览按钮
+  // 🆕元宝改写预览按钮
   var btnPreview = document.getElementById("btn-rewrite-preview");
   var previewBox = document.getElementById("rewrite-preview");
   if (btnPreview) {
@@ -1900,7 +1900,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
         if (result.kind !== "ok" || !result.data) {
           var errText = result.text || "未知错误";
           if (/未登录|登录态|login/i.test(errText)) {
-            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">DeepSeek 未登录</div><div style="font-size:13px;color:var(--gray-300);margin-bottom:8px;">请先点击左侧的「DeepSeek 登录」按钮，在浏览器里扫码登录后再试。</div>';
+            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">元宝未登录</div><div style="font-size:13px;color:var(--gray-300);margin-bottom:8px;">请先点击左侧的「元宝登录」按钮，在浏览器里扫码登录后再试。</div>';
             previewBox.style.display = "";
             toast("元宝未登录，请先点击「元宝登录」按钮", "err");
           } else if (/无字幕|ASR|未识别|提取文案|无法提取/i.test(errText)) {
@@ -1934,7 +1934,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
           var rewrittenHtml = '<div class="rp-rewritten">' + escapeHtml(d.rewritten) + '<span class="rp-meta">(' + d.rewritten.length + '字)</span></div>';
           previewBox.dataset.rewritten = d.rewritten;  // 供「确认使用」直接读取
           previewBox.innerHTML =
-            '<div class="rp-title">✦ 元宝改写结果<span class="rp-meta">' + durText + '</span></div>' +
+            '<div class="rp-title">✦元宝改写结果<span class="rp-meta">' + durText + '</span></div>' +
             spBlock(originalHtml) +
             spBlock(rewrittenHtml) +
             '<div class="rp-actions">' +
@@ -1947,9 +1947,9 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
           var diagMsg = d.error || "";
           previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">未获得改写结果</div>' +
             (diagMsg ? '<div style="font-size:11px;color:var(--gray-300);margin-bottom:6px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,monospace;background:rgba(255,255,255,.04);padding:6px 8px;border-radius:4px;">' + escapeHtml(diagMsg) + '</div>' : '') +
-            '<div style="font-size:12px;color:var(--gray-400);">请确认已登录 DeepSeek 后再试。</div>';
+            '<div style="font-size:12px;color:var(--gray-400);">请确认已登录元宝后再试。</div>';
           previewBox.style.display = "";
-          toast("DeepSeek 未返回改写结果", "warn");
+          toast("元宝未返回改写结果", "warn");
         }
       } catch (e) {
         previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">请求失败</div><div style="font-size:13px;color:var(--gray-300);">' + (e.message || '网络错误') + '</div>';
