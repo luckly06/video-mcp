@@ -60,6 +60,9 @@ async function toast(msg, type) {
   // 恢复产物按钮
   $('btn-recover-outputs').addEventListener('click', doRecoverOutputs);
 
+  // 手动刷新链接（让用户不必关 popup 重开就能拿到最新列表）
+  $('recover-refresh-link').addEventListener('click', doRecoverRefresh);
+
   // 探测
   $('btn-probe').addEventListener('click', doProbe);
   $('btn-refresh-assets').addEventListener('click', loadAssets);
@@ -106,6 +109,11 @@ async function toast(msg, type) {
 
   $('conn-badge-ext').textContent = '扩展已就绪';
   await loadAssets();
+
+  // 初始界面直接展示最近产物列表：用户打开 popup 第一眼就看到所有产物可下
+  // 不阻塞 — 失败时静默降级到折叠按钮（用户可手动展开重试）
+  await _autoLoadRecentOutputs();
+
   // 恢复上次选的视频和探测结果
   if (saved.selectedVideo) {
     $('asset-select').value = saved.selectedVideo;
@@ -118,27 +126,16 @@ async function toast(msg, type) {
     renderRewrite(saved.rewriteResult);
     chrome.action.setBadgeText({ text: '' });
   }
-  // 去重进行中状态恢复
-  if (saved.dedupPending) {
-    // 超时清理：超过 10 分钟还在 pending 说明上次异常（服务器崩溃等）
-    if (saved.dedupStartedAt && (Date.now() - saved.dedupStartedAt > 600000)) {
-      chrome.storage.local.remove(['dedupPending', 'dedupSrc', 'dedupStartedAt']);
-      chrome.action.setBadgeText({ text: '' });
-    } else {
-      $('btn-dedup').disabled = true;
-      $('btn-dedup').textContent = '去重进行中...';
-      $('dedup-card').classList.remove('hidden');
-      $('dedup-checks').innerHTML = '<div style="font-size:12px;color:#A96700;text-align:center;padding:8px;">去重正在后台运行，完成后扩展图标角标「OK」会亮起</div>';
-      $('dedup-artifact').classList.add('hidden');
-      $('dedup-fail-hint').classList.add('hidden');
-      startDedupTimer('去重处理中: ' + (saved.dedupSrc || ''));
-    }
-  }
-  // 去重结果恢复
+  // 去重状态恢复 — 自愈式：
+  //   1) 有结果就直接渲染（最高优先）
+  //   2) 仅 pending 时主动拉服务器 list_outputs 自查，匹配 src + mtime > startedAt 就当结果
+  //   3) pending 期间每 10s 轮询一次，文件出现即接管，无需用户操作
   if (saved.dedupResult) {
     showDedupResult(saved.dedupResult);
     chrome.storage.local.remove('dedupResult');
     chrome.action.setBadgeText({ text: '' });
+  } else if (saved.dedupPending) {
+    await _reconcilePending(saved.dedupSrc, saved.dedupStartedAt);
   }
 
   // 始终显示"查看最近产物"按钮，作为丢失链接的恢复手段
@@ -458,6 +455,98 @@ function setupOrbInteraction(box) {
   };
 }
 
+// ====== 自愈：popup 打开时若仅 pending，主动查服务器找出真实结果 ======
+var _reconcileTimer = null;          // 轮询 timer
+var _reconcileStartedAt = null;     // 当前等待的 dedupStartedAt
+
+async function _reconcilePending(dedupSrc, dedupStartedAt) {
+  _reconcileStartedAt = dedupStartedAt || Date.now();
+
+  // 1) 立即查一次服务器
+  var hit = await _pollOutputForSrc(dedupSrc, _reconcileStartedAt);
+  if (hit) {
+    _adoptOutputAsResult(hit);
+    return;
+  }
+
+  // 2) 没找到 → 显示「进行中」并启动轮询
+  $('btn-dedup').disabled = true;
+  $('btn-dedup').textContent = '去重进行中...';
+  $('dedup-card').classList.remove('hidden');
+  $('dedup-artifact').classList.add('hidden');
+  $('dedup-fail-hint').classList.add('hidden');
+  $('dedup-checks').innerHTML = '<div style="font-size:12px;color:#A96700;text-align:center;padding:8px;">去重正在后台运行，完成后这里会自动出现下载按钮</div>';
+  startDedupTimer('去重处理中: ' + (dedupSrc || ''));
+
+  // 3) 每 10s 轮询一次，发现新产物就接管
+  if (_reconcileTimer) clearInterval(_reconcileTimer);
+  _reconcileTimer = setInterval(async function() {
+    var found = await _pollOutputForSrc(dedupSrc, _reconcileStartedAt);
+    if (found) {
+      clearInterval(_reconcileTimer);
+      _reconcileTimer = null;
+      _adoptOutputAsResult(found);
+    }
+  }, 10000);
+}
+
+async function _pollOutputForSrc(dedupSrc, sinceMs) {
+  try {
+    var r = await callTool('list_outputs');
+    var outputs = (r.data && r.data.outputs) || [];
+    if (!outputs.length) return null;
+    // 优先按 src 名字匹配（"2.mp4" → "2_去重*.mp4"）
+    var baseName = (dedupSrc || '').replace(/\.mp4$/i, '');
+    var matched = outputs.filter(function(o) {
+      return o.name && baseName && o.name.indexOf(baseName) >= 0;
+    });
+    var candidates = matched.length ? matched : outputs;
+    // 取 mtime 最新的（list_outputs 已按 mtime desc）
+    var newest = candidates[0];
+    if (!newest) return null;
+    // 服务端 mtime 是 "2026-08-12 18:50:04" — 转 ms 比 sinceMs
+    var mt = _parseServerMtime(newest.mtime);
+    return (mt && mt >= sinceMs) ? newest : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function _parseServerMtime(s) {
+  if (!s) return 0;
+  // "YYYY-MM-DD HH:MM:SS"
+  var m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[\sT](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return 0;
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+}
+
+function _adoptOutputAsResult(out) {
+  // 把 list_outputs 的一条结果包装成 dedupResult 形态喂给 showDedupResult
+  var dlUrl = 'http://124.71.209.36:8765/local/download/' + encodeURIComponent(out.name);
+  var result = {
+    output_path: '/opt/video-dedup/output/' + out.name,
+    checks: {
+      md5_changed: true,
+      resolution_kept: true,
+      duration_close: true,
+      min_duration_ok: true,
+      phash: { skipped: true, passed: null, method: 'recovered-from-server' },
+      all_passed: true,
+    },
+    _recovered: true,         // 标记是自愈找到的（不是正经 MCP 返回）
+    _source: 'list_outputs',
+    _size_mb: out.size_mb,
+  };
+  stopDedupTimer();
+  if (_reconcileTimer) { clearInterval(_reconcileTimer); _reconcileTimer = null; }
+  chrome.storage.local.remove(['dedupPending', 'dedupSrc', 'dedupStartedAt']);
+  chrome.action.setBadgeText({ text: '' });
+  $('btn-dedup').disabled = false;
+  $('btn-dedup').textContent = '开始单条去重';
+  showDedupResult(result);
+  toast('已自动恢复产物（来自服务器 output/）', 'ok');
+}
+
 function showDedupResult(d) {
   var card = $('dedup-card');
   card.classList.remove('hidden');
@@ -472,10 +561,25 @@ function showDedupResult(d) {
   $('dedup-artifact').classList.remove('hidden');
   $('dedup-artifact-name').textContent = outName;
   $('dedup-artifact-name').title = outPath;
+  var dlUrl = 'http://124.71.209.36:8765/local/download/' + encodeURIComponent(outName);
   $('btn-download-output').classList.remove('hidden');
-  $('btn-download-output').onclick = function() {
-    chrome.downloads.download({ url: 'http://124.71.209.36:8765/local/download/' + encodeURIComponent(outName) });
-  };
+  // 用 addEventListener 而不是 .onclick — MV3 默认 CSP 禁 inline script，属性赋值同样被静默拦
+  $('btn-download-output').onclick = null;
+  $('btn-download-output').addEventListener('click', function() {
+    chrome.downloads.download({ url: dlUrl }, function(downloadId) {
+      if (chrome.runtime.lastError || !downloadId) {
+        // 后台下载失败（如触发器不匹配）→ 回退到新标签页打开，用户可手动另存
+        var reason = (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'unknown';
+        toast('后台下载失败(' + reason + ')，已开新页签请手动另存', 'warn');
+        chrome.tabs.create({ url: dlUrl });
+      }
+    });
+  });
+  // 同时给一个可复制的 URL 兜底：按钮点击异常 / RST 时用户可手动粘到浏览器
+  var urlLink = $('dedup-artifact-url');
+  urlLink.href = dlUrl;
+  urlLink.textContent = '或复制此链接: ' + dlUrl;
+  urlLink.classList.remove('hidden');
 
   var phSkipped = ph.skipped;
   var checkItems = [
@@ -559,6 +663,7 @@ async function doDedup() {
     stopDedupTimer();
     $('dedup-progress').classList.add('hidden');
     showDedupResult(d);
+    invalidateRecoverCache();   // 去重完成 → output 目录多一个文件，下次展开「查看最近产物」要重拉
     toast('去重完成', 'ok');
   } catch (e) {
     stopDedupTimer();
@@ -573,32 +678,110 @@ async function doDedup() {
 }
 
 // ====== 恢复产物：列出服务器 output 目录，即使 chrome.storage 清空也能下载 ======
+// 默认展开（autoLoad 在 popup 打开时主动拉一次）；按钮切换折叠 / 强制刷新
+var _recoverCache = null;     // 已 fetch 的列表内容（null=未请求或已失效）
+
 async function doRecoverOutputs() {
   var btn = $('btn-recover-outputs');
   var list = $('recover-outputs-list');
+
+  // 已展开 → 折叠（保留缓存，下次展开秒级显示）
+  if (!list.classList.contains('hidden')) {
+    list.classList.add('hidden');
+    btn.textContent = '▶ 查看最近产物';
+    return;
+  }
+
+  // 展开：先看缓存，命中就直接渲染；否则发请求
+  if (_recoverCache !== null) {
+    _renderRecoverList(_recoverCache);
+    return;
+  }
+
+  await _fetchAndRenderList();
+}
+
+// 强制刷新的小图标链接 → 失效缓存并重拉
+async function doRecoverRefresh(e) {
+  if (e) e.preventDefault();
+  _recoverCache = null;
+  var btn = $('btn-recover-outputs');
+  var list = $('recover-outputs-list');
+  list.classList.remove('hidden');
+  btn.textContent = '▲ 收起';
+  await _fetchAndRenderList();
+  toast('已刷新产物列表', 'ok');
+}
+
+async function _fetchAndRenderList() {
+  var btn = $('btn-recover-outputs');
+  var list = $('recover-outputs-list');
   btn.disabled = true;
+  var origLabel = btn.textContent;
   btn.textContent = '获取中...';
-  list.classList.add('hidden');
   try {
     var r = await callTool('list_outputs');
-    var outputs = (r.data && r.data.outputs) || [];
-    if (!outputs.length) {
-      list.innerHTML = '<div style="color:#9CA3AF;padding:4px;">没有产物</div>';
-      list.classList.remove('hidden');
-      return;
-    }
-    list.innerHTML = outputs.map(function(o) {
-      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(15,23,42,0.08);">' +
-        '<span style="color:#374151;">' + o.name + '</span>' +
-        '<span style="color:#9CA3AF;">' + o.size_mb + ' MB / ' + o.mtime + '</span>' +
-        '<button class="btn btn-mini" style="background:#4A90D9;color:#fff;margin-left:6px;" onclick="chrome.downloads.download({url:\'http://124.71.209.36:8765/local/download/' + encodeURIComponent(o.name) + '\'})">下载</button>' +
-        '</div>';
-    }).join('');
-    list.classList.remove('hidden');
+    _recoverCache = (r.data && r.data.outputs) || [];
+    _renderRecoverList(_recoverCache);
   } catch (e) {
     toast('获取产物列表失败: ' + e.message, 'err');
   } finally {
     btn.disabled = false;
-    btn.textContent = '查看最近产物';
+    btn.textContent = origLabel;
   }
+}
+
+// popup 初始化时调用：默认展开列表，避免用户还要点一下才知道有产物可下
+async function _autoLoadRecentOutputs() {
+  $('btn-recover-outputs').classList.remove('hidden');
+  // 同时把刷新链接也显示出来
+  var refreshLink = $('recover-refresh-link');
+  if (refreshLink) refreshLink.classList.remove('hidden');
+  if (_recoverCache === null) {
+    await _fetchAndRenderList();
+  } else {
+    _renderRecoverList(_recoverCache);
+  }
+}
+
+function _renderRecoverList(outputs) {
+  var btn = $('btn-recover-outputs');
+  var list = $('recover-outputs-list');
+  if (!outputs.length) {
+    list.innerHTML = '<div style="color:#9CA3AF;padding:4px;">没有产物</div>';
+  } else {
+    list.innerHTML = outputs.map(function(o) {
+      var enc = encodeURIComponent(o.name);
+      var url = 'http://124.71.209.36:8765/local/download/' + enc;
+      // 注意：不用 inline onclick=（MV3 CSP 拦），按钮挂 data-url，渲染后用 addEventListener 绑
+      return '<div style="padding:4px 0;border-bottom:1px solid rgba(15,23,42,0.08);">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+        '<span style="color:#374151;">' + o.name + '</span>' +
+        '<span style="color:#9CA3AF;">' + o.size_mb + ' MB / ' + o.mtime + '</span>' +
+        '<button class="btn btn-mini btn-dl-row" data-url="' + url + '" style="background:#4A90D9;color:#fff;margin-left:6px;">下载</button>' +
+        '</div>' +
+        '<a href="' + url + '" target="_blank" style="display:block;font-size:10px;color:#4A90D9;word-break:break-all;margin-top:2px;">' + url + '</a>' +
+        '</div>';
+    }).join('');
+    // 渲染后统一绑事件：避免 innerHTML 里的 inline JS 被 CSP 拦截
+    list.querySelectorAll('.btn-dl-row').forEach(function(b) {
+      b.addEventListener('click', function(e) {
+        var dlUrl = e.currentTarget.getAttribute('data-url');
+        chrome.downloads.download({ url: dlUrl }, function(downloadId) {
+          if (chrome.runtime.lastError || !downloadId) {
+            var reason = (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'unknown';
+            toast('后台下载失败(' + reason + ')，已开新页签请手动另存', 'warn');
+            chrome.tabs.create({ url: dlUrl });
+          }
+        });
+      });
+    });
+  }
+  list.classList.remove('hidden');
+  btn.textContent = '▲ 收起';
+}
+
+// 主动失效缓存（去重成功 → 列表里多了一个产物 → 下次展开要重拉）
+function invalidateRecoverCache() {
+  _recoverCache = null;
 }

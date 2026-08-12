@@ -25,6 +25,9 @@ import threading
 import subprocess
 import configparser
 from pathlib import Path
+import logging
+
+logger = logging.getLogger("vu.pipeline")
 
 # 感知度量域（模块一）。同目录模块，保证 pytest / server 两种入口都能导入。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -717,7 +720,8 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     tts_status = None
     if tts_text and tts_text.strip():
         try:
-            from station.server import tts_client as T
+            # sys.path 已被模块顶部 insert 到 server/ 目录，直接 import 即可
+            import tts_client as T
             if T.is_available():
                 voice = tts_voice or "冰糖"
                 speed = float(tts_speed or 1.0)

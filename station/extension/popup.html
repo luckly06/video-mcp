@@ -159,6 +159,7 @@
         <div id="dedup-artifact" class="artifact-highlight hidden">
           <strong id="dedup-artifact-name"></strong>
           <button id="btn-download-output" class="btn btn-mini hidden" style="background:#4A90D9;color:#fff;margin-left:8px;">下载</button>
+          <a id="dedup-artifact-url" class="hidden" target="_blank" style="display:block;margin-top:4px;font-size:10px;color:#4A90D9;word-break:break-all;"></a>
         </div>
         <div id="dedup-fail-hint" class="hidden" style="margin-top:8px;padding:8px 10px;border-radius:6px;background:#FFF6E5;border:1px solid #F1D295;font-size:11px;color:#A96700;">
           <span id="dedup-fail-text"></span>
@@ -166,9 +167,19 @@
         <div id="dedup-tts-hint" class="hidden" style="margin-top:8px;padding:8px 10px;border-radius:6px;background:#FDF2F8;border:1px solid #F5C6D7;font-size:11px;color:#9B2C5E;">
           <span id="dedup-tts-text"></span>
         </div>
-        <button id="btn-recover-outputs" class="btn btn-mini hidden" style="margin-top:8px;background:#6B7280;color:#fff;">查看最近产物</button>
-        <div id="recover-outputs-list" class="hidden" style="margin-top:4px;font-size:11px;"></div>
       </div>
+    </section>
+
+    <!-- 最近产物（独立卡片，紧跟在去重参数下方） -->
+    <section class="work-card" style="margin-bottom:8px;">
+      <div class="card-heading" style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>最近产物</h3>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <a id="recover-refresh-link" href="#" class="hidden" style="font-size:11px;color:#6B7280;text-decoration:none;">↻ 刷新</a>
+          <button id="btn-recover-outputs" class="btn btn-mini hidden" style="background:#6B7280;color:#fff;">▲ 收起</button>
+        </div>
+      </div>
+      <div id="recover-outputs-list" class="hidden" style="margin-top:4px;font-size:11px;"></div>
     </section>
   </main>
 

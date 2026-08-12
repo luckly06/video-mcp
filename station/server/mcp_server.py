@@ -204,6 +204,19 @@ TOOLS = [
         "_tier": "warned",
     },
     {
+        "name": "extract_copy_context",
+        "description": "提取视频改写上下文：ASR 音频识别 + 关键帧 JPEG(base64)。返回 {raw_text, source, duration, max_chars, frames_b64}，供元宝/DeepSeek 改写文案使用。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "文件名或绝对路径"},
+                "n_frames": {"type": "integer", "description": "抽帧数（默认 5）"},
+            },
+            "required": ["src"],
+        },
+        "_tier": "audit",
+    },
+    {
         "name": "get_job",
         "description": "按 job_id 查询任务 handle 的状态与结果（显式 handle 模式）。",
         "inputSchema": {
@@ -276,6 +289,66 @@ def _exec_tool(name, args):
         return {"outputs": P.list_outputs()}
     if name == "probe_video":
         return P.probe_video(args["src"])
+    if name == "extract_copy_context":
+        # 给改写流程用的上下文：ASR 文字 + 帧图 base64
+        # 复用 copy_rewriter._extract_frames + asr_client.transcribe_video
+        import base64
+        import copy_rewriter as CR
+        import asr_client as AC
+        from pipeline import VIDEO_DIR, FFMPEG, _resolve_safe
+
+        n_frames = int(args.get("n_frames") or 5)
+        # src 走白名单校验（与 dedup_video / probe_video 一致）
+        try:
+            video_path = str(_resolve_safe(args["src"], VIDEO_DIR, must_exist=True))
+        except Exception as e:
+            raise P.PipelineError(f"src 不在 VIDEO_DIR 内或不存在: {e}")
+
+        # 1) 时长（用 ffprobe 单独走一次，避免和 metrics._probe_duration 耦合）
+        try:
+            import json as _json
+            probe = subprocess.run(
+                [str(P.FFPROBE), "-v", "error", "-show_entries", "format=duration",
+                 "-of", "json", video_path],
+                capture_output=True, text=True, timeout=15,
+            )
+            duration = float(_json.loads(probe.stdout or "{}").get("format", {}).get("duration", 0) or 0)
+        except Exception:
+            duration = 0.0
+
+        # 2) ASR（失败返回空字符串，不阻塞帧图）
+        raw_text = ""
+        source = ""
+        try:
+            raw_text = AC.transcribe_video(video_path, str(P.FFMPEG)) or ""
+            source = "asr" if raw_text else ""
+        except Exception as e:
+            import logging
+            logging.getLogger("vu").warning(f"ASR 失败: {e}")
+
+        # 3) 抽帧 → JPEG → base64
+        frames_b64 = []
+        try:
+            frame_paths = CR._extract_frames(Path(video_path), P.FFMPEG, n=n_frames)
+            for fp in frame_paths:
+                try:
+                    with open(fp, "rb") as fh:
+                        frames_b64.append(base64.b64encode(fh.read()).decode("ascii"))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # 4) 最大字数：中文 TTS 约 3 字/秒，最少 30 字
+        max_chars = max(30, int(duration * 3)) if duration > 0 else 30
+
+        return {
+            "raw_text": raw_text,
+            "source": source,
+            "duration": duration,
+            "max_chars": max_chars,
+            "frames_b64": frames_b64,
+        }
     if name == "dedup_video":
         r = P.dedup_video(
             args["src"],
@@ -621,7 +694,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             content_type = "video/mp4" if fname.endswith(".mp4") else "application/octet-stream"
             try:
-                body = fpath.read_bytes()
+                file_size = fpath.stat().st_size
+                fp = open(fpath, "rb")
             except OSError:
                 self.send_response(500)
                 self.send_header("Content-Length", "0")
@@ -630,11 +704,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(fname, safe='')}")
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(file_size))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             if not head_only:
-                self.wfile.write(body)
+                # 流式分块发送：64KB/片，避免 100MB 一次性读进内存导致 RST + 慢
+                try:
+                    while True:
+                        chunk = fp.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # 客户端断连属正常，资源已在 finally 释放
+                finally:
+                    fp.close()
             return
         web_file = _WEB_FILES.get(path)
         if web_file is None:

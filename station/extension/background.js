@@ -145,20 +145,37 @@ async function handle(msg, sender) {
   // 扩展 popup API
   if (msg.action === 'ping') return { ok: true, base: API_BASE };
   if (msg.action === 'mcp') {
-    // 去重开始：popup 关掉也能保留角标（Service Worker 不受 popup 关闭影响）
     if (msg.name === 'dedup_video') {
-      chrome.storage.local.set({ dedupPending: true });
+      // 去重开始：popup 关掉也能保留角标（Service Worker 不受 popup 关闭影响）
+      chrome.storage.local.set({ dedupPending: true, dedupStartedAt: Date.now() });
       chrome.action.setBadgeText({ text: '…' });
       chrome.action.setBadgeBackgroundColor({ color: '#F59E0B' });
     }
-    const r = await callMcp(msg.name, msg.args || {});
-    // 去重完成：亮 OK 角标
-    if (msg.name === 'dedup_video') {
-      chrome.storage.local.set({ dedupResult: r, dedupPending: false });
-      chrome.storage.local.remove(['dedupSrc', 'dedupStartedAt']);
-      chrome.action.setBadgeText({ text: 'OK' });
-      chrome.action.setBadgeBackgroundColor({ color: '#10b981' });
+    let _r, _err;
+    try {
+      _r = await callMcp(msg.name, msg.args || {});
+    } catch (e) {
+      _err = e;
     }
+    if (msg.name === 'dedup_video') {
+      // 不管成功还是失败都要清 pending：异常路径不清 → popup 永远卡在「进行中」+ 按钮禁用
+      const finalize = () => {
+        chrome.storage.local.set({ dedupPending: false });
+        chrome.storage.local.remove(['dedupSrc', 'dedupStartedAt']);
+        chrome.action.setBadgeText({ text: _err ? '!' : 'OK' });
+        chrome.action.setBadgeBackgroundColor({ color: _err ? '#ef4444' : '#10b981' });
+        if (_err) {
+          // 把失败结果也存进 dedupResult，让 popup 能渲染错误提示
+          chrome.storage.local.set({ dedupResult: { error: _err.message || String(_err) } });
+        }
+      };
+      finalize();
+      if (!_err) {
+        chrome.storage.local.set({ dedupResult: _r });
+      }
+    }
+    if (_err) throw _err;
+    const r = _r;
     return r;
   }
   if (msg.action === 'upload64') return await uploadFromBase64(msg.name, msg.data);
