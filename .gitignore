@@ -29,3 +29,9 @@ station/_smoke_*.py
 
 # 根目录临时测试脚本（应归到 tests/ 或 archive/）
 /test_*.py
+
+# === 2026-08-12 补充：Electron 桌面壳 ===
+station/desktop/node_modules/
+station/desktop/dist/
+station/desktop/out/
+station/desktop/logs/

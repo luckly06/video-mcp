@@ -329,7 +329,7 @@ mv changes/<change-id> changes/archive/$(date +%Y-%m-%d)-<change-id>
 
 | Change ID | 说明 | 影响级别 | 进度 |
 |---|---|---|---|
-| — | 无活跃变更 | — | — |
+| `add-desktop-electron` | Electron 桌面壳（包裹 archive/web/，与扩展并存） | B | 待端到端验收 |
 
 > 已归档变更见 `changes/archive/`：
 > - `2026-08-11-add-asr-copy-rewrite` — ASR+文案提取+元宝改写全链路

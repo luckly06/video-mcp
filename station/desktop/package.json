@@ -1,0 +1,19 @@
+{
+  "name": "video-dedup-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron 桌面壳，包裹 archive/web/，对接远端 MCP。dev-only，本轮不打包。",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging --remote-debugging-port=9222",
+    "test": "node --test lib/__tests__/"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^31.7.7"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

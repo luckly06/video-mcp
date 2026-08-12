@@ -15,6 +15,10 @@
 "use strict";
 
 const API_BASE = (() => {
+  // desktop 注入：station/desktop/main.js 通过 file://?...&apiBase=... 加载本页时，
+  // 取 query 里的 apiBase 作为 MCP/UPLOAD/DOWNLOAD 的基础地址（绕过 file:// 协议派生失败）。
+  const queryBase = new URLSearchParams(window.location.search).get("apiBase");
+  if (queryBase && /^https?:\/\//i.test(queryBase)) return queryBase.replace(/\/+$/, "");
   const h = window.location.hostname;
   const p = window.location.port;
   const proto = window.location.protocol;
@@ -1635,7 +1639,7 @@ function toolLabel(t) {
     list_watermark_templates: "查看水印",
     remove_watermark: "去除水印",
     download: "下载产物",
-    rewrite_copy: "改写文案",
+    extract_copy_context: "提取改写上下文",
     get_job: "查询任务",
     delete_output: "删除产物",
   };
@@ -1856,79 +1860,19 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
     });
   }
-  // 🆕元宝登录按钮 — 弹窗显示 QR 码
+  // 🆕元宝登录按钮 — 桌面端：弹浮动 BrowserWindow（用户首次扫码登录元宝，登录态持久化）
   var ybBtn = document.getElementById("btn-yuanbao-login");
   if (ybBtn) {
     ybBtn.addEventListener("click", async function () {
-      var lab = this.textContent;
-      this.textContent = "⏳ 正在获取登录码...";
-      this.disabled = true;
-      try {
-        var r = await callTool("yuanbao_login", {});
-        var d = r.data || {};
-        if (d.logged_in) {
-          toast("已登录元宝 ✅", "ok");
-        } else if (d.qr_b64 || d.screenshot_b64) {
-          showYbQrModal(d.qr_b64 || d.screenshot_b64);
-        } else if (d.error) {
-          toast("失败: " + d.error, "err");
-        } else {
-          toast("请稍后重试", "warn");
-        }
-      } catch (e) {
-        toast("失败: " + (e.message || e), "err");
-      } finally {
-        this.textContent = lab;
-        this.disabled = false;
+      if (!window.desktop || !window.desktop.openYuanbao) {
+        toast("桌面端元宝 IPC 未启用", "err"); return;
       }
+      var r = await window.desktop.openYuanbao();
+      if (!r || !r.ok) { toast("打开元宝失败：" + (r && r.reason || "未知"), "err"); return; }
+      toast("元宝浏览器已打开；首次需扫码登录元宝", "ok");
     });
   }
 
-  function showYbQrModal(imgBase64) {
-    // 移除旧弹窗
-    var old = document.getElementById("yb-qr-modal");
-    if (old) old.remove();
-
-    var src = "data:image/png;base64," + imgBase64;
-    var modal = document.createElement("div");
-    modal.id = "yb-qr-modal";
-    modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;";
-    modal.innerHTML =
-      '<div style="background:#1a1a2e;border-radius:16px;padding:32px;text-align:center;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">'
-      + '<p style="margin:0 0 20px;font-size:16px;color:#e0e0e0;font-weight:600;">📱 微信扫码登录元宝</p>'
-      + '<div style="background:#fff;padding:24px;border-radius:12px;display:inline-block;">'
-      + '<img src="' + src + '" style="width:260px;height:260px;display:block;" />'
-      + '</div>'
-      + '<p style="margin:16px 0 0;font-size:12px;color:#888;">请用手机微信扫描上方二维码</p>'
-      + '<div style="margin-top:16px;display:flex;gap:10px;justify-content:center;">'
-      + '<button id="btn-yb-check" style="padding:8px 24px;border-radius:8px;border:none;background:#10b981;color:#fff;font-size:14px;cursor:pointer;" '
-      + 'onmouseover="this.style.background=\'#059669\'" onmouseout="this.style.background=\'#10b981\'">✅ 检查登录</button>'
-      + '<button onclick="document.getElementById(\'yb-qr-modal\').remove()" style="padding:8px 24px;border-radius:8px;border:1px solid #444;background:transparent;color:#aaa;font-size:14px;cursor:pointer;" '
-      + 'onmouseover="this.style.color=\'#fff\'" onmouseout="this.style.color=\'#aaa\'">关闭</button>'
-      + '</div></div>';
-    document.body.appendChild(modal);
-    modal.addEventListener("click", function(e) { if (e.target === modal) modal.remove(); });
-    // 绑定检查按钮
-    setTimeout(function() {
-      var ck = document.getElementById("btn-yb-check");
-      if (ck) ck.addEventListener("click", checkYbLogin);
-    }, 50);
-  }
-  // 检查元宝登录状态
-  async function checkYbLogin() {
-    try {
-      var r = await callTool("yuanbao_status", {});
-      if (r.data && r.data.profile_exists) {
-        toast("登录成功 ✅", "ok");
-        var modal = document.getElementById("yb-qr-modal");
-        if (modal) modal.remove();
-      } else {
-        toast("尚未登录，请扫码后稍等几秒再试", "warn");
-      }
-    } catch (e) {
-      toast("检查失败: " + (e.message || e), "err");
-    }
-  }
   // 🆕元宝改写预览按钮
   var btnPreview = document.getElementById("btn-rewrite-preview");
   var previewBox = document.getElementById("rewrite-preview");
@@ -1942,63 +1886,87 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       var topic = elTopic ? elTopic.value.trim() : "";
       var origLabel = this.textContent;
       this.disabled = true;
-
-      // 阶段1：提取文案
-      this.textContent = "提取视频文案中...";
+      this.textContent = "等待元宝改写...";
       try {
-        var result = await callTool("rewrite_copy", { src: src, template: template || "", topic: topic });
+        if (!window.desktop || !window.desktop.runYuanbaoRewrite) {
+          previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">桌面端未启用元宝 IPC</div><div style="font-size:13px;color:var(--gray-300);">仅 Electron 桌面壳支持。</div>';
+          previewBox.style.display = "";
+          toast("桌面端 IPC 未启用", "err"); return;
+        }
 
-        if (result.kind !== "ok" || !result.data) {
-          var errText = result.text || "未知错误";
-          if (/未登录|登录态|login/i.test(errText)) {
-            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">元宝未登录</div><div style="font-size:13px;color:var(--gray-300);margin-bottom:8px;">请先点击左侧的「元宝登录」按钮，在浏览器里扫码登录后再试。</div>';
-            previewBox.style.display = "";
-            toast("元宝未登录，请先点击「元宝登录」按钮", "err");
-          } else if (/无字幕|ASR|未识别|提取文案|无法提取/i.test(errText)) {
-            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">无法提取文案</div><div style="font-size:13px;color:var(--gray-300);">' + errText + '</div>';
-            previewBox.style.display = "";
-            toast("视频无可用文案，请切到手动模式输入", "warn");
-          } else {
-            previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">改写失败</div><div style="font-size:13px;color:var(--gray-300);">' + errText + '</div>';
-            previewBox.style.display = "";
-            toast("改写失败：" + errText, "err");
-          }
+        // 阶段1：提取视频文案 + 关键帧（extract_copy_context，与 Chrome 扩展 doRewriteFlow 一致）
+        this.textContent = "提取视频文案与帧图...";
+        var ctx = null;
+        try {
+          var ctxRes = await callTool("extract_copy_context", { src: src });
+          ctx = (ctxRes && ctxRes.kind === "ok" && ctxRes.data) ? ctxRes.data : null;
+        } catch (e) { ctx = null; }
+        if (!ctx || (!ctx.raw_text && !(ctx.frames_b64 && ctx.frames_b64.length))) {
+          previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">无法提取视频信息</div><div style="font-size:13px;color:var(--gray-300);">视频无字幕且无音频，无法提取改写文案。请切到手动模式输入文案。</div>';
+          previewBox.style.display = "";
+          toast("无法提取视频信息（无字幕且无音频）", "warn");
           return;
         }
 
-        var d = result.data;
+        this.textContent = "等待元宝改写...";
+
+        // 一次性监听 done 事件（content-yuanbao.js:48 chrome.runtime.sendMessage → 主世界 shim → __desktopYuanbao → IPC yuanbao-done）
+        var donePayload = await new Promise(function (resolve) {
+          var resolved = false;
+          var unsub = window.desktop.onYuanbaoDone(function (payload) {
+            if (resolved) return;
+            resolved = true; try { unsub && unsub(); } catch (_) {}
+            resolve(payload);
+          });
+          window.desktop.runYuanbaoRewrite({
+            frames_b64: ctx.frames_b64 || [],
+            raw_text: ctx.raw_text || "",
+            template: template,
+            topic: topic,
+            max_chars: ctx.max_chars || 30,
+          }).then(function (r) {
+            if (!r || !r.ok) {
+              if (resolved) return;
+              resolved = true; try { unsub && unsub(); } catch (_) {}
+              resolve({ action: "yb-done", data: { error: (r && r.error) || "元宝窗口未就绪" } });
+            }
+          });
+        });
+
+        var d = (donePayload && donePayload.data) || {};
         if (d.rewritten && previewBox) {
-          var durText = d.duration ? ' (视频 ' + Math.round(d.duration) + 's，上限 ' + d.max_chars + ' 字)' : '';
-          // 🆕 砂纸纹理底纹 — 包住原文和改写后两块
           var sandpaperSvg =
             '<svg class="sandpaper-svg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">' +
               '<defs><filter id="sandTexture">' +
                 '<feTurbulence result="sand" seed="20" numOctaves="4" baseFrequency="0.6" type="fractalNoise"></feTurbulence>' +
-                '<feColorMatrix values="0.8 0 0 0 0.1  0 0.7 0 0 0.05  0 0 0.6 0 0.02  0 0 0 1 0" type="matrix"></feColorMatrix>' +
+                '<feColorMatrix values="0.8 0 0 0 0.1  0 0.7 0 0 0.05  0 0 0 0.6 0 0 0.02  0 0 0 1 0" type="matrix"></feColorMatrix>' +
               '</filter></defs>' +
               '<rect filter="url(#sandTexture)" width="100%" height="100%"></rect>' +
             '</svg>';
-          function spBlock(inner) {
-            return '<div class="sandpaper-pattern">' + sandpaperSvg + inner + '</div>';
-          }
-          var originalHtml = '<div class="rp-original">📄 原文 (' + (d.source || '') + ')：' + escapeHtml(d.original || '') + '</div>';
+          function spBlock(inner) { return '<div class="sandpaper-pattern">' + sandpaperSvg + inner + '</div>'; }
           var rewrittenHtml = '<div class="rp-rewritten">' + escapeHtml(d.rewritten) + '<span class="rp-meta">(' + d.rewritten.length + '字)</span></div>';
-          previewBox.dataset.rewritten = d.rewritten;  // 供「确认使用」直接读取
+          previewBox.dataset.rewritten = d.rewritten;
           previewBox.innerHTML =
-            '<div class="rp-title">✦元宝改写结果<span class="rp-meta">' + durText + '</span></div>' +
-            spBlock(originalHtml) +
+            '<div class="rp-title">✦元宝改写结果</div>' +
             spBlock(rewrittenHtml) +
             '<div class="rp-actions">' +
-            '<button type="button" onclick="confirmRewriteText()" class="btn btn-mini" style="background:#16845B;color:#fff;"><svg class="ico-16" style="color:#6EE7B7"><use href=\'#ico-check\'/></svg> 确认使用此文案</button>' +
-            '<button type="button" onclick="cancelRewritePreview()" class="btn btn-mini" style="background:#444;color:#fff;"><svg class="ico-16" style="color:#FFA0A0"><use href=\'#ico-xcircle\'/></svg> 不用</button>' +
+            '<button type="button" id="btn-confirm-rewrite" class="btn btn-mini" style="background:#16845B;color:#fff;"><svg class="ico-16" style="color:#6EE7B7"><use href="#ico-check"/></svg> 确认使用此文案</button>' +
+            '<button type="button" id="btn-cancel-rewrite" class="btn btn-mini" style="background:#444;color:#fff;"><svg class="ico-16" style="color:#FFA0A0"><use href="#ico-xcircle"/></svg> 不用</button>' +
             '</div>';
           previewBox.style.display = "";
+          // addEventListener 绑定（避开 CSP inline onclick）
+          setTimeout(function () {
+            var btnOk = document.getElementById("btn-confirm-rewrite");
+            var btnCancel = document.getElementById("btn-cancel-rewrite");
+            if (btnOk) btnOk.addEventListener("click", window.confirmRewriteText);
+            if (btnCancel) btnCancel.addEventListener("click", window.cancelRewritePreview);
+          }, 50);
           toast("元宝改写完成", "ok");
         } else {
-          var diagMsg = d.error || "";
+          var diagMsg = d.error || "未获得回复";
           previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">未获得改写结果</div>' +
-            (diagMsg ? '<div style="font-size:11px;color:var(--gray-300);margin-bottom:6px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,monospace;background:rgba(255,255,255,.04);padding:6px 8px;border-radius:4px;">' + escapeHtml(diagMsg) + '</div>' : '') +
-            '<div style="font-size:12px;color:var(--gray-400);">请确认已登录元宝后再试。</div>';
+            '<div style="font-size:11px;color:var(--gray-300);margin-bottom:6px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,monospace;background:rgba(255,255,255,.04);padding:6px 8px;border-radius:4px;">' + escapeHtml(diagMsg) + '</div>' +
+            '<div style="font-size:12px;color:var(--gray-400);">如首次使用，请先点「元宝登录」扫码登录元宝（登录态持久化）。</div>';
           previewBox.style.display = "";
           toast("元宝未返回改写结果", "warn");
         }
