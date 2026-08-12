@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 561 667" role="img" aria-labelledby="title">
+  <title id="title">Shield chart logo reconstructed from raster</title>
+  <defs>
+    <linearGradient id="g-main" x1="110" y1="20" x2="430" y2="650" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00e8c5"/><stop offset=".48" stop-color="#08aef0"/><stop offset="1" stop-color="#0753e8"/>
+    </linearGradient>
+    <linearGradient id="g-bars" x1="185" y1="165" x2="330" y2="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00e4c7"/><stop offset=".55" stop-color="#05b8e7"/><stop offset="1" stop-color="#0878dd"/>
+    </linearGradient>
+  </defs>
+  <path id="shield-crown" fill="url(#g-main)" d="M263 0 472 97c36 17 52 40 48 75-4 43-31 91-75 135 22-38 29-70 19-101-10-31-35-57-73-77l-128-57-128 67c-61 32-92 84-92 137 0 60 25 111 71 137-79-10-114-85-114-213v-25c0-35 15-61 50-79L263 0Z"/>
+  <path id="lower-shield" fill="url(#g-main)" fill-rule="evenodd" d="M27 472c192 8 440-91 534-289-11 174-119 365-301 484C157 616 80 554 27 472Zm163 77c126-35 247-96 315-170-51 91-146 164-245 205l-70-35Z"/>
+  <g id="bars" fill="url(#g-bars)">
+    <path d="M132 412V305l69-26v131c-23 2-46 3-69 2Z"/>
+    <path d="M223 407V249l70-25v169c-23 6-46 10-70 14Z"/>
+    <path d="M314 386V193l69-36v189c-21 15-44 29-69 40Z"/>
+  </g>
+</svg>

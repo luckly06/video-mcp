@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
+  <title>视频去重工位 · 本地素材处理与验收</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- SVG 图标精灵表（Lucide 风格，无 Emoji） -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="ico-package" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12.89 1.45l8 4A2 2 0 0 1 22 7.24v9.53a2 2 0 0 1-1.11 1.79l-8 4a2 2 0 0 1-1.79 0l-8-4a2 2 0 0 1-1.1-1.8V7.24a2 2 0 0 1 1.11-1.79l8-4a2 2 0 0 1 1.78 0Z"/><path d="M2.32 6.16L12 11l9.68-4.84"/><path d="M12 22.76V11"/>
+    </symbol>
+    <symbol id="ico-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+    </symbol>
+    <symbol id="ico-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+    </symbol>
+    <symbol id="ico-sparkle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/>
+    </symbol>
+    <symbol id="ico-login" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+    </symbol>
+    <symbol id="ico-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10Z"/><path d="m9 12 2 2 4-4"/>
+    </symbol>
+    <symbol id="ico-xcircle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>
+    </symbol>
+    <symbol id="ico-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </symbol>
+    <symbol id="ico-checkmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="4 12 10 18 20 6"/>
+    </symbol>
+    <symbol id="ico-xmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+    </symbol>
+    <symbol id="ico-mascot" viewBox="0 0 64 64">
+      <circle cx="32" cy="32" r="28" fill="#2D1B69" stroke="#7C5CFC" stroke-width="2"/>
+      <rect x="22" y="18" width="20" height="16" rx="4" fill="#7C5CFC" opacity="0.3"/>
+      <circle cx="32" cy="26" r="4" fill="none" stroke="#A78BFA" stroke-width="2"/>
+      <circle cx="32" cy="26" r="1.5" fill="#A78BFA"/>
+      <line x1="26" y1="22" x2="18" y2="16" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="38" y1="22" x2="46" y2="16" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+      <rect x="24" y="37" width="16" height="6" rx="3" fill="#7C5CFC" opacity="0.5"/>
+      <line x1="14" y1="44" x2="20" y2="40" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="50" y1="44" x2="44" y2="40" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"/>
+    </symbol>
+  </svg>
+</body>
+  <div id="conn-banner" class="conn-banner hidden" role="status" aria-live="polite">
+    <span class="conn-dot" aria-hidden="true"></span>
+    <span id="conn-text">正在连接服务…</span>
+    <button id="conn-retry" class="conn-retry" type="button">重试连接</button>
+  </div>
+
+  <header class="topbar">
+    <div class="brand-group">
+      <svg class="brand-mascot" viewBox="0 0 48 48" aria-hidden="true" width="42" height="42">
+        <rect x="6" y="12" width="36" height="24" rx="6" fill="#7C5CFC" opacity="0.15"/>
+        <rect x="8" y="14" width="32" height="20" rx="4" fill="#7C5CFC" opacity="0.3"/>
+        <circle cx="24" cy="24" r="8" fill="none" stroke="#7C5CFC" stroke-width="2.5"/>
+        <circle cx="24" cy="24" r="3" fill="#7C5CFC"/>
+        <line x1="19" y1="19" x2="14" y2="14" stroke="#7C5CFC" stroke-width="2" stroke-linecap="round"/>
+        <line x1="29" y1="19" x2="34" y2="14" stroke="#7C5CFC" stroke-width="2" stroke-linecap="round"/>
+        <line x1="19" y1="29" x2="14" y2="34" stroke="#7C5CFC" stroke-width="2" stroke-linecap="round"/>
+        <line x1="29" y1="29" x2="34" y2="34" stroke="#7C5CFC" stroke-width="2" stroke-linecap="round"/>
+        <rect x="14" y="6" width="4" height="5" rx="1" fill="#A78BFA"/>
+        <rect x="30" y="6" width="4" height="5" rx="1" fill="#A78BFA"/>
+        <rect x="12" y="23" width="3" height="3" rx="0.5" fill="#C4B5FD"/>
+        <rect x="33" y="23" width="3" height="3" rx="0.5" fill="#C4B5FD"/>
+      </svg>
+      <div>
+        <h1>视频去重工位</h1>
+        <p>本地素材处理与验收</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <div id="badge-status" class="service-badge" role="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="service-state-text">连接中</span>
+      </div>
+      <button id="btn-open-output-top" class="btn btn-secondary" type="button">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h4.13c.46 0 .9.18 1.23.5l1.14 1.1c.14.13.32.2.5.2h7.5A1.75 1.75 0 0 1 21 8.55v8.7A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25V6.75Z"/></svg>
+        下载产物
+      </button>
+    </div>
+  </header>
+
+  <div class="workspace-shell">
+    <aside class="sidebar" aria-label="一级导航">
+      <nav class="primary-nav">
+        <a class="nav-item active" href="#workbench">
+          <span class="nav-icon" aria-hidden="true">01</span><span>去重工作台</span>
+        </a>
+        <a class="nav-item" href="#fission-section">
+          <span class="nav-icon" aria-hidden="true">02</span><span>批量裂变</span>
+        </a>
+        <a class="nav-item" href="#permissions">
+          <span class="nav-icon" aria-hidden="true">03</span><span>工具与权限</span>
+        </a>
+        <a class="nav-item" href="#audit-panel">
+          <span class="nav-icon" aria-hidden="true">04</span><span>审计记录</span>
+        </a>
+      </nav>
+
+      <section id="permissions" class="side-section" aria-labelledby="permission-title">
+        <div class="section-eyebrow">安全边界</div>
+        <h2 id="permission-title">本机权限摘要</h2>
+        <div class="permission-list">
+          <div class="permission-item is-allowed"><span class="permission-symbol">✓</span><code>input/</code><span>素材只读</span></div>
+          <div class="permission-item is-allowed"><span class="permission-symbol">✓</span><code>output/</code><span>产物写入</span></div>
+          <div class="permission-item is-denied"><span class="permission-symbol">×</span><code>其他目录</code><span>拒绝</span></div>
+          <div class="permission-item is-denied"><span class="permission-symbol">×</span><code>delete_output</code><span>硬阻断</span></div>
+        </div>
+      </section>
+
+      <section class="side-section" aria-labelledby="whitelist-title">
+        <div class="section-eyebrow">MCP 白名单</div>
+        <h2 id="whitelist-title">可用工具</h2>
+        <div id="whitelist" class="whitelist"><span class="wl-hint">加载中…</span></div>
+      </section>
+
+      <div class="sidebar-meta">
+        <span id="server-name">video-dedup-station</span>
+        <span id="server-proto">MCP 2026-07-28</span>
+        <span id="emp-no" class="sr-only">VD-2026-0728</span>
+      </div>
+    </aside>
+
+    <main id="workbench" class="main-content">
+      <section class="page-intro">
+        <div>
+          <div class="section-eyebrow">去重工作台</div>
+          <h2>处理并验收本地视频素材</h2>
+          <p>按顺序完成素材探测、参数设置、生成处理和产物检查。</p>
+        </div>
+        <div class="protocol-summary">远程运行 · 上传素材 · 下载产物 · 操作可追溯</div>
+      </section>
+
+      <ol id="workflow-steps" class="workflow-steps" aria-label="处理流程">
+        <li class="workflow-step is-current" data-step="1" aria-current="step"><span>1</span><div><b>上传素材</b><small>上传并探测</small></div></li>
+        <li class="workflow-step" data-step="2"><span>2</span><div><b>设置参数</b><small>强度与维度</small></div></li>
+        <li class="workflow-step" data-step="3"><span>3</span><div><b>生成处理</b><small>人工确认执行</small></div></li>
+        <li class="workflow-step" data-step="4"><span>4</span><div><b>查看产物</b><small>自检与交付</small></div></li>
+      </ol>
+
+      <section class="work-card" aria-labelledby="asset-title">
+        <div class="card-heading">
+          <div><span class="step-kicker">步骤 1</span><h3 id="asset-title">素材与探测</h3><p>上传视频文件，自动探测后可生成去重产物。</p></div>
+          <span class="status-chip status-neutral">必须先完成</span>
+        </div>
+        <div class="form-row">
+          <div id="upload-zone" class="upload-zone">
+            <input type="file" id="file-upload" class="file-input" accept="video/*" />
+            <label for="file-upload" class="upload-label">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="32" height="32" stroke="currentColor" stroke-width="1.5" fill="none"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+              <span id="upload-text">点击或拖拽上传视频</span>
+              <small>MP4 / MOV / AVI / MKV / FLV / WMV / TS / WebM</small>
+            </label>
+          </div>
+          <div id="upload-progress" class="upload-progress hidden">
+            <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+            <span id="progress-text">上传中…</span>
+          </div>
+        </div>
+        <div class="form-row asset-row" id="existing-assets-row">
+          <label class="field-label" for="asset-select">已上传素材</label>
+          <select id="asset-select" class="wb-select"><option value="">加载素材中…</option></select>
+          <button id="btn-refresh-assets" class="btn btn-icon" type="button" title="刷新素材列表" aria-label="刷新素材列表">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M19 7v4h-4M5 17v-4h4M6.7 9a6 6 0 0 1 10.1-2.2L19 9M5 15l2.2 2.2A6 6 0 0 0 17.3 15"/></svg>
+          </button>
+          <button id="btn-probe" class="btn btn-primary" type="button">探测素材</button>
+        </div>
+        <div id="probe-card" class="result-card hidden" aria-live="polite">
+          <div class="result-head"><div><span class="result-eyebrow">probe_video</span><h4>素材探测结果</h4></div><span class="tier-chip tier-audit">已审计</span></div>
+          <div id="probe-grid" class="probe-grid"></div>
+        </div>
+      </section>
+
+      <section class="work-card" aria-labelledby="params-title">
+        <div class="card-heading">
+          <div><span class="step-kicker">步骤 2</span><h3 id="params-title">去重参数</h3><p>默认中等强度；至少启用一个处理维度。</p></div>
+          <span class="status-chip status-info">默认 medium</span>
+        </div>
+        <div class="parameter-group">
+          <div class="field-label">强度档</div>
+          <div class="seg" id="level-seg" role="radiogroup" aria-label="强度档">
+            <button type="button" class="seg-btn" data-level="light" role="radio" aria-checked="false">轻度 <small>light</small></button>
+            <button type="button" class="seg-btn active" data-level="medium" role="radio" aria-checked="true">中度 <small>medium</small></button>
+            <button type="button" class="seg-btn" data-level="heavy" role="radio" aria-checked="false">重度 <small>heavy</small></button>
+          </div>
+        </div>
+        <div class="parameter-group">
+          <div class="field-label">处理维度</div>
+          <div class="dim-grid" id="dim-grid">
+            <label class="dim-chk"><input type="checkbox" data-dim="picture" checked /><span><b>画面</b><small>picture</small></span></label>
+            <label class="dim-chk"><input type="checkbox" data-dim="rotate" checked /><span><b>微旋转</b><small>rotate</small></span></label>
+            <label class="dim-chk"><input type="checkbox" data-dim="crop" checked /><span><b>裁切</b><small>crop</small></span></label>
+            <label class="dim-chk"><input type="checkbox" data-dim="speed" checked /><span><b>变速</b><small>speed</small></span></label>
+            <label class="dim-chk"><input type="checkbox" data-dim="trim" checked /><span><b>去头尾</b><small>trim</small></span></label>
+            <label class="dim-chk dim-flip"><input type="checkbox" data-dim="flip" /><span><b>翻转</b><small>flip · 高破坏</small></span></label>
+          </div>
+        </div>
+        <div class="parameter-group flip-parameter" id="flip-mode-row">
+          <label class="field-label" for="flip-mode">翻转方向</label>
+          <select id="flip-mode" class="wb-select compact" disabled>
+            <option value="h">水平翻转</option><option value="v">垂直翻转</option><option value="90">旋转 90°</option>
+          </select>
+          <span class="field-help">单条按所选方向处理；批量裂变会自动轮换水平、垂直和旋转 90°。</span>
+        </div>
+        <div class="parameter-group" id="tts-param-group">
+          <div class="field-label">🆕 AI 配音（TTS · 可选）</div>
+          <p class="field-help" style="margin:4px 0 8px">自动提取视频字幕 → 元宝 AI 改写 → MiMo 生成语音替换音轨。也可手动输入文案。</p>
+          <div class="tts-rows">
+            <!-- 模式切换 -->
+            <div id="tts-mode-switch" style="display:flex;gap:0;margin-bottom:10px;border-radius:8px;background:var(--gray-100);padding:3px;width:fit-content;">
+              <button type="button" class="tts-mode-btn active" data-mode="auto" style="padding:6px 14px;border:none;border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.08);font-weight:600;white-space:nowrap;">自动提取 + AI 改写</button>
+              <button type="button" class="tts-mode-btn" data-mode="manual" style="padding:6px 14px;border:none;border-radius:6px;background:transparent;color:var(--gray-600);font-size:13px;cursor:pointer;font-weight:500;white-space:nowrap;">手动输入文案</button>
+            </div>
+
+            <!-- 自动模式：改写模板 -->
+            <div id="tts-auto-group">
+              <label class="tts-rewrite-toggle" style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer;margin-bottom:8px;user-select:none;">
+                <input type="checkbox" id="chk-rewrite" />
+                <span>启用 元宝 改写</span>
+                <span style="font-size:12px;color:var(--gray-400);font-weight:400;">（手动开关，勾上才会把字幕/ASR 原文发给 元宝 改写）</span>
+              </label>
+              <div id="tts-template-wrap" style="display:none;">
+                <label for="tts-topic" style="font-size:13px;color:var(--gray-700);font-weight:500;display:block;margin-bottom:4px;">
+                  视频内容简述 <span style="font-size:11px;color:var(--gray-400);font-weight:400;">— 告诉 元宝 这个视频拍的是什么，ASR 识别不准就靠它</span>
+                </label>
+                <input id="tts-topic" class="tts-textarea" style="height:36px;margin-bottom:10px;" placeholder="例如：海边夕阳慢动作，一个人走向镜头；或：剑客拔刀战斗片段" />
+                <label for="tts-template" style="font-size:13px;color:var(--gray-700);font-weight:500;display:block;margin-bottom:4px;">
+                  改写模板
+                </label>
+                <textarea id="tts-template" class="tts-textarea" rows="3" placeholder="例如：你是带货主播，把原文改写为口播带货文案，突出卖点、引导下单，语气热情有感染力。&#10;&#10;这段提示词会作为 元宝 的「自定义指令」，和系统默认要求、视频原文一起发送。"></textarea>
+                <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;align-items:center;">
+                  <span style="font-size:12px;color:var(--gray-500);white-space:nowrap;">快速填入示例：</span>
+                <button type="button" class="btn btn-mini tts-template-fill" data-template="带货"><svg class="ico-16" style="color:#F59E0B" aria-hidden="true"><use href="#ico-package"/></svg> 带货</button>
+                <button type="button" class="btn btn-mini tts-template-fill" data-template="解说"><svg class="ico-16" style="color:#3B82F6" aria-hidden="true"><use href="#ico-mic"/></svg> 解说</button>
+                <button type="button" class="btn btn-mini tts-template-fill" data-template="Vlog"><svg class="ico-16" style="color:#10B981" aria-hidden="true"><use href="#ico-phone"/></svg> Vlog</button>
+                  <button type="button" class="btn btn-mini" id="btn-template-clear" style="margin-left:auto;">清空</button>
+                </div>
+              </div>
+              <p class="field-help" style="margin:6px 0 0;" id="tts-rewrite-hint">未启用改写。系统会用字幕/ASR 原文直接生成配音。</p>
+
+              <!-- 🆕 元宝 改写预览 -->
+                <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;" id="tts-rewrite-actions">
+                <button type="button" id="btn-yuanbao-login" class="btn btn-mini" style="background:var(--brand);color:#fff;"><svg class="ico-16" style="color:#F59E0B" aria-hidden="true"><use href="#ico-login"/></svg> 元宝登录</button>
+                <span style="font-size:11px;color:var(--warned);">← 首次使用先扫码登录</span>
+                <button type="button" id="btn-rewrite-preview" class="btn btn-primary"><svg class="ico-16" style="color:#A855F7" aria-hidden="true"><use href="#ico-sparkle"/></svg> AI 改写预览<span style="font-size:10px;opacity:.6;margin-left:4px;">元宝识图+改写</span></button>
+              </div>
+              <div id="rewrite-preview" style="display:none;margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);">
+                <!-- JS 动态填充结果或错误 -->
+              </div>
+            </div>
+
+            <!-- 手动模式：文案输入 -->
+            <div id="tts-manual-group" style="display:none;">
+              <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;" id="tts-presets">
+                <button type="button" class="btn btn-mini tts-preset-btn" data-text="大家好，今天给大家带来一款超值好物，赶紧点击下方链接看看吧！"><svg class="ico-16" style="color:#F59E0B" aria-hidden="true"><use href="#ico-package"/></svg> 带货</button>
+                <button type="button" class="btn btn-mini tts-preset-btn" data-text="你有没有想过，为什么有些人总能轻松搞定难题？其实秘诀只有一个……"><svg class="ico-16" style="color:#3B82F6" aria-hidden="true"><use href="#ico-mic"/></svg> 解说</button>
+                <button type="button" class="btn btn-mini tts-preset-btn" data-text="今天去了一个好地方，随手拍了一段，分享给你们！喜欢的话记得点赞关注哦。"><svg class="ico-16" style="color:#10B981" aria-hidden="true"><use href="#ico-phone"/></svg> Vlog</button>
+              </div>
+              <textarea id="tts-text" class="tts-textarea" rows="3" placeholder="输入配音文案，比如：&#10;大家好，今天给大家分享一个超实用的干货，记得点赞收藏！&#10;&#10;也可以点上方快捷按钮一键填入。留空则不启用配音。"></textarea>
+            </div>
+
+            <!-- 音色/语速（两种模式共用） -->
+            <div style="display:flex;gap:12px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+              <select id="tts-voice" class="wb-select compact"><option value="冰糖">冰糖（女）</option><option value="茉莉">茉莉（女）</option><option value="苏打">苏打（男）</option><option value="白桦">白桦（男）</option></select>
+              <select id="tts-speed" class="wb-select compact">
+                <option value="0.8">语速 0.8×</option><option value="1.0" selected>语速 1.0×</option><option value="1.2">语速 1.2×</option><option value="1.5">语速 1.5×</option>
+              </select>
+              <span id="tts-status" class="field-help" style="margin:0;">MiMo TTS · 音色 4 种 · 支持自然语调</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="work-card" aria-labelledby="dedup-title">
+        <div class="card-heading">
+          <div><span class="step-kicker">步骤 3–4</span><h3 id="dedup-title">单条生成与自检</h3><p>执行前需要人工确认；五项检查全部通过后才能交付。</p></div>
+          <button id="btn-dedup" class="btn btn-primary btn-large" type="button">开始单条去重</button>
+        </div>
+          <div id="dedup-progress" class="processing-progress hidden" role="status" aria-live="polite">
+            <div class="progress-row"><strong id="dedup-progress-label">正在生成单条变体</strong><span id="dedup-progress-time">正在估算</span></div>
+            <div class="orb-loader"><div class="orb-path"><div class="orb-globe" tabindex="0" role="slider" aria-label="等待互动球，可左右拖动" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="orb-wrapper"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div></div>
+            <p>按住彩球可左右拖动；松手后继续自动往返。预计时间会动态校准，预测超时不会中断处理。</p>
+          </div>
+          <div id="dedup-card" class="result-card hidden" aria-live="polite">
+          <div class="result-head"><div><span class="result-eyebrow">dedup_video</span><h4>单条自检报告</h4></div><span class="tier-chip tier-warned">人工确认执行</span></div>
+          <div class="checks">
+            <div class="check-item" id="chk-md5"><span class="check-mark">—</span><span class="check-text"><b>MD5 已改变</b><small>输出与源文件指纹不同</small></span></div>
+            <div class="check-item" id="chk-res"><span class="check-mark">—</span><span class="check-text"><b>分辨率保持</b><small>宽高与源文件一致</small></span></div>
+            <div class="check-item" id="chk-dur"><span class="check-mark">—</span><span class="check-text"><b>时长合规</b><small>变化处于允许范围</small></span></div>
+            <div class="check-item" id="chk-min-dur"><span class="check-mark">—</span><span class="check-text"><b>成片 ≥ 5s</b><small>满足最低成片时长</small></span></div>
+            <div class="check-item check-phash" id="chk-phash"><span class="check-mark">—</span><span class="check-text"><b>pHash 自检</b><small id="phash-detail" class="phash-detail"></small></span></div>
+          </div>
+          <div id="phash-hint" class="phash-hint hidden"></div>
+          <div class="artifact-highlight hidden" id="dedup-artifact"><span class="artifact-label">产物文件</span><strong id="dedup-artifact-name"></strong><span>已生成，可下载保存</span></div>
+          <pre id="dedup-detail" class="dedup-detail"></pre>
+          <div class="result-actions">
+            <button id="btn-open-output" class="btn btn-primary" type="button" disabled>下载产物</button>
+            <button id="btn-download-fission" class="btn btn-primary" type="button" disabled style="display:none">下载选中的裂变产物</button>
+            <button id="btn-deliver" class="btn btn-success" type="button" disabled title="五项自检全部通过后才可确认交付">确认交付</button>
+            <button id="btn-regen" class="btn btn-secondary" type="button">再生成变体</button>
+          </div>
+          <div class="handoff-note">系统已完成生成与自检，最终交付由人工决定。</div>
+        </div>
+      </section>
+
+      <section id="fission-section" class="work-card" aria-labelledby="fission-title">
+        <div class="card-heading card-heading-action">
+          <div><span class="step-kicker">批量任务</span><h3 id="fission-title">批量裂变</h3><p>生成多个变体，并通过 MD5 唯一性与距离矩阵双重交付门。</p></div>
+          <div class="fission-controls">
+            <label for="fission-count">变体数量</label>
+            <input id="fission-count" class="wb-num" type="number" min="1" max="20" value="5" />
+            <button id="btn-fission" class="btn btn-primary" type="button">开始裂变</button>
+          </div>
+        </div>
+        <div id="fission-progress" class="processing-progress hidden" role="status" aria-live="polite">
+          <div class="progress-row"><strong id="fission-progress-label">正在准备批量裂变</strong><span id="fission-progress-time">正在估算</span></div>
+          <div class="orb-loader"><div class="orb-path"><div class="orb-globe" tabindex="0" role="slider" aria-label="等待互动球，可左右拖动" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="orb-wrapper"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div></div>
+          <div class="progress-actions"><p>取消会终止当前处理并停止后续变体；已完成并通过自检的产物会保留。</p><button id="btn-cancel-fission" class="btn btn-danger" type="button">取消裂变</button></div>
+        </div>
+        <div id="fission-card" class="result-card hidden" aria-live="polite">
+          <div class="result-head"><div><span class="result-eyebrow">batch_fission</span><h4>裂变结果与距离矩阵</h4></div><span class="tier-chip tier-warned">人工确认执行</span></div>
+          <div id="fission-summary" class="fission-summary"></div>
+          <div id="fission-explainer" class="fission-explainer"></div>
+          <div id="fission-separation" class="fission-separation hidden"></div>
+          <div id="fission-matrix-wrap" class="fission-matrix-wrap hidden">
+            <div class="matrix-title">变体距离矩阵（pHash avg，对角线为自身）</div>
+            <div id="fission-matrix" class="fission-matrix"></div>
+            <div class="matrix-legend"><span class="ml-cell ok">绿色：通过</span><span class="ml-cell warn">红色：未通过</span><span class="ml-cell diag">自身</span></div>
+          </div>
+          <div id="ssim-matrix-wrap" class="fission-matrix-wrap hidden">
+            <div class="matrix-title">SSIM 结构相似度矩阵（越小越不同，< 0.92 为通过）</div>
+            <div id="ssim-matrix" class="fission-matrix"></div>
+            <div class="matrix-legend"><span class="ml-cell ok">绿色：通过</span><span class="ml-cell warn">红色：过近</span><span class="ml-cell diag">自身</span></div>
+          </div>
+          <div class="artifact-section-head"><span>产物文件</span><small>点击文件名下载</small></div>
+          <div id="fission-list" class="fission-list"></div>
+          <div class="result-actions"><button id="btn-open-output-fission" class="btn btn-secondary" type="button" disabled>下载选中产物</button></div>
+        </div>
+      </section>
+    </main>
+
+    <aside id="audit-panel" class="audit-sidebar">
+      <section class="audit-card audit-log-card">
+        <div class="audit-heading"><div><div class="section-eyebrow">验收记录</div><h2>最近操作</h2></div><span id="memory-count" class="memory-count">0 条记录</span></div>
+        <div class="audit-search" aria-label="筛选验收记录">
+          <label class="audit-search-field" for="memory-date"><span>会话</span><input id="memory-date" type="date" aria-label="按日期筛选会话" /></label>
+          <label class="audit-search-field" for="memory-search"><span>状态</span><input id="memory-search" type="search" placeholder="状态、工具或摘要" autocomplete="off" aria-label="按文字筛选状态、工具或摘要" /></label>
+        </div>
+        <div class="audit-log-layout">
+          <div class="audit-arc-panel">
+            <svg id="memory-arc" class="memory-arc" viewBox="0 0 190 340" role="img" aria-labelledby="memory-arc-title memory-arc-desc">
+              <title id="memory-arc-title">操作记录右半圆时间轴</title>
+              <desc id="memory-arc-desc">所选会话的操作从上到下按时间排列。</desc>
+            </svg>
+            <div id="memory-unit" class="memory-unit">单位：自动</div>
+          </div>
+          <div id="timeline" class="timeline"><div class="tl-empty">暂无操作记录。完成探测或生成后，这里会记录关键步骤。</div></div>
+        </div>
+        <button id="btn-clear-memory" class="btn btn-text" type="button">清空本机会话记录</button>
+      </section>
+
+      <section class="audit-card tool-card-panel">
+        <div class="audit-heading"><div><div class="section-eyebrow">工具与分级</div><h2>服务能力</h2></div><span id="tools-count" class="memory-count">0 个工具</span></div>
+        <div id="tool-filters" class="tool-filters" role="group" aria-label="按安全等级筛选工具">
+          <button class="tool-filter active" type="button" data-tool-filter="all" aria-pressed="true">全部 0</button>
+          <button class="tool-filter" type="button" data-tool-filter="audit" aria-pressed="false">审计 0</button>
+          <button class="tool-filter" type="button" data-tool-filter="warned" aria-pressed="false">需确认 0</button>
+          <button class="tool-filter" type="button" data-tool-filter="blocked" aria-pressed="false">阻断 0</button>
+          <button class="tool-filter" type="button" data-tool-filter="pass" aria-pressed="false">放行 0</button>
+        </div>
+        <div class="tool-axis-layout">
+          <div class="tool-axis-panel">
+            <svg id="tool-axis" class="tool-axis" viewBox="0 0 220 330" role="img" aria-labelledby="tool-axis-title tool-axis-desc">
+              <title id="tool-axis-title">工具与安全分级右半圆</title>
+              <desc id="tool-axis-desc">服务工具按安全等级着色并沿右半圆等宽排列。</desc>
+            </svg>
+            <div id="tool-axis-note" class="tool-axis-note">单位：1 个色段 = 1 个工具</div>
+          </div>
+          <div>
+            <div id="tools-list" class="tools-list"><div class="loading">加载工具中…</div></div>
+            <div id="tool-detail" class="tool-detail"><strong>等待工具清单</strong><p>连接服务后可查看工具等级、用途和调用边界。</p></div>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay hidden" role="presentation">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-msg" tabindex="-1">
+      <div class="modal-head"><div><span class="modal-kicker">人工决策点</span><h2 id="modal-title" class="modal-title">确认执行高影响操作</h2></div></div>
+      <div class="modal-body">
+        <p id="modal-msg" class="modal-msg"></p>
+        <div class="modal-op"><div class="modal-op-label">即将执行</div><div id="modal-op-name" class="modal-op-name"></div><div class="modal-op-label">关键参数</div><pre id="modal-op-params" class="modal-op-params"></pre></div>
+        <div class="modal-notice">取消后不会生成产物；确认后服务将按上述参数执行，并写入审计记录。</div>
+      </div>
+      <div class="modal-foot"><button id="modal-cancel" class="btn btn-secondary" type="button">取消</button><button id="modal-confirm" class="btn btn-primary" type="button">确认执行</button></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
