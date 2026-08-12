@@ -12,7 +12,7 @@ import struct
 import logging
 from pathlib import Path
 
-_MODEL_DIR = Path(r"F:\Download\A-models\sherpa-onnx")
+_MODEL_DIR = Path(os.environ.get("VU_ASR_MODELS", "/opt/sherpa-onnx"))
 _MODEL_CANDIDATES = [
     ("sherpa-onnx-paraformer-zh-small-2024-03-09", "paraformer"),
     ("sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17", "sense_voice"),

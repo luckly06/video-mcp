@@ -329,7 +329,8 @@ mv changes/<change-id> changes/archive/$(date +%Y-%m-%d)-<change-id>
 
 | Change ID | 说明 | 影响级别 | 进度 |
 |---|---|---|---|
-| add-vision-context | 自动视频画面描述：ffmpeg 帧提取 + DeepSeek 网页识图 → 视觉上下文注入改写 prompt | B | 设计阶段 |
+| add-browser-extension | 浏览器扩展元宝改写桥接：替代不可行的服务器 headless 登录，利用用户已登录元宝的浏览器标签完成改写 | B | 开发中 |
+| add-vision-context | 已归档 → `changes/archive/2026-08-11-add-vision-context/`（已被元宝改写全链路实现覆盖） | — | 已归档 |
 | add-tts-audio-replace | 已归档 → `changes/archive/2026-08-11-add-tts-audio-replace/` | — | 已归档 |
 | add-asr-copy-rewrite | 已归档 → `changes/archive/2026-08-11-add-asr-copy-rewrite/` | — | 已归档 |
 

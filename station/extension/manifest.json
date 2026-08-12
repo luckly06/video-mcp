@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "视频去重工位",
+  "version": "1.0",
+  "description": "视频去重 / TTS / 元宝改写 — 直连 MCP 服务器",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "视频去重工位"
+  },
+  "permissions": ["storage", "tabs", "downloads", "scripting"],
+  "host_permissions": [
+    "http://124.71.209.36:8765/*",
+    "https://yuanbao.tencent.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://yuanbao.tencent.com/*"],
+      "js": ["content-yuanbao.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
