@@ -1,4 +1,0 @@
-interface:
-  display_name: "Image to SVG · 图标矢量化"
-  short_description: "从图片中分离背景并重建可编辑的透明底 SVG 图形"
-  default_prompt: "Use $image-to-svg to separate the foreground from the attached image and reconstruct it as a clean editable SVG."

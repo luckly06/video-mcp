@@ -1,4 +1,0 @@
-interface:
-  display_name: "AI PRD Writer"
-  short_description: "生成含13个核心节点、用户故事与需求脑图的AI PRD"
-  default_prompt: "将我提供的产品想法或资料整理成一份简版 AI PRD，并标出假设与待确认项。"
