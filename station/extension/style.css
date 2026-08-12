@@ -307,6 +307,8 @@ code {
 @keyframes orb-texture { 0% { left: -462px; } 50% { left: 0; } 100% { left: -462px; } }
 
 .result-card { padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+/* 探测结果折叠箭头 */
+#probe-toggle { transition: transform 0.2s; transform: rotate(180deg); }
 .result-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .result-head h4 { margin: 3px 0 0; font-size: 14px; font-weight: 500; }
 .result-head .tier-chip { margin-left: auto; }
@@ -315,6 +317,12 @@ code {
 .tier-blocked { color: var(--blocked); background: var(--blocked-bg); border-color: #F4B4B4; }
 .tier-pass { color: var(--pass); background: var(--pass-bg); border-color: var(--border-strong); }
 .probe-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+/* 探测结果区 — 无底色，仅加粗文字 */
+.container {
+  width: 100%;
+  padding: 4px 2px;
+  overflow: hidden;
+}
 .probe-cell { min-width: 0; padding: 9px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-muted); }
 .probe-key { color: var(--text-tertiary); font-size: 11px; }
 .probe-val { margin-top: 3px; color: var(--text-primary); font-size: 12px; word-break: break-all; }
@@ -328,6 +336,7 @@ code {
 .check-item.pass .check-mark { background: var(--audit-bg); color: var(--audit); }
 .check-item.fail { border-color: #F4B4B4; background: #FFF9F9; }
 .check-item.fail .check-mark { background: var(--blocked-bg); color: var(--blocked); }
+.check-hint { margin-top: 3px; font-size: 10px; color: var(--warned); font-weight: 400; }
 .phash-detail { font-family: Consolas, monospace; color: var(--text-tertiary); }
 .phash-hint, .fission-separation { margin-bottom: 12px; padding: 10px 12px; border: 1px solid #F1D295; border-radius: var(--radius-sm); background: var(--warned-bg); color: var(--warned); font-size: 12px; }
 .artifact-highlight { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; margin-bottom: 12px; padding: 11px 12px; border: 1px solid #A9CDED; border-left: 4px solid var(--brand-primary); border-radius: var(--radius-sm); background: #F5FAFF; }

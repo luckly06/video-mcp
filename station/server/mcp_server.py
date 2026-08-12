@@ -172,7 +172,7 @@ TOOLS = [
             },
             "required": ["src"],
         },
-        "_tier": "warned",
+        "_tier": "audit",
     },
     {
         "name": "batch_fission",
@@ -254,6 +254,18 @@ TOOLS = [
                 "topic": {"type": "string", "description": "视频内容简述（弥补 ASR 不准）：告诉 DeepSeek 这个视频拍的是什么"},
             },
             "required": [],
+        },
+        "_tier": "audit",
+    },
+    {
+        "name": "extract_copy_context",
+        "description": "仅提取改写所需上下文（帧截图 base64 + 字幕/ASR 原文 + 时长），不做元宝改写。供本地代理模式使用。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "视频文件名；服务器提取帧截图和文字原文"},
+            },
+            "required": ["src"],
         },
         "_tier": "audit",
     },
@@ -406,7 +418,7 @@ def _exec_tool(name, args):
             import yuanbao_client as YB  # noqa: E402
             result = YB.vision_and_rewrite(
                 None, args["text"],
-                rewrite_template=template_param, topic=topic, headless=False
+                rewrite_template=template_param, topic=topic, headless=True
             )
             return {
                 "original": args["text"],
@@ -449,7 +461,7 @@ def _exec_tool(name, args):
             frames, raw_text,
             rewrite_template=template_param,
             max_chars=max_chars, topic=topic,
-            headless=False
+            headless=True
         )
         return {
             "original": raw_text, "source": source,
@@ -457,6 +469,45 @@ def _exec_tool(name, args):
             "vision_desc": result.get("vision_desc", ""),
             "error": result.get("error", ""),
             "max_chars": max_chars, "duration": duration,
+        }
+    if name == "extract_copy_context":
+        """仅提取上下文（帧+文案+时长），不做元宝改写。给本地代理使用。"""
+        import copy_rewriter as REWRITER  # noqa: E402
+        import base64
+        src_name = args["src"]
+        info = P.probe_video(src_name)
+        duration = info.get("duration", 60)
+        max_chars = max(10, int(duration * 3))
+        src_path = P._resolve_safe(src_name, P.VIDEO_DIR, must_exist=True)
+
+        raw_text = ""
+        source = ""
+        if info.get("has_subtitle"):
+            sub_text, _ = P.get_subtitle_text(str(src_path))
+            if sub_text:
+                raw_text = sub_text
+                source = "subtitle"
+        if not raw_text and info.get("audio_codec"):
+            import asr_client as ASR  # noqa: E402
+            if ASR.is_available():
+                asr_text = ASR.transcribe_video(str(src_path), P.FFMPEG)
+                if asr_text:
+                    raw_text = asr_text
+                    source = "asr"
+
+        # 提取帧并转 base64
+        frame_paths = REWRITER._extract_frames(str(src_path), P.FFMPEG, n=3)
+        frames_b64 = []
+        for fp in frame_paths:
+            try:
+                frames_b64.append(base64.b64encode(Path(fp).read_bytes()).decode("ascii"))
+            except Exception:
+                pass
+
+        return {
+            "raw_text": raw_text, "source": source,
+            "duration": duration, "max_chars": max_chars,
+            "frames_b64": frames_b64,
         }
     if name == "deepseek_login":
         import copy_rewriter as REWRITER  # noqa: E402
@@ -476,12 +527,25 @@ def _exec_tool(name, args):
         return {"profile_exists": has_p, "hint": "已登录 (profile 已建立)" if has_p else "未登录，请点击「DeepSeek 登录」按钮"}
     if name == "yuanbao_login":
         import yuanbao_client as YB  # noqa: E402
-        success = YB.login()
-        return {"login_ok": success, "message": "登录成功，元宝已就绪" if success else "登录超时或取消，请重试"}
+        result = YB.login_server()
+        return {"login_ok": result.get("ok", False),
+                "logged_in": result.get("logged_in", False),
+                "qr_b64": result.get("qr_b64", ""),
+                "screenshot_b64": result.get("screenshot_b64", ""),
+                "error": result.get("error", ""),
+                "message": "已登录" if result.get("logged_in") else "请扫码登录元宝"}
     if name == "yuanbao_status":
-        import yuanbao_client as YB  # noqa: E402
+        import yuanbao_client as YB, json, os  # noqa: E402
         has_p = YB.has_profile()
-        return {"profile_exists": has_p, "hint": "已登录" if has_p else "未登录，请点击「元宝登录」按钮"}
+        # 检查登录等待结果
+        marker = os.path.join(YB.PROFILE_DIR, "login_result.json")
+        result = {}
+        if os.path.exists(marker):
+            try: result = json.loads(open(marker).read()); os.remove(marker)
+            except: pass
+        logged_in = result.get("logged_in", False) if result else False
+        return {"profile_exists": has_p or logged_in, "logged_in": logged_in,
+                "hint": "已登录" if (has_p or logged_in) else "未登录，请点击「元宝登录」按钮"}
     if name == "get_job":
         jobs = _load_jobs()
         j = jobs.get(args["job_id"])
@@ -638,8 +702,11 @@ def _allowed_origin(origin):
         parsed = urlsplit(origin)
     except Exception:
         return False
-    if parsed.scheme not in ("http", "https"):
+    if parsed.scheme not in ("http", "https", "chrome-extension", "moz-extension"):
         return False
+    # 浏览器扩展的 Origin 是随机 hash（如 chrome-extension://abcdefgh），直接放行
+    if parsed.scheme in ("chrome-extension", "moz-extension"):
+        return True
     allowed = {"127.0.0.1", "localhost"}
     extra = os.environ.get("VU_ALLOWED_HOSTS", "")
     if extra:
@@ -775,8 +842,22 @@ def _parse_multipart(body, content_type):
 # HTTP 传输：POST /mcp
 # ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *a):
-        pass  # 静默默认日志
+    def log_message(self, fmt, *a):
+        """输出关键请求日志（非 200 或 /mcp 请求）"""
+        msg = fmt % a if a else fmt
+        # 只记录 403/非 mcp 的请求
+        if self.command != "GET" or "403" in msg:
+            print(f"[MCP] {self.command} {self.path} → {msg}", flush=True)
+
+    def _reject(self, reason):
+        """返回 403 并打印诊断信息"""
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin", "None")
+        print(f"[MCP] 403 REJECT host={host} origin={origin} reason={reason}", flush=True)
+        self.send_response(403)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(f"403 Forbidden: {reason} (host={host} origin={origin})".encode())
 
     def _cors(self):
         origin = self.headers.get("Origin")
@@ -787,14 +868,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name")
 
-    def _request_allowed(self):
-        return (_allowed_host(self.headers.get("Host"))
-                and _allowed_origin(self.headers.get("Origin")))
+    def _request_allowed(self, debug=False):
+        host_ok = _allowed_host(self.headers.get("Host"))
+        origin_ok = _allowed_origin(self.headers.get("Origin"))
+        if debug:
+            print(f"[MCP] REQ host={self.headers.get('Host')} origin={self.headers.get('Origin')} host_ok={host_ok} origin_ok={origin_ok}", flush=True)
+        return host_ok and origin_ok
 
     def do_OPTIONS(self):
         if not self._request_allowed():
-            self.send_response(403)
-            self.end_headers()
+            self._reject("OPTIONS not allowed")
             return
         self.send_response(204)
         self._cors()
@@ -808,8 +891,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_web(self, head_only=False):
         if not self._request_allowed():
-            self.send_response(403)
-            self.end_headers()
+            self._reject("_serve_web not allowed")
             return
         path = urlsplit(self.path).path
         # ── 文件下载 ──
@@ -853,8 +935,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._request_allowed():
-            self.send_response(403)
-            self.end_headers()
+            self._reject("POST not allowed")
             return
         # ── 文件上传 ──
         if self.path.rstrip("/") == "/local/upload":

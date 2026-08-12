@@ -57,6 +57,169 @@ async def main():
 asyncio.run(main())
 '''
 
+# ======== 服务器端无头登录（QR 码扫描）========
+SERVER_LOGIN_TEMPLATE = '''\
+import asyncio, json, sys, base64, io, traceback
+from pathlib import Path
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+from playwright.async_api import async_playwright
+
+async def main():
+    profile = Path(r"{profile}")
+    profile.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        import platform
+        if platform.system() == "Linux":
+            pw = await async_playwright().start()
+            browser = await pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile),
+                headless=True,
+                executable_path="/usr/bin/chromium",
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu",
+                      "--disable-encryption-cookies",
+                      "--disable-blink-features=AutomationControlled"])
+        else:
+            pw = await async_playwright().start()
+            browser = await pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile),
+                headless=False,
+                channel="{channel}",
+                args=["--disable-blink-features=AutomationControlled"])
+    except Exception as e:
+        print(json.dumps({{"error": f"browser launch fail: {{e}}"}}, ensure_ascii=False))
+        return
+    
+    page = browser.pages[0] if browser.pages else await browser.new_page()
+    try:
+        await page.goto("https://yuanbao.tencent.com/", wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(3000)
+        
+        # 检查是否已登录（chat 页面无登录弹窗）
+        has_login = await page.evaluate("""() => {{
+            return !!document.querySelector('iframe.hyc-wechat-login, [class*=\"login\"][class*=\"dialog\"], [class*=\"Login\"]');
+        }}""")
+        
+        if not has_login:
+            # 已登录
+            print(json.dumps({{"ok": True, "logged_in": True}}, ensure_ascii=False))
+            await browser.close()
+            return
+        
+        # === 获取 QR 码截图 ===
+        try:
+            await page.wait_for_selector('iframe.hyc-wechat-login', timeout=10000, state='visible')
+        except:
+            pass
+        await page.wait_for_timeout(2000)
+        
+        screenshot_bytes = await page.screenshot(type="png", full_page=False)
+        screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+        
+        # 裁剪 iframe 区域
+        qr_b64 = screenshot_b64
+        try:
+            qr_iframe = page.locator('iframe.hyc-wechat-login, iframe[src*="qrconnect"]').first
+            if await qr_iframe.count() > 0:
+                qr_box = await qr_iframe.bounding_box()
+                if qr_box:
+                    from PIL import Image
+                    import io
+                    img = Image.open(io.BytesIO(screenshot_bytes))
+                    pad = 30
+                    x = max(0, int(qr_box['x']-pad))
+                    y = max(0, int(qr_box['y']-pad-50))  # 留标题空间
+                    w = min(img.width-x, int(qr_box['width']+pad*2))
+                    h = min(img.height-y, int(qr_box['height']+pad*2+50))
+                    cropped = img.crop((x, y, x+w, y+h))
+                    cropped = cropped.resize((cropped.width*2, cropped.height*2), Image.LANCZOS)
+                    buf = io.BytesIO(); cropped.save(buf, 'PNG')
+                    qr_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        except:
+            pass
+        
+        # 先返回 QR 码给前端
+        print(json.dumps({{
+            "ok": True, "logged_in": False, "has_login_form": True,
+            "screenshot_b64": screenshot_b64, "qr_b64": qr_b64,
+        }}, ensure_ascii=False))
+        sys.stdout.flush()
+        
+        # === 等待用户扫码（最长 120s）===
+        for _ in range(80):  # 80 * 1.5s = 120s
+            await asyncio.sleep(1.5)
+            logged = not await page.evaluate("""() => {{
+                return !!document.querySelector('iframe.hyc-wechat-login, [class*=\"login\"][class*=\"dialog\"]');
+            }}""")
+            if logged:
+                # 登录成功！cookie 已被写入 profile
+                await page.wait_for_timeout(2000)  # 等 cookie flush
+                await browser.close()
+                print(json.dumps({{"ok": True, "logged_in": True, "msg": "login success"}}, ensure_ascii=False))
+                return
+        
+        # 超时
+        await browser.close()
+        print(json.dumps({{"ok": False, "error": "login timeout (120s)"}}, ensure_ascii=False))
+        
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        print(json.dumps({{"error": str(e)}}, ensure_ascii=False))
+        try: await browser.close()
+        except: pass
+
+asyncio.run(main())
+'''
+
+
+def login_server():
+    """服务器端无头登录：返回 QR 码截图给前端，浏览器后台等扫码完成"""
+    channel = _pick_channel()
+    script = SERVER_LOGIN_TEMPLATE.format(profile=PROFILE_DIR, channel=channel)
+    fd, tmp = tempfile.mkstemp(suffix=".py", prefix="vu_sl_")
+    os.close(fd)
+    Path(tmp).write_text(script, encoding="utf-8")
+    
+    # 用 Popen 非阻塞读取：第一行是 QR，第二行是登录结果
+    proc = subprocess.Popen([_venv_python(), tmp],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, cwd=str(_HERE.parent))
+    
+    # 读第一行 JSON（QR 码）
+    try:
+        first_line = proc.stdout.readline()
+    except:
+        proc.kill()
+        try: Path(tmp).unlink()
+        except: pass
+        return {"error": "no output from login subprocess"}
+    
+    first = json.loads(first_line.strip()) if first_line.strip() else {"error": "empty output"}
+    first["_pid"] = proc.pid
+    
+    # 启动后台线程等登录结果（120s）
+    import threading
+    def _wait_login():
+        try:
+            remaining = proc.stdout.readline()
+            result = json.loads(remaining.strip()) if remaining.strip() else {"error": "no result"}
+            proc.wait(timeout=10)
+        except:
+            result = {"error": "subprocess wait failed"}
+        finally:
+            try: Path(tmp).unlink()
+            except: pass
+        # 把结果写到 profile 旁的标记文件
+        marker = Path(PROFILE_DIR) / "login_result.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(result, ensure_ascii=False))
+    
+    threading.Thread(target=_wait_login, daemon=True).start()
+    return first
+
 
 def login():
     channel = _pick_channel()
@@ -112,29 +275,42 @@ async def read_last_reply(page, bl):
 async def main():
     profile = Path(r"{profile}")
     profile.mkdir(parents=True, exist_ok=True)
-    import subprocess, socket
-    # 复用已有浏览器：先试着连 CDP，连上就不启新的
-    CDP_URL = "http://127.0.0.1:9223"
-    need_launch = False
-    try:
-        s = socket.create_connection(("127.0.0.1", 9223), timeout=2)
-        s.close()
-    except Exception:
-        need_launch = True
-    if need_launch:
-        subprocess.Popen([
-            r"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-            "--remote-debugging-port=9223",
-            "--user-data-dir=" + str(profile),
-            "--no-first-run", "--no-default-browser-check",
-            "--disable-blink-features=AutomationControlled",
-        ] + (["--headless=new"] if {headless} else []),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        await asyncio.sleep(3)
-    p = await async_playwright().start()
-    browser = await p.chromium.connect_over_cdp(CDP_URL)
-    ctx = browser.contexts[0]
-    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+    import platform, subprocess, socket
+    
+    # 服务器（Linux）用无头 Chromium persistent context，Windows 用 CDP + Edge
+    if platform.system() == "Linux":
+        p = await async_playwright().start()
+        browser_ctx = await p.chromium.launch_persistent_context(
+            user_data_dir=str(profile),
+            headless=True,
+            executable_path="/usr/bin/chromium",
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu",
+                  "--disable-encryption-cookies",
+                  "--disable-blink-features=AutomationControlled"])
+        page = browser_ctx.pages[0] if browser_ctx.pages else await browser_ctx.new_page()
+    else:
+        CDP_URL = "http://127.0.0.1:9223"
+        need_launch = False
+        try:
+            s = socket.create_connection(("127.0.0.1", 9223), timeout=2)
+            s.close()
+        except Exception:
+            need_launch = True
+        if need_launch:
+            subprocess.Popen([
+                r"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+                "--remote-debugging-port=9223",
+                "--user-data-dir=" + str(profile),
+                "--no-first-run", "--no-default-browser-check",
+                "--disable-blink-features=AutomationControlled",
+            ] + (["--headless=new"] if {headless} else []),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            await asyncio.sleep(3)
+        p = await async_playwright().start()
+        browser_ctx = await p.chromium.connect_over_cdp(CDP_URL)
+        ctx = browser_ctx.contexts[0]
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+    
     await page.goto("https://yuanbao.tencent.com/", wait_until="domcontentloaded", timeout=30000)
     await asyncio.sleep(2)
 
@@ -216,7 +392,9 @@ async def main():
                     t = t2  # 文本还在变，继续等
         await asyncio.sleep(1.5)
 
-    # CDP disconnect — browser stays open for reuse
+    # CDP disconnect / close persistent context
+    if platform.system() == "Linux":
+        await browser_ctx.close()
     await p.stop()
     print(json.dumps({{"rewritten": rw or None, "vision_desc": "", "error": ""}}, ensure_ascii=False))
 

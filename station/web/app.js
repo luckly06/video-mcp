@@ -1856,27 +1856,78 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
     });
   }
-  // 🆕元宝登录按钮（已废弃，全切元宝）
-  // var btnLogin = document.getElementById("btn-deepseek-login");
-  // ...
-  // DS login handler removed — use yuanbao only
-  // 🆕元宝登录按钮
+  // 🆕元宝登录按钮 — 弹窗显示 QR 码
   var ybBtn = document.getElementById("btn-yuanbao-login");
   if (ybBtn) {
     ybBtn.addEventListener("click", async function () {
       var lab = this.textContent;
-      this.textContent = "\u23f3 \u6253\u5f00\u5143\u5b9d...";
+      this.textContent = "⏳ 正在获取登录码...";
       this.disabled = true;
       try {
         var r = await callTool("yuanbao_login", {});
-        toast(r.data ? r.data.message : "\u5143\u5b9d\u767b\u5f55\u5df2\u542f\u52a8", "ok");
+        var d = r.data || {};
+        if (d.logged_in) {
+          toast("已登录元宝 ✅", "ok");
+        } else if (d.qr_b64 || d.screenshot_b64) {
+          showYbQrModal(d.qr_b64 || d.screenshot_b64);
+        } else if (d.error) {
+          toast("失败: " + d.error, "err");
+        } else {
+          toast("请稍后重试", "warn");
+        }
       } catch (e) {
-        toast("\u5931\u8d25: " + (e.message || e), "err");
+        toast("失败: " + (e.message || e), "err");
       } finally {
         this.textContent = lab;
         this.disabled = false;
       }
     });
+  }
+
+  function showYbQrModal(imgBase64) {
+    // 移除旧弹窗
+    var old = document.getElementById("yb-qr-modal");
+    if (old) old.remove();
+
+    var src = "data:image/png;base64," + imgBase64;
+    var modal = document.createElement("div");
+    modal.id = "yb-qr-modal";
+    modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;";
+    modal.innerHTML =
+      '<div style="background:#1a1a2e;border-radius:16px;padding:32px;text-align:center;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">'
+      + '<p style="margin:0 0 20px;font-size:16px;color:#e0e0e0;font-weight:600;">📱 微信扫码登录元宝</p>'
+      + '<div style="background:#fff;padding:24px;border-radius:12px;display:inline-block;">'
+      + '<img src="' + src + '" style="width:260px;height:260px;display:block;" />'
+      + '</div>'
+      + '<p style="margin:16px 0 0;font-size:12px;color:#888;">请用手机微信扫描上方二维码</p>'
+      + '<div style="margin-top:16px;display:flex;gap:10px;justify-content:center;">'
+      + '<button id="btn-yb-check" style="padding:8px 24px;border-radius:8px;border:none;background:#10b981;color:#fff;font-size:14px;cursor:pointer;" '
+      + 'onmouseover="this.style.background=\'#059669\'" onmouseout="this.style.background=\'#10b981\'">✅ 检查登录</button>'
+      + '<button onclick="document.getElementById(\'yb-qr-modal\').remove()" style="padding:8px 24px;border-radius:8px;border:1px solid #444;background:transparent;color:#aaa;font-size:14px;cursor:pointer;" '
+      + 'onmouseover="this.style.color=\'#fff\'" onmouseout="this.style.color=\'#aaa\'">关闭</button>'
+      + '</div></div>';
+    document.body.appendChild(modal);
+    modal.addEventListener("click", function(e) { if (e.target === modal) modal.remove(); });
+    // 绑定检查按钮
+    setTimeout(function() {
+      var ck = document.getElementById("btn-yb-check");
+      if (ck) ck.addEventListener("click", checkYbLogin);
+    }, 50);
+  }
+  // 检查元宝登录状态
+  async function checkYbLogin() {
+    try {
+      var r = await callTool("yuanbao_status", {});
+      if (r.data && r.data.profile_exists) {
+        toast("登录成功 ✅", "ok");
+        var modal = document.getElementById("yb-qr-modal");
+        if (modal) modal.remove();
+      } else {
+        toast("尚未登录，请扫码后稍等几秒再试", "warn");
+      }
+    } catch (e) {
+      toast("检查失败: " + (e.message || e), "err");
+    }
   }
   // 🆕元宝改写预览按钮
   var btnPreview = document.getElementById("btn-rewrite-preview");
