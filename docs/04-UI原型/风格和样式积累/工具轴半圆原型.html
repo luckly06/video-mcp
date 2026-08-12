@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频去重工位 · 工具轴半圆原型</title>
+<style>
+:root { --page:#F7F9FC; --card:#FFF; --ink:#1F2937; --muted:#64748B; --hint:#94A3B8; --line:#E2E8F0; --audit-fill:#B9E3CF; --audit:#16845B; --warn-fill:#F8D894; --warn:#A96700; --blocked-fill:#F2B6B6; --blocked:#C73535; }
+* { box-sizing:border-box; }
+body { margin:0; min-width:320px; background:var(--page); color:var(--ink); font-family:"Microsoft YaHei","Segoe UI",sans-serif; font-size:14px; }
+.page { width:min(940px,calc(100% - 32px)); margin:28px auto 48px; }
+.intro { display:flex; align-items:end; justify-content:space-between; gap:18px; margin-bottom:18px; }
+.eyebrow { margin:0 0 4px; color:#3A7BC8; font-size:11px; letter-spacing:.08em; font-weight:600; }
+h1 { margin:0; font-size:23px; font-weight:600; }
+.intro p { max-width:420px; margin:0; color:var(--muted); font-size:12px; line-height:1.6; text-align:right; }
+.card { padding:22px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
+.head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; }
+.head h2 { margin:0; font-size:17px; font-weight:600; }
+.count { color:var(--hint); font-size:12px; }
+.filters { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px; }
+.filter { padding:6px 11px; border:1px solid var(--line); border-radius:7px; background:#FFF; color:var(--muted); cursor:pointer; font-size:12px; }
+.filter.active { border-color:#7AB8F5; background:#EAF3FC; color:#3A7BC8; }
+.layout { display:grid; grid-template-columns:minmax(270px,.85fr) minmax(0,1.15fr); gap:28px; align-items:start; }
+.axis-panel { position:relative; max-width:360px; margin:auto; }
+svg { display:block; width:100%; height:auto; overflow:visible; }
+.axis-note { margin-top:-3px; color:var(--hint); font-size:11px; text-align:center; }
+.legend { display:flex; flex-wrap:wrap; justify-content:center; gap:8px 14px; margin-top:12px; color:var(--muted); font-size:11px; }
+.legend span { display:inline-flex; align-items:center; gap:5px; }
+.swatch { width:9px; height:9px; border-radius:3px; }
+.tool-list { display:grid; gap:7px; }
+.tool { display:grid; grid-template-columns:25px minmax(0,1fr) auto; gap:9px; align-items:start; padding:10px; border:1px solid var(--line); border-left:3px solid var(--tier); border-radius:7px; background:#FFF; cursor:pointer; }
+.tool:hover,.tool.active { background:#FFFBF3; border-color:var(--tier); }
+.tool.hidden { display:none; }
+.index { display:grid; place-items:center; width:22px; height:22px; border:1px solid var(--tier); border-radius:6px; background:var(--fill); color:var(--tier); font:600 10px Consolas,monospace; }
+.tool-name { color:var(--ink); font:600 12px Consolas,monospace; overflow-wrap:anywhere; }
+.tool-desc { margin-top:3px; color:var(--muted); font-size:11px; line-height:1.45; }
+.tag { padding:2px 7px; border-radius:999px; background:var(--fill); color:var(--tier); font-size:10px; white-space:nowrap; }
+.detail { margin-top:15px; padding:13px 14px; border:1px solid var(--line); border-radius:8px; background:#F8FAFC; }
+.detail-title { display:flex; align-items:center; gap:8px; margin-bottom:5px; font-size:13px; font-weight:600; }
+.detail p { margin:0; color:var(--muted); font-size:11px; line-height:1.6; }
+.segment { cursor:pointer; transition:opacity .15s ease; }
+.segment.dim,.axis-number.dim { opacity:.22; }
+.axis-number { font-size:10px; font-weight:600; text-anchor:middle; pointer-events:none; }
+.group-label { font-size:9px; font-weight:600; text-anchor:middle; }
+.center-label { fill:var(--muted); font-size:9px; text-anchor:middle; }
+@media(max-width:720px){ .intro{align-items:flex-start;flex-direction:column}.intro p{text-align:left}.layout{grid-template-columns:1fr}.axis-panel{width:min(100%,340px)} }
+@media(max-width:430px){ .page{width:calc(100% - 16px);margin:8px auto 24px}.card{padding:17px 14px}.filters{display:grid;grid-template-columns:repeat(2,1fr)}.filter{width:100%}.tool{grid-template-columns:25px minmax(0,1fr)}.tag{grid-column:2} }
+</style>
+</head>
+<body>
+<main class="page">
+  <header class="intro">
+    <div><div class="eyebrow">工具与分级</div><h1>能力半圆工具轴</h1></div>
+    <p>半圆不是时间刻度。每个工具占等宽色段，颜色表达调用等级；点击工具可联动查看说明，并可用于筛选验收记录。</p>
+  </header>
+  <section class="card">
+    <div class="head"><h2>服务能力</h2><span class="count" id="count">8 个工具</span></div>
+    <div class="filters" role="group" aria-label="按安全等级筛选">
+      <button class="filter active" data-filter="all">全部 8</button>
+      <button class="filter" data-filter="audit">审计 4</button>
+      <button class="filter" data-filter="warned">需确认 3</button>
+      <button class="filter" data-filter="blocked">阻断 1</button>
+    </div>
+    <div class="layout">
+      <div class="axis-panel">
+        <svg id="axis" viewBox="0 0 260 390" role="img" aria-labelledby="axis-title axis-desc"><title id="axis-title">工具与安全分级右半圆</title><desc id="axis-desc">八个工具按安全等级着色并沿右半圆等宽排列。</desc></svg>
+        <div class="axis-note">单位：1 个色段 = 1 个工具</div>
+        <div class="legend"><span><i class="swatch" style="background:var(--audit-fill)"></i>审计</span><span><i class="swatch" style="background:var(--warn-fill)"></i>需确认</span><span><i class="swatch" style="background:var(--blocked-fill)"></i>阻断</span></div>
+      </div>
+      <div>
+        <div id="tools" class="tool-list"></div>
+        <div id="detail" class="detail"><div class="detail-title">全部工具 · 8</div><p>选择一个工具，查看它的等级、用途以及调用前是否需要人工确认。</p></div>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+const tools=[
+ {name:"list_assets",tier:"audit",label:"审计",desc:"列出 input/ 中可处理的视频素材。",confirm:"无需确认，可直接读取。"},
+ {name:"probe_video",tier:"audit",label:"审计",desc:"读取分辨率、帧率、时长、编码和 MD5。",confirm:"无需确认；去重前必须先探测。"},
+ {name:"list_watermark_templates",tier:"audit",label:"审计",desc:"列出可用的平台水印坐标模板。",confirm:"无需确认，只读取模板。"},
+ {name:"get_job",tier:"audit",label:"审计",desc:"按 job_id 查询任务状态与结果。",confirm:"无需确认，只查询状态。"},
+ {name:"dedup_video",tier:"warned",label:"需确认",desc:"单条视频去重并执行五项自检。",confirm:"执行前必须人工确认。"},
+ {name:"batch_fission",tier:"warned",label:"需确认",desc:"从同一素材生成多个差异化变体。",confirm:"执行前必须人工确认。"},
+ {name:"remove_watermark",tier:"warned",label:"需确认",desc:"按平台模板坐标执行 delogo。",confirm:"执行前必须人工确认。"},
+ {name:"delete_output",tier:"blocked",label:"阻断",desc:"尝试删除 output/ 下的产物。",confirm:"第 4 级危险操作，当前策略硬阻断。"}
+];
+const palette={audit:{fill:"#B9E3CF",stroke:"#16845B"},warned:{fill:"#F8D894",stroke:"#A96700"},blocked:{fill:"#F2B6B6",stroke:"#C73535"}};
+const NS="http://www.w3.org/2000/svg",svg=document.querySelector("#axis"),list=document.querySelector("#tools"),detail=document.querySelector("#detail"),count=document.querySelector("#count");
+const center={x:20,y:195},outer=165,bandOuter=151,bandInner=108,labelR=130;
+function point(r,ratio){const a=-Math.PI/2+ratio*Math.PI;return{x:center.x+r*Math.cos(a),y:center.y+r*Math.sin(a)}}
+function pathFor(from,to){const a=point(bandOuter,from),b=point(bandOuter,to),c=point(bandInner,to),d=point(bandInner,from);return`M ${a.x} ${a.y} A ${bandOuter} ${bandOuter} 0 0 1 ${b.x} ${b.y} L ${c.x} ${c.y} A ${bandInner} ${bandInner} 0 0 0 ${d.x} ${d.y} Z`}
+function arc(r){const a=point(r,0),b=point(r,1);return`M ${a.x} ${a.y} A ${r} ${r} 0 0 1 ${b.x} ${b.y}`}
+function n(tag,attrs={}){const e=document.createElementNS(NS,tag);Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,v));return e}
+svg.appendChild(n("path",{d:arc(outer),fill:"none",stroke:"#CBD5E1","stroke-width":"1"}));
+svg.appendChild(n("path",{d:arc(80),fill:"none",stroke:"#E2E8F0","stroke-width":"1","stroke-dasharray":"3 5"}));
+tools.forEach((tool,i)=>{const from=i/tools.length,to=(i+1)/tools.length,c=palette[tool.tier],id=String(i+1);const boundary=point(bandInner,from);svg.appendChild(n("line",{x1:center.x,y1:center.y,x2:boundary.x,y2:boundary.y,stroke:"#CBD5E1","stroke-width":".7","stroke-dasharray":"2 3"}));svg.appendChild(n("path",{d:pathFor(from,to),fill:c.fill,stroke:c.stroke,"stroke-width":"1",class:"segment",tabindex:"0","data-id":id,"data-tier":tool.tier}));const p=point(labelR,(from+to)/2),text=n("text",{x:p.x,y:p.y+3,fill:c.stroke,class:"axis-number","data-id":id});text.textContent=id;svg.appendChild(text)});
+const end=point(bandInner,1);svg.appendChild(n("line",{x1:center.x,y1:center.y,x2:end.x,y2:end.y,stroke:"#CBD5E1","stroke-width":".7","stroke-dasharray":"2 3"}));
+svg.appendChild(n("circle",{cx:center.x,cy:center.y,r:"3",fill:"#64748B"}));
+const centerTitle=n("text",{x:"80",y:"190",class:"center-label"});centerTitle.textContent="全部工具";svg.appendChild(centerTitle);const centerCount=n("text",{x:"80",y:"205",class:"center-label","font-size":"12","font-weight":"600",fill:"#1F2937"});centerCount.textContent="8 个";svg.appendChild(centerCount);
+[{text:"审计 · 4",ratio:.25,color:"#16845B"},{text:"需确认 · 3",ratio:.6875,color:"#A96700"},{text:"阻断 · 1",ratio:.9375,color:"#C73535"}].forEach(g=>{const p=point(183,g.ratio),t=n("text",{x:p.x,y:p.y+3,fill:g.color,class:"group-label"});t.textContent=g.text;svg.appendChild(t)});
+list.innerHTML=tools.map((t,i)=>{const c=palette[t.tier];return`<article class="tool" data-id="${i+1}" data-tier="${t.tier}" tabindex="0" style="--tier:${c.stroke};--fill:${c.fill}"><span class="index">${i+1}</span><div><div class="tool-name">${t.name}</div><div class="tool-desc">${t.desc}</div></div><span class="tag">${t.label}</span></article>`}).join("");
+function select(id){document.querySelectorAll("[data-id]").forEach(e=>{const hit=e.dataset.id===id;e.classList.toggle("active",hit);if(e.classList.contains("segment")||e.classList.contains("axis-number"))e.classList.toggle("dim",!hit)});const t=tools[Number(id)-1],c=palette[t.tier];detail.innerHTML=`<div class="detail-title"><span class="index" style="--tier:${c.stroke};--fill:${c.fill};border-color:${c.stroke};background:${c.fill};color:${c.stroke}">${id}</span>${t.name} · ${t.label}</div><p>${t.desc}<br>${t.confirm}<br>可进一步联动筛选上方验收记录中的 ${t.name} 历史。</p>`}
+function applyFilter(tier){const visible=tools.filter(t=>tier==="all"||t.tier===tier);count.textContent=visible.length+" 个工具";document.querySelectorAll(".tool").forEach(e=>e.classList.toggle("hidden",tier!=="all"&&e.dataset.tier!==tier));document.querySelectorAll(".segment,.axis-number").forEach(e=>e.classList.toggle("dim",tier!=="all"&&e.dataset.tier!==tier));detail.innerHTML=`<div class="detail-title">${tier==="all"?"全部工具":visible[0].label} · ${visible.length}</div><p>点击工具色段或列表项查看具体调用边界。</p>`}
+document.addEventListener("click",e=>{const hit=e.target.closest("[data-id]");if(hit)select(hit.dataset.id);const f=e.target.closest(".filter");if(f){document.querySelectorAll(".filter").forEach(x=>x.classList.remove("active"));f.classList.add("active");applyFilter(f.dataset.filter)}});
+document.addEventListener("keydown",e=>{if((e.key==="Enter"||e.key===" ")&&e.target.dataset.id){e.preventDefault();select(e.target.dataset.id)}});
+</script>
+</body>
+</html>
