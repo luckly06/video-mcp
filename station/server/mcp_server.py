@@ -27,9 +27,10 @@ import hmac
 import socket
 import threading
 import subprocess
+import time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pipeline as P  # noqa: E402
@@ -127,6 +128,12 @@ TOOLS = [
         "_tier": "audit",
     },
     {
+        "name": "list_outputs",
+        "description": "列出 output/ 目录下已生成的去重产物（名称/大小/时间），用于恢复丢失的下载链接。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
+    },
+    {
         "name": "probe_video",
         "description": "读取视频关键信息（分辨率/帧率/编码/时长/MD5）。去重前【必须】先探测。",
         "inputSchema": {
@@ -149,10 +156,14 @@ TOOLS = [
                 "dimensions": {"type": "object", "description": "维度开关：picture/rotate/crop/flip/speed/trim 六个布尔；flip 默认 false，开了必传 flip_mode"},
                 "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
                 "seed": {"type": "integer", "description": "随机种子；缺省随机回填"},
+                "skip_phash": {"type": "boolean", "description": "跳过 pHash 自检（省 3-5 分钟 CPU 时间，仅保留 MD5+分辨率+时长校验）。默认 false"},
+                "tts_text": {"type": "string", "description": "TTS 配音文案；不为空时启用 MiMo TTS 替换原音轨"},
+                "tts_voice": {"type": "string", "description": "TTS 配音人声，默认冰糖"},
+                "tts_speed": {"type": "number", "description": "TTS 语速，默认 1.0"},
             },
             "required": ["src"],
         },
-        "_tier": "warned",
+        "_tier": "audit",
     },
     {
         "name": "batch_fission",
@@ -261,6 +272,8 @@ def _run_hook(script, payload):
 def _exec_tool(name, args):
     if name == "list_assets":
         return {"assets": P.list_assets()}
+    if name == "list_outputs":
+        return {"outputs": P.list_outputs()}
     if name == "probe_video":
         return P.probe_video(args["src"])
     if name == "dedup_video":
@@ -273,6 +286,10 @@ def _exec_tool(name, args):
             dimensions=args.get("dimensions"),
             flip_mode=args.get("flip_mode"),
             trim_phase=args.get("trim_phase"),
+            tts_text=args.get("tts_text"),
+            tts_voice=args.get("tts_voice"),
+            tts_speed=args.get("tts_speed"),
+            skip_phash=args.get("skip_phash", False),
         )
         r["job_id"] = _new_job("dedup", {"src": r["src"]["name"], "output": r["output_path"]})
         return r
@@ -428,33 +445,28 @@ def handle_rpc(req, headers):
 
 
 def _allowed_host(host):
-    """仅允许浏览器或客户端访问本机监听地址。"""
+    """允许白名单内的 Host 访问（含本地 IP 与外网服务器 IP）。"""
     if not isinstance(host, str) or not host:
         return False
     value = host.strip().lower()
-    if value.startswith("["):
-        closing = value.find("]")
-        if closing < 0 or value[:closing + 1] != "[::1]":
-            return False
-        suffix = value[closing + 1:]
-        return suffix == "" or (suffix.startswith(":") and suffix[1:].isdigit())
-    if ":" in value:
-        hostname, port = value.rsplit(":", 1)
-        if not port.isdigit():
-            return False
-    else:
-        hostname = value
-    return hostname in ("127.0.0.1", "localhost")
+    # 去掉端口
+    hostname = value.split(":")[0] if ":" in value else value
+    allowed = os.environ.get("VU_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
+    allowed = [h.strip().lower() for h in allowed if h.strip()]
+    return hostname in allowed
 
 
 def _allowed_origin(origin):
-    """允许非浏览器请求、file:// 的 null Origin 与本机网页。"""
+    """允许非浏览器请求、file:// 的 null Origin、本机网页与浏览器扩展。"""
     if origin in (None, "", "null"):
         return True
     try:
         parsed = urlsplit(origin)
     except Exception:
         return False
+    # 允许浏览器扩展 chrome-extension:// / moz-extension://（不查 hostname）
+    if parsed.scheme in ("chrome-extension", "moz-extension"):
+        return True
     return parsed.scheme in ("http", "https") and parsed.hostname in ("127.0.0.1", "localhost")
 
 
@@ -591,6 +603,39 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
+        # /local/download/<filename> — 从输出目录直供视频文件下载
+        if path.startswith("/local/download/"):
+            fname = unquote(path[len("/local/download/"):])
+            fpath = (P.OUTPUT_DIR / fname).resolve()
+            # 安全检查：确保文件在 OUTPUT_DIR 内
+            safe_base = P.OUTPUT_DIR.resolve()
+            if fpath.parent != safe_base or not fpath.name:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if not fpath.is_file():
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            content_type = "video/mp4" if fname.endswith(".mp4") else "application/octet-stream"
+            try:
+                body = fpath.read_bytes()
+            except OSError:
+                self.send_response(500)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(fname, safe='')}")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if not head_only:
+                self.wfile.write(body)
+            return
         web_file = _WEB_FILES.get(path)
         if web_file is None:
             self.send_response(404)
@@ -606,6 +651,59 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if not head_only:
             self.wfile.write(body)
+
+    def _handle_upload(self):
+        """处理 /local/upload —— 直传视频文件到 input/ 目录（手动解析 multipart）。"""
+        ct = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in ct:
+            self._respond_http(400, {"ok": False, "message": "需要 multipart/form-data"})
+            return
+        # 取 boundary
+        boundary = None
+        for part in ct.split(";"):
+            part = part.strip()
+            if part.lower().startswith("boundary="):
+                boundary = part.split("=", 1)[1].strip().strip('"')
+        if not boundary:
+            self._respond_http(400, {"ok": False, "message": "缺少 boundary"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            # 手动解析 multipart
+            b = boundary.encode("utf-8")
+            parts = raw.split(b"--" + b)
+            for part in parts:
+                if not part.strip():
+                    continue
+                # 分离头/体
+                header_end = part.find(b"\r\n\r\n")
+                if header_end < 0:
+                    continue
+                headers_section = part[:header_end].decode("utf-8", errors="replace")
+                body = part[header_end + 4:]
+                # 去掉尾部 \r\n-- (最后一个 part 的结束标记)
+                body = body.rstrip(b"\r\n--\r\n").rstrip(b"\r\n--")
+                if b'filename="' in part[:header_end]:
+                    # 取原始文件名
+                    import re
+                    m = re.search(r'filename="([^"]*)"', headers_section)
+                    if not m:
+                        raise ValueError("未找到文件名")
+                    filename = Path(m.group(1)).name
+                    dest = P.VIDEO_DIR / filename
+                    # 清理旧上传（超过 1 小时）
+                    now = time.time()
+                    for f in P.VIDEO_DIR.glob("*"):
+                        if f.is_file() and f.name != ".gitkeep" and now - f.stat().st_mtime > 3600:
+                            try: f.unlink()
+                            except Exception: pass
+                    dest.write_bytes(body)
+                    self._respond_http(200, {"ok": True, "name": filename, "size": dest.stat().st_size})
+                    return
+            raise ValueError("未找到上传文件")
+        except Exception as e:
+            self._respond_http(500, {"ok": False, "message": str(e)})
 
     def do_POST(self):
         if not self._request_allowed():
@@ -643,6 +741,9 @@ class Handler(BaseHTTPRequestHandler):
                     "path": str(output_dir),
                     "selected": str(selected) if selected else None,
                 })
+            return
+        if self.path.rstrip("/") == "/local/upload":
+            self._handle_upload()
             return
         if self.path.rstrip("/") not in ("/mcp", ""):
             self.send_response(404)
@@ -698,8 +799,7 @@ def serve(host="127.0.0.1", port=8765):
         sys.exit(3)
 
     class _Server(ThreadingHTTPServer):
-        # 关闭地址重用：Windows 下 SO_REUSEADDR 会允许多进程绑同端口 → 脑裂根因
-        allow_reuse_address = False
+        allow_reuse_address = True   # Linux 安全：_port_in_use 已防脑裂，仅解决重启 TIME_WAIT
 
     srv = _Server((host, port), Handler)
     print(f"[MCP 2026-07-28] video-dedup-station 无状态服务已启动: http://{host}:{port}/mcp")
@@ -707,4 +807,6 @@ def serve(host="127.0.0.1", port=8765):
 
 
 if __name__ == "__main__":
-    serve()
+    host = os.environ.get("VU_HOST", "127.0.0.1")
+    port = int(os.environ.get("VU_PORT", "8765"))
+    serve(host, port)

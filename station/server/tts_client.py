@@ -37,7 +37,7 @@ def _client():
     except ImportError:
         logger.warning("openai 未安装，TTS 不可用。pip install openai")
         return None
-    return OpenAI(api_key=_MIMO_API_KEY, base_url=_MIMO_BASE_URL)
+    return OpenAI(api_key=_MIMO_API_KEY, base_url=_MIMO_BASE_URL, timeout=15.0)
 
 
 def is_available():
@@ -95,6 +95,7 @@ def tts(text, voice="冰糖", speed=1.0, output_format="wav"):
     try:
         completion = client.chat.completions.create(
             model="mimo-v2.5-tts",
+            timeout=15,
             messages=[
                 {
                     "role": "user",

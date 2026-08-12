@@ -30,7 +30,10 @@ async function callMcp(toolName, args) {
     throw new Error(errText);
   }
   const content = (result.content && result.content[0] && result.content[0].text);
-  if (!content) throw new Error('MCP empty response (server returned no content)');
+  if (!content) {
+    console.error('[callMcp] no content in result:', JSON.stringify(json).slice(0, 500));
+    throw new Error('MCP empty response (server returned no content)');
+  }
   // 服务端的返回结果装在 content text 里，是 JSON 字符串
   try { return JSON.parse(content); }
   catch { return { text: content }; }
@@ -142,11 +145,17 @@ async function handle(msg, sender) {
   // 扩展 popup API
   if (msg.action === 'ping') return { ok: true, base: API_BASE };
   if (msg.action === 'mcp') {
+    // 去重开始：popup 关掉也能保留角标（Service Worker 不受 popup 关闭影响）
+    if (msg.name === 'dedup_video') {
+      chrome.storage.local.set({ dedupPending: true });
+      chrome.action.setBadgeText({ text: '…' });
+      chrome.action.setBadgeBackgroundColor({ color: '#F59E0B' });
+    }
     const r = await callMcp(msg.name, msg.args || {});
-    // 去重完成后自动清 pending 状态 + 亮角标（popup 可能已关）
+    // 去重完成：亮 OK 角标
     if (msg.name === 'dedup_video') {
       chrome.storage.local.set({ dedupResult: r, dedupPending: false });
-      chrome.storage.local.remove(['dedupSrc']);
+      chrome.storage.local.remove(['dedupSrc', 'dedupStartedAt']);
       chrome.action.setBadgeText({ text: 'OK' });
       chrome.action.setBadgeBackgroundColor({ color: '#10b981' });
     }

@@ -57,6 +57,9 @@ async function toast(msg, type) {
   // 去重按钮
   $('btn-dedup').addEventListener('click', doDedup);
 
+  // 恢复产物按钮
+  $('btn-recover-outputs').addEventListener('click', doRecoverOutputs);
+
   // 探测
   $('btn-probe').addEventListener('click', doProbe);
   $('btn-refresh-assets').addEventListener('click', loadAssets);
@@ -117,12 +120,19 @@ async function toast(msg, type) {
   }
   // 去重进行中状态恢复
   if (saved.dedupPending) {
-    $('btn-dedup').disabled = true;
-    $('btn-dedup').textContent = '去重进行中...';
-    $('dedup-card').classList.remove('hidden');
-    $('dedup-checks').innerHTML = '<div style="font-size:12px;color:#A96700;text-align:center;padding:8px;">去重正在后台运行，完成后扩展图标角标「OK」会亮起</div>';
-    $('dedup-artifact').classList.add('hidden');
-    $('dedup-fail-hint').classList.add('hidden');
+    // 超时清理：超过 10 分钟还在 pending 说明上次异常（服务器崩溃等）
+    if (saved.dedupStartedAt && (Date.now() - saved.dedupStartedAt > 600000)) {
+      chrome.storage.local.remove(['dedupPending', 'dedupSrc', 'dedupStartedAt']);
+      chrome.action.setBadgeText({ text: '' });
+    } else {
+      $('btn-dedup').disabled = true;
+      $('btn-dedup').textContent = '去重进行中...';
+      $('dedup-card').classList.remove('hidden');
+      $('dedup-checks').innerHTML = '<div style="font-size:12px;color:#A96700;text-align:center;padding:8px;">去重正在后台运行，完成后扩展图标角标「OK」会亮起</div>';
+      $('dedup-artifact').classList.add('hidden');
+      $('dedup-fail-hint').classList.add('hidden');
+      startDedupTimer('去重处理中: ' + (saved.dedupSrc || ''));
+    }
   }
   // 去重结果恢复
   if (saved.dedupResult) {
@@ -130,6 +140,9 @@ async function toast(msg, type) {
     chrome.storage.local.remove('dedupResult');
     chrome.action.setBadgeText({ text: '' });
   }
+
+  // 始终显示"查看最近产物"按钮，作为丢失链接的恢复手段
+  $('btn-recover-outputs').classList.remove('hidden');
 })();
 
 // ====== 上传 ======
@@ -145,18 +158,44 @@ function setupUpload() {
   });
 }
 
+const API_BASE = 'http://124.71.209.36:8765';
+
 async function doUpload(file) {
   const prog = $('upload-progress');
   const fill = $('progress-fill');
   const text = $('progress-text');
   prog.classList.remove('hidden');
+  fill.style.width = '0%';
+  text.textContent = '准备上传... ' + file.name;
+
   try {
-    text.textContent = '上传中... ' + file.name;
-    fill.style.width = '30%';
-    // 转 base64 传给 background（Service Worker 不支持直接传 File）
-    const b64 = await fileToBase64(file);
-    fill.style.width = '60%';
-    await chrome.runtime.sendMessage({ action: 'upload64', name: file.name, data: b64 });
+    var result = await new Promise(function(resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', API_BASE + '/local/upload');
+
+      xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+          var pct = Math.round(e.loaded / e.total * 100);
+          fill.style.width = pct + '%';
+          var loaded = (e.loaded / 1048576).toFixed(1);
+          var total = (e.total / 1048576).toFixed(1);
+          text.textContent = '上传中 ' + pct + '%  (' + loaded + '/' + total + ' MB)';
+        }
+      };
+
+      xhr.onload = function() {
+        if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
+        else reject(new Error('HTTP ' + xhr.status));
+      };
+      xhr.onerror = function() { reject(new Error('网络错误')); };
+      xhr.ontimeout = function() { reject(new Error('上传超时')); };
+      xhr.timeout = 300000;
+
+      var formData = new FormData();
+      formData.append('file', file, file.name);
+      xhr.send(formData);
+    });
+
     fill.style.width = '100%';
     text.innerHTML = ICON_YES + file.name + ' 上传完成';
     await loadAssets();
@@ -165,15 +204,6 @@ async function doUpload(file) {
   } finally {
     setTimeout(() => prog.classList.add('hidden'), 2000);
   }
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 }
 
 // ====== 素材列表 ======
@@ -316,6 +346,118 @@ function _phashHint(ph) {
     : 'pHash 未达标：建议启用更多维度 / 提高档位 / 换 seed。';
 }
 
+var _dedupTimer = null;
+var _orbCleanup = null;
+
+async function startDedupTimer(label) {
+  stopDedupTimer();
+  var box = $('dedup-progress');
+  var labelNode = $('dedup-progress-label');
+  var timeNode = $('dedup-progress-time');
+
+  // 从 storage 读开始时间（popup 重开不重置）
+  var stored = await chrome.storage.local.get('dedupStartedAt');
+  var startedAt = stored.dedupStartedAt || Date.now();
+  if (!stored.dedupStartedAt) {
+    await chrome.storage.local.set({ dedupStartedAt: startedAt });
+  }
+
+  labelNode.textContent = label || '去重处理中';
+  timeNode.textContent = '';
+  box.classList.remove('hidden');
+  _orbCleanup = setupOrbInteraction(box);
+
+  _dedupTimer = setInterval(function() {
+    var elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    var m = Math.floor(elapsed / 60);
+    var s = elapsed % 60;
+    timeNode.textContent = '已处理 ' + (m > 0 ? m + '分' : '') + s + '秒';
+  }, 500);
+}
+
+function stopDedupTimer() {
+  if (_dedupTimer) { clearInterval(_dedupTimer); _dedupTimer = null; }
+  if (_orbCleanup) { _orbCleanup(); _orbCleanup = null; }
+}
+
+// From: setupOrbInteraction (web project, archive/web/app.js)
+function setupOrbInteraction(box) {
+  var path = box.querySelector('.orb-path');
+  var globe = box.querySelector('.orb-globe');
+  if (!path || !globe) return null;
+  var state = { position: 0, direction: 1, dragging: false, pointerId: null, lastFrame: performance.now(), frame: 0 };
+  function pathScale() { return path.getBoundingClientRect().width / path.offsetWidth || 1; }
+  function maxPosition() { return Math.max(0, path.clientWidth - globe.offsetWidth - 4); }
+  function renderPosition() {
+    var max = maxPosition();
+    state.position = Math.max(0, Math.min(max, state.position));
+    globe.style.transform = 'translateX(' + state.position + 'px)';
+  }
+  function animate(now) {
+    var max = maxPosition();
+    if (!state.dragging && max > 0) {
+      var delta = Math.min(40, now - state.lastFrame);
+      state.position += state.direction * delta * max / 2000;
+      if (state.position >= max) { state.position = max; state.direction = -1; }
+      if (state.position <= 0) { state.position = 0; state.direction = 1; }
+      renderPosition();
+    }
+    state.lastFrame = now;
+    if (!box.classList.contains('hidden')) state.frame = requestAnimationFrame(animate);
+  }
+  function beginDrag(event) {
+    if (event.button != null && event.button !== 0) return;
+    state.dragging = true;
+    state.pointerId = event.pointerId;
+    state.lastClientX = event.clientX;
+    globe.classList.add('is-dragging');
+    path.classList.add('is-dragging');
+    try { globe.setPointerCapture?.(event.pointerId); } catch (_) {}
+    event.preventDefault();
+  }
+  function moveDrag(event) {
+    if (!state.dragging || event.pointerId !== state.pointerId) return;
+    state.position += (event.clientX - state.lastClientX) / pathScale();
+    state.lastClientX = event.clientX;
+    renderPosition();
+    event.preventDefault();
+  }
+  function endDrag(event) {
+    if (!state.dragging || event.pointerId !== state.pointerId) return;
+    var max = maxPosition();
+    state.direction = state.position >= max / 2 ? -1 : 1;
+    state.dragging = false;
+    state.pointerId = null;
+    globe.classList.remove('is-dragging');
+    path.classList.remove('is-dragging');
+    try { globe.releasePointerCapture?.(event.pointerId); } catch (_) {}
+  }
+  function moveByKeyboard(event) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    state.position += event.key === 'ArrowRight' ? 14 : -14;
+    state.direction = event.key === 'ArrowRight' ? 1 : -1;
+    renderPosition();
+    event.preventDefault();
+  }
+  globe.addEventListener('pointerdown', beginDrag);
+  globe.addEventListener('pointermove', moveDrag);
+  globe.addEventListener('pointerup', endDrag);
+  globe.addEventListener('pointercancel', endDrag);
+  globe.addEventListener('keydown', moveByKeyboard);
+  renderPosition();
+  state.frame = requestAnimationFrame(animate);
+  return function() {
+    cancelAnimationFrame(state.frame);
+    globe.removeEventListener('pointerdown', beginDrag);
+    globe.removeEventListener('pointermove', moveDrag);
+    globe.removeEventListener('pointerup', endDrag);
+    globe.removeEventListener('pointercancel', endDrag);
+    globe.removeEventListener('keydown', moveByKeyboard);
+    globe.classList.remove('is-dragging');
+    path.classList.remove('is-dragging');
+  };
+}
+
 function showDedupResult(d) {
   var card = $('dedup-card');
   card.classList.remove('hidden');
@@ -335,17 +477,22 @@ function showDedupResult(d) {
     chrome.downloads.download({ url: 'http://124.71.209.36:8765/local/download/' + encodeURIComponent(outName) });
   };
 
+  var phSkipped = ph.skipped;
   var checkItems = [
     ['MD5 已改变', checks.md5_changed],
     ['分辨率保持', checks.resolution_kept],
     ['时长合规', checks.duration_close],
-    ['≥ 5s', checks.min_duration_ok],
-    ['pHash', phPassed, (ph.passed === false) ? _phashHint(ph) : ''],
+    ['>= 5s', checks.min_duration_ok],
+    ['pHash' + (phSkipped ? ' (已跳过)' : ''), phPassed, (ph.passed === false && !phSkipped) ? _phashHint(ph) : '', phSkipped],
   ];
   $('dedup-checks').innerHTML = checkItems.map(function(item) {
-    var label = item[0], ok = item[1], hint = item[2] || '';
-    return '<div class="check-item ' + (ok ? 'pass' : 'fail') + '">' +
-      '<span class="check-mark">' + (ok ? ICON_YES : ICON_NO) + '</span>' +
+    var label = item[0], ok = item[1], hint = item[2] || '', skipped = item[3] || false;
+    var cls, mark;
+    if (skipped) { cls = 'skip'; mark = '<span class="check-mark" style="color:#6B7280">—</span>'; }
+    else if (ok)  { cls = 'pass'; mark = ICON_YES; }
+    else          { cls = 'fail'; mark = ICON_NO; }
+    return '<div class="check-item ' + cls + '">' +
+      mark +
       '<div><b>' + label + '</b>' + (hint ? '<div class="check-hint">' + hint + '</div>' : '') + '</div>' +
       '</div>';
   }).join('');
@@ -355,6 +502,22 @@ function showDedupResult(d) {
     $('dedup-fail-text').textContent = phPassed
       ? '部分检查未通过，请查看上方具体项目。建议调整参数后重试。'
       : 'pHash 未达标：建议启用更多维度 / 提高档位（重度）/ 换 seed / 开启翻转后重试。';
+  }
+
+  // TTS 状态提示
+  var tts = d.tts;
+  $('dedup-tts-hint').classList.add('hidden');
+  if (tts && tts !== 'ok') {
+    $('dedup-tts-hint').classList.remove('hidden');
+    var hint = '';
+    if (tts.indexOf('401') >= 0 || tts.indexOf('Invalid') >= 0 || tts.indexOf('API Key') >= 0) {
+      hint = 'MiMo API Key 无效（401），文案已跳过配音。可在服务器更新 Key 或取消勾选「启用元宝改写」以避免此提示。';
+    } else if (tts.indexOf('timeout') >= 0 || tts.indexOf('超时') >= 0) {
+      hint = 'TTS 请求超时，视频保留原始音轨。可重试或取消勾选「启用元宝改写」。';
+    } else {
+      hint = 'TTS 处理异常：' + tts + '，视频保留原始音轨。可取消勾选「启用元宝改写」跳过。';
+    }
+    $('dedup-tts-text').textContent = hint;
   }
 }
 
@@ -374,28 +537,68 @@ async function doDedup() {
   btn.textContent = '去重中...';
 
   // 标记进行中，popup 重开时显示状态
-  await chrome.storage.local.set({ dedupPending: true, dedupSrc: name });
+  await chrome.storage.local.set({ dedupPending: true, dedupSrc: name, dedupStartedAt: Date.now() });
   chrome.action.setBadgeText({ text: '…' });
   chrome.action.setBadgeBackgroundColor({ color: '#F59E0B' });
+
+  // 进度条
+  $('dedup-card').classList.add('hidden');
+  startDedupTimer('去重处理中: ' + name);
 
   try {
     const r = await callTool('dedup_video', {
       src: name, level, dimensions: dims,
       tts_voice: $('tts-voice').value,
       tts_speed: parseFloat($('tts-speed').value),
-      tts_text: $('tts-text').value.trim() || ($('chk-rewrite').checked ? null : ''),
+      tts_text: $('chk-rewrite').checked ? ($('tts-text').value.trim() || null) : null,
       tts_topic: $('tts-topic').value,
       tts_template: $('tts-template').value,
+      skip_phash: $('chk-skip-phash') ? $('chk-skip-phash').checked : true,
     });
     const d = r.data || {};
+    stopDedupTimer();
+    $('dedup-progress').classList.add('hidden');
     showDedupResult(d);
     toast('去重完成', 'ok');
   } catch (e) {
+    stopDedupTimer();
+    $('dedup-progress').classList.add('hidden');
     toast('去重失败: ' + e.message, 'err');
   } finally {
-    chrome.storage.local.remove(['dedupPending', 'dedupSrc']);
-    chrome.action.setBadgeText({ text: '' });
+    chrome.storage.local.remove(['dedupPending', 'dedupSrc', 'dedupStartedAt']);
+    // 角标由 background.js 管理（…→OK），不在这里清
     btn.disabled = false;
     btn.textContent = '开始单条去重';
+  }
+}
+
+// ====== 恢复产物：列出服务器 output 目录，即使 chrome.storage 清空也能下载 ======
+async function doRecoverOutputs() {
+  var btn = $('btn-recover-outputs');
+  var list = $('recover-outputs-list');
+  btn.disabled = true;
+  btn.textContent = '获取中...';
+  list.classList.add('hidden');
+  try {
+    var r = await callTool('list_outputs');
+    var outputs = (r.data && r.data.outputs) || [];
+    if (!outputs.length) {
+      list.innerHTML = '<div style="color:#9CA3AF;padding:4px;">没有产物</div>';
+      list.classList.remove('hidden');
+      return;
+    }
+    list.innerHTML = outputs.map(function(o) {
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(15,23,42,0.08);">' +
+        '<span style="color:#374151;">' + o.name + '</span>' +
+        '<span style="color:#9CA3AF;">' + o.size_mb + ' MB / ' + o.mtime + '</span>' +
+        '<button class="btn btn-mini" style="background:#4A90D9;color:#fff;margin-left:6px;" onclick="chrome.downloads.download({url:\'http://124.71.209.36:8765/local/download/' + encodeURIComponent(o.name) + '\'})">下载</button>' +
+        '</div>';
+    }).join('');
+    list.classList.remove('hidden');
+  } catch (e) {
+    toast('获取产物列表失败: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '查看最近产物';
   }
 }

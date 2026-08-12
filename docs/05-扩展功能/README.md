@@ -329,9 +329,12 @@ mv changes/<change-id> changes/archive/$(date +%Y-%m-%d)-<change-id>
 
 | Change ID | 说明 | 影响级别 | 进度 |
 |---|---|---|---|
-| add-browser-extension | 浏览器扩展元宝改写桥接：替代不可行的服务器 headless 登录，利用用户已登录元宝的浏览器标签完成改写 | B | 开发中 |
-| add-vision-context | 已归档 → `changes/archive/2026-08-11-add-vision-context/`（已被元宝改写全链路实现覆盖） | — | 已归档 |
-| add-tts-audio-replace | 已归档 → `changes/archive/2026-08-11-add-tts-audio-replace/` | — | 已归档 |
-| add-asr-copy-rewrite | 已归档 → `changes/archive/2026-08-11-add-asr-copy-rewrite/` | — | 已归档 |
+| — | 无活跃变更 | — | — |
+
+> 已归档变更见 `changes/archive/`：
+> - `2026-08-11-add-asr-copy-rewrite` — ASR+文案提取+元宝改写全链路
+> - `2026-08-11-add-tts-audio-replace` — MiMo TTS 配音集成
+> - `2026-08-11-add-vision-context` — 视觉上下文（已被元宝改写覆盖）
+> - `2026-08-12-add-browser-extension` — 浏览器扩展元宝桥接（已完成为唯一前端）
 
 > 进度取值：`设计阶段` / `开发中 (x/y)` / `待验收` / `待归档`

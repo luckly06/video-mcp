@@ -265,6 +265,21 @@ def list_assets():
     return items
 
 
+def list_outputs():
+    """列出 output/ 目录下已生成的去重产物（用于恢复丢失的下载链接）。"""
+    if not OUTPUT_DIR.exists():
+        return []
+    items = []
+    for p in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.is_file() and p.name != ".gitkeep":
+            items.append({
+                "name": p.name,
+                "size_mb": round(p.stat().st_size / 1024 / 1024, 2),
+                "mtime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime)),
+            })
+    return items
+
+
 def probe_video(path, base_dir=None):
     """用 ffprobe 读取视频关键信息。🔒 F3.3：path 必须落在 base_dir 白名单内。
 
@@ -574,7 +589,9 @@ def _clamp_speed_for_floor(factor, base_dur):
 
 
 def dedup_video(src, params=None, out_name=None, seed=None,
-                level=None, dimensions=None, flip_mode=None, trim_phase=None):
+                level=None, dimensions=None, flip_mode=None, trim_phase=None,
+                tts_text=None, tts_voice=None, tts_speed=None,
+                skip_phash=False):
     """
     对单个视频执行去重（本期增量：强度档 + 构图/时序维度 + pHash 自检升级）。
 
@@ -680,7 +697,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         cmd += ["-t", str(out_dur)]       # 去尾：源时间轴上读取的时长
     cmd += ["-i", src_info["path"]]
     cmd += ["-vf", vf, "-r", str(fps), "-b:v", vbitrate,
-            "-c:v", "libx264", "-preset", "medium",
+            "-c:v", "libx264", "-preset", "veryfast",
             "-c:a", "aac", "-b:a", "128k"]
     if af_nodes:
         cmd += ["-af", ",".join(af_nodes)]
@@ -695,6 +712,49 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     if rc != 0:
         _cleanup_failed_output(out_path)
         raise PipelineError(_ffmpeg_error_message(err, out_path))
+
+    # --- TTS 配音（如果提供了文案且 MiMo 可用）---
+    tts_status = None
+    if tts_text and tts_text.strip():
+        try:
+            from station.server import tts_client as T
+            if T.is_available():
+                voice = tts_voice or "冰糖"
+                speed = float(tts_speed or 1.0)
+                wav_path = T.tts_to_temp(tts_text.strip(), voice=voice, speed=speed)
+                try:
+                    # 替换音轨：取原视频流 + TTS 音频
+                    tmp_out = Path(str(out_path) + ".tts.mp4")
+                    mix_cmd = [
+                        str(FFMPEG), "-y",
+                        "-i", str(out_path),
+                        "-i", str(wav_path),
+                        "-c:v", "copy",
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-shortest",
+                        "-map", "0:v:0", "-map", "1:a:0",
+                        str(tmp_out),
+                    ]
+                    rc2, _, err2 = _run(mix_cmd, timeout=120)
+                    if rc2 == 0:
+                        tmp_out.replace(out_path)
+                        applied["tts_applied"] = True
+                        applied["tts_voice"] = voice
+                        applied["tts_speed"] = speed
+                        tts_status = "ok"
+                    else:
+                        tts_status = "混音失败"
+                        logger.warning("TTS 混音失败: %s", err2[:200])
+                finally:
+                    try: wav_path.unlink(missing_ok=True)
+                    except Exception: pass
+            else:
+                tts_status = "TTS 不可用（未配 Key 或 openai 未安装）"
+        except Exception as e:
+            tts_status = str(e)[:200]
+            logger.warning("TTS 配音跳过: %s", e)
+    elif tts_text:
+        tts_status = "文案为空，跳过"
 
     try:
         out_info = probe_video(str(out_path), base_dir=OUTPUT_DIR)
@@ -722,16 +782,21 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     else:
         min_duration_ok = True
 
-    # pHash：变体 vs 原素材（度量“够不够不同”）。批量取消发生在自检期间时，
+    # pHash：变体 vs 原素材（度量"够不够不同"）。批量取消发生在自检期间时，
     # 当前变体尚未完成完整验收，清理它；此前已完成并入列表的变体不受影响。
-    try:
-        phash = M.compare_videos(str(src_path), str(out_path))
-    except PipelineCancelled:
-        _cleanup_failed_output(out_path)
-        raise
+    # skip_phash=True 可跳过此步（省 3-5 分钟 CPU 时间，仅剩 MD5+分辨率+时长校验）
+    if skip_phash:
+        phash = {"skipped": True, "passed": None, "method": "skipped"}
+    else:
+        try:
+            phash = M.compare_videos(str(src_path), str(out_path))
+        except PipelineCancelled:
+            _cleanup_failed_output(out_path)
+            raise
 
     all_passed = (md5_changed and resolution_kept and duration_close
-                  and min_duration_ok and bool(phash.get("passed")))
+                  and min_duration_ok
+                  and (bool(phash.get("passed")) if not skip_phash else True))
 
     return {
         "src": src_info,
@@ -739,6 +804,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         "output_path": str(out_path),
         "applied_params": applied,
         "fps": fps,
+        "tts": tts_status,
         "checks": {
             "md5_changed": md5_changed,
             "resolution_kept": resolution_kept,

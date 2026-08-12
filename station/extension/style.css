@@ -342,6 +342,38 @@ code {
 .artifact-highlight { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; margin-bottom: 12px; padding: 11px 12px; border: 1px solid #A9CDED; border-left: 4px solid var(--brand-primary); border-radius: var(--radius-sm); background: #F5FAFF; }
 .artifact-highlight .artifact-label { color: var(--brand-primary-dark); font-size: 10px; font-weight: 600; }
 .artifact-highlight strong { min-width: 0; color: var(--text-primary); font: 600 12px Consolas, monospace; overflow-wrap: anywhere; }
+.processing-progress { margin: 0 0 16px; padding: 14px; border: 1px solid #D8CBE8; border-radius: var(--radius-sm); background: #FBF8FE; }
+.progress-row { display: flex; align-items: center; gap: 8px; color: #5C477D; font-size: 12px; }
+.progress-row strong { font-size: 12px; font-weight: 600; }
+.progress-row > :last-child { margin-left: auto; color: var(--text-secondary); font: 11px Consolas, monospace; white-space: nowrap; }
+.processing-progress p { margin: 8px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.55; text-align: center; }
+.orb-loader { position: relative; width: 100%; margin: 12px auto 0; text-align: center; }
+.orb-path { position: relative; width: 238px; height: 76px; margin: 0 auto; overflow: hidden; border: 3px groove rgba(225,225,225,.07); border-radius: 35px; background: #E6E6E6; box-shadow: inset -2px 20px 10px rgba(0,0,0,.06), inset -2px 30px 10px rgba(0,0,0,.04); transition: border-color var(--ease-standard), box-shadow var(--ease-standard); touch-action: none; }
+.orb-path.is-dragging { border-color: rgba(92,71,125,.38); box-shadow: inset -2px 20px 10px rgba(0,0,0,.06), inset -2px 30px 10px rgba(0,0,0,.04), 0 0 0 3px rgba(92,71,125,.12); }
+.orb-globe { position: relative; width: 66px; height: 66px; margin-top: 2px; margin-left: 2px; overflow: hidden; border-radius: 50%; box-shadow: 0 10px 40px rgba(0,0,0,.45); cursor: grab; user-select: none; -webkit-user-select: none; will-change: transform; }
+.orb-globe:hover { box-shadow: 0 12px 42px rgba(0,0,0,.52), 0 0 0 3px rgba(92,71,125,.12); }
+.orb-globe:active, .orb-globe.is-dragging { cursor: grabbing; }
+.orb-globe:focus-visible { outline: 3px solid rgba(92,71,125,.32); outline-offset: 2px; }
+.orb-globe::after { position: absolute; left: 40px; top: 15px; z-index: 2; width: 5px; height: 12px; border-radius: 50%; background: rgba(255,255,255,.1); box-shadow: 0 0 14px 7px rgba(255,255,255,.1); content: ""; }
+.orb-globe::before { position: absolute; inset: 0; z-index: 1; border-radius: 50%; box-shadow: inset 0 0 15px #1A252F; content: ""; opacity: .4; }
+.orb-wrapper { position: absolute; top: 0; left: -462px; width: 528px; height: 528px; animation: orb-texture 4s ease infinite; }
+.orb-wrapper span { position: absolute; top: 0; left: 0; width: 33px; height: 528px; background: #5C477D; box-shadow: inset 0 0 25px #5C487C; }
+.orb-wrapper span:nth-child(2) { left: 33px; background: #503E6D; }
+.orb-wrapper span:nth-child(3) { left: 66px; }
+.orb-wrapper span:nth-child(4) { left: 99px; background: #503E6D; }
+.orb-wrapper span:nth-child(5) { left: 132px; }
+.orb-wrapper span:nth-child(6) { left: 165px; background: #503E6D; }
+.orb-wrapper span:nth-child(7) { left: 198px; }
+.orb-wrapper span:nth-child(8) { left: 231px; background: #503E6D; }
+.orb-wrapper span:nth-child(9) { left: 264px; }
+.orb-wrapper span:nth-child(10) { left: 297px; background: #503E6D; }
+.orb-wrapper span:nth-child(11) { left: 330px; }
+.orb-wrapper span:nth-child(12) { left: 363px; background: #503E6D; }
+.orb-wrapper span:nth-child(13) { left: 396px; }
+.orb-wrapper span:nth-child(14) { left: 429px; background: #503E6D; }
+.orb-wrapper span:nth-child(15) { left: 462px; }
+.orb-wrapper span:nth-child(16) { left: 495px; background: #503E6D; }
+@keyframes orb-texture { 0% { left: -462px; } 50% { left: 0; } 100% { left: -462px; } }
 .artifact-highlight > :last-child { color: var(--text-tertiary); font-size: 10px; white-space: nowrap; }
 .artifact-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 0 8px; }
 .artifact-section-head > span { color: var(--text-primary); font-size: 12px; font-weight: 600; }

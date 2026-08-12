@@ -145,7 +145,14 @@
           <label class="dim-chk dim-flip"><input type="checkbox" data-dim="flip" /><span>翻转</span></label>
         </div>
       </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-600);margin-bottom:4px;cursor:pointer;">
+        <input type="checkbox" id="chk-skip-phash" checked /><span>跳过 pHash 自检（快 3-5 分钟）</span>
+      </label>
       <button id="btn-dedup" class="btn btn-primary" type="button" style="width:100%">开始单条去重</button>
+      <div id="dedup-progress" class="processing-progress hidden" style="margin-top:8px">
+        <div class="progress-row"><strong id="dedup-progress-label">去重处理中</strong><span id="dedup-progress-time"></span></div>
+        <div class="orb-loader"><div class="orb-path"><div class="orb-globe"><div class="orb-wrapper"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div></div>
+      </div>
       <div id="dedup-card" class="result-card hidden" style="margin-top:8px">
         <div class="result-head"><h4>去重结果</h4></div>
         <div class="checks" id="dedup-checks"></div>
@@ -156,6 +163,11 @@
         <div id="dedup-fail-hint" class="hidden" style="margin-top:8px;padding:8px 10px;border-radius:6px;background:#FFF6E5;border:1px solid #F1D295;font-size:11px;color:#A96700;">
           <span id="dedup-fail-text"></span>
         </div>
+        <div id="dedup-tts-hint" class="hidden" style="margin-top:8px;padding:8px 10px;border-radius:6px;background:#FDF2F8;border:1px solid #F5C6D7;font-size:11px;color:#9B2C5E;">
+          <span id="dedup-tts-text"></span>
+        </div>
+        <button id="btn-recover-outputs" class="btn btn-mini hidden" style="margin-top:8px;background:#6B7280;color:#fff;">查看最近产物</button>
+        <div id="recover-outputs-list" class="hidden" style="margin-top:4px;font-size:11px;"></div>
       </div>
     </section>
   </main>
