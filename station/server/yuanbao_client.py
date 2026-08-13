@@ -171,6 +171,12 @@ def ensure_edge_debug_port():
     # 3) 选一个空闲端口，避免 9223 被残留进程占用导致绑定失败（最常见的超时根因）
     port = _free_port()
     log_path = tmp_profile / "edge_launch.log"
+    logf = None
+    try:
+        logf = open(str(log_path), "w", encoding="utf-8", errors="replace")
+    except Exception as e:
+        _shutil.rmtree(str(tmp_profile), ignore_errors=True)
+        return False, f"无法创建 Edge 日志文件: {e}", None, None, None
     try:
         proc = subprocess.Popen(
             [edge, f"--remote-debugging-port={port}",
@@ -178,8 +184,12 @@ def ensure_edge_debug_port():
              "--no-first-run", "--no-default-browser-check",
              "--disable-blink-features=AutomationControlled",
              "--remote-debugging-address=127.0.0.1"],
-            stdout=str(log_path), stderr=subprocess.STDOUT)
+            stdout=logf, stderr=subprocess.STDOUT)
     except Exception as e:
+        try:
+            if logf: logf.close()
+        except Exception:
+            pass
         _shutil.rmtree(str(tmp_profile), ignore_errors=True)
         return False, f"启动调试版 Edge 失败: {e}", None, None, None
 
@@ -187,6 +197,10 @@ def ensure_edge_debug_port():
     for _ in range(60):
         time.sleep(0.5)
         if _cdp_ready(port):
+            try:
+                if logf: logf.close()
+            except Exception:
+                pass
             return True, f"已以调试模式启动 Edge（端口 {port}，原浏览器已回归）", \
                    str(tmp_profile), port, proc.pid
 
@@ -197,6 +211,10 @@ def ensure_edge_debug_port():
         diag = "(无日志输出)"
     try:
         proc.kill()
+    except Exception:
+        pass
+    try:
+        if logf: logf.close()
     except Exception:
         pass
     _shutil.rmtree(str(tmp_profile), ignore_errors=True)
