@@ -15,9 +15,9 @@ const { app, BrowserWindow } = require('electron');
 const { createMainWindow } = require('./lib/window');
 const { buildMenu } = require('./lib/menu');
 const { attachDownloadHandlers } = require('./lib/download');
-const { parseApiBase } = require('./lib/api-base');
 const { createLogger } = require('./lib/logger');
 const { createYuanbaoWindow } = require('./lib/yuanbao-window');
+const { startLocalServer, stopLocalServer } = require('./lib/local-server');
 
 // ---------- 1. userData 隔离 ----------
 // 避免与机器上其他 Electron 应用共享缓存目录
@@ -48,12 +48,21 @@ const log = createLogger({
 
 // ---------- 4. 主窗口工厂 + 下载接管 ----------
 let mainWindow = null;
+let localServerChild = null;
 
-function bootstrap() {
-  const apiBase = parseApiBase({
-    envVar: process.env.VIDEODEDUP_API_BASE,
-    defaultBase: 'http://124.71.209.36:8765',
-  });
+async function bootstrap() {
+  // 本地 MCP 后端：优先复用已有服务；否则 spawn 本机 venv 的 mcp_server.py（127.0.0.1:8765）。
+  // 显式设置 VIDEODEDUP_API_BASE 时尊重外部后端，不拉起本地进程。
+  let apiBase;
+  const override = (process.env.VIDEODEDUP_API_BASE || '').trim();
+  if (override && /^https?:\/\//i.test(override)) {
+    apiBase = override.replace(/\/+$/, '');
+    log.info(`[main] 使用外部 API_BASE = ${apiBase}（不拉起本地后端）`);
+  } else {
+    const local = await startLocalServer({ log });
+    localServerChild = local.child;
+    apiBase = local.baseUrl;
+  }
   log.info(`[main] API_BASE = ${apiBase}`);
 
   mainWindow = createMainWindow({
@@ -87,4 +96,9 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   // 非 macOS：所有窗口关闭后退出；macOS：保持 dock 行为
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', () => {
+  // 退出时回收本地后端子进程（若复用外部服务则 child 为 null，noop）
+  stopLocalServer(localServerChild);
 });

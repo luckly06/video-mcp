@@ -88,7 +88,7 @@ function buildMenu({ mainWindow, log }) {
         {
           label: 'MCP 服务器',
           click: async () => {
-            await shell.openExternal('http://124.71.209.36:8765');
+            await shell.openExternal('http://127.0.0.1:8765');
           },
         },
       ],
