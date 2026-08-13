@@ -20,6 +20,92 @@ def has_profile():
     return (Path(PROFILE_DIR) / "Local State").exists()
 
 
+def _edge_default_profile():
+    """用户 Edge 默认 profile 路径（复用已登录元宝的登录态）。"""
+    local = os.environ.get("LOCALAPPDATA", "")
+    return Path(local) / "Microsoft" / "Edge" / "User Data"
+
+
+def _copy_file(src, dst):
+    import shutil
+    try:
+        shutil.copy2(str(src), str(dst))
+    except Exception:
+        pass
+
+
+def _copy_cookie_db(src, dst):
+    """复制 Cookies 数据库（Edge 运行中也能尽量拿一致快照）。"""
+    if not src.exists():
+        return False
+    import shutil
+    try:
+        import sqlite3
+        scon = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=5)
+        dcon = sqlite3.connect(str(dst))
+        scon.backup(dcon)
+        scon.close()
+        dcon.close()
+        return dst.exists() and dst.stat().st_size > 0
+    except Exception:
+        try:
+            shutil.copy2(str(src), str(dst))
+            for ext in ("-wal", "-shm"):
+                p = Path(str(src) + ext)
+                if p.exists():
+                    shutil.copy2(str(p), str(dst) + ext)
+            return True
+        except Exception:
+            return False
+
+
+def copy_edge_login_state(dst):
+    """把用户 Edge 默认 profile 的登录态关键文件复制到 dst（避免与运行中的 Edge 抢单例锁）。
+
+    只复制元宝登录态相关的最小集合（Local State / Cookies / Preferences / Local Storage / IndexedDB），
+    不复制 Cache/History 等大文件。返回是否成功（至少 Local State + Cookies 就位）。
+    """
+    src = _edge_default_profile()
+    if not (src / "Local State").exists():
+        return False
+    dst = Path(dst)
+    dst.mkdir(parents=True, exist_ok=True)
+
+    _copy_file(src / "Local State", dst / "Local State")
+
+    default_src = src / "Default"
+    default_dst = dst / "Default"
+    default_dst.mkdir(parents=True, exist_ok=True)
+    _copy_file(default_src / "Preferences", default_dst / "Preferences")
+
+    net_dst = default_dst / "Network"
+    net_dst.mkdir(parents=True, exist_ok=True)
+    _copy_cookie_db(default_src / "Network" / "Cookies", net_dst / "Cookies")
+
+    import shutil
+    for sub in ("Local Storage", "IndexedDB"):
+        s = default_src / sub
+        if s.exists():
+            try:
+                shutil.copytree(str(s), str(default_dst / sub), dirs_exist_ok=True)
+            except Exception:
+                pass
+
+    return (dst / "Local State").exists() and (net_dst / "Cookies").exists()
+
+
+def _edge_running():
+    """检测 Edge 主浏览器（msedge.exe）是否在运行（排除 WebView2：msedgewebview2.exe）。"""
+    try:
+        r = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq msedge.exe", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return "msedge.exe" in r.stdout.lower()
+    except Exception:
+        return False
+
+
 def _pick_channel():
     env = os.environ.get("VU_YUANBAO_CHANNEL", "").strip()
     if env: return env
@@ -395,6 +481,13 @@ async def main():
     # CDP disconnect / close persistent context
     if platform.system() == "Linux":
         await browser_ctx.close()
+    else:
+        # Windows：仅当自己 launch 的 msedge.exe 时关闭；复用已运行 Edge 时保留用户浏览器
+        if need_launch:
+            try:
+                await browser_ctx.close()
+            except Exception:
+                pass
     await p.stop()
     print(json.dumps({{"rewritten": rw or None, "vision_desc": "", "error": ""}}, ensure_ascii=False))
 
@@ -404,11 +497,25 @@ asyncio.run(main())
 
 
 def vision_and_rewrite(frames, raw_text, rewrite_template=None,
-                       max_chars=None, topic=None, timeout=120, headless=False):
+                       max_chars=None, topic=None, timeout=120, headless=False,
+                       reuse_edge=True):
     channel = _pick_channel()
+    profile = PROFILE_DIR
+    tmp_profile = None
+    if reuse_edge:
+        if _edge_running():
+            return {"rewritten": None, "vision_desc": "",
+                    "error": "Edge 浏览器正在运行。请先关闭 Edge 再点改写（复用 Edge 登录态需独占其 profile）。"}
+        tmp_profile = Path(tempfile.mkdtemp(prefix="vu_edge_"))
+        if copy_edge_login_state(tmp_profile):
+            profile = tmp_profile
+            logger.info(f"[yuanbao] 复用 Edge 登录态 profile: {profile}")
+        else:
+            logger.warning("[yuanbao] 复制 Edge 登录态失败，回退专用 profile")
+            tmp_profile = None
     script = REWRITE_TEMPLATE.format(
         station_dir=str(_HERE),
-        profile=PROFILE_DIR,
+        profile=str(profile),
         headless=str(headless),
         frames=repr(frames or []),
         topic=json.dumps(topic or "", ensure_ascii=False),
@@ -443,6 +550,17 @@ def vision_and_rewrite(frames, raw_text, rewrite_template=None,
     finally:
         try: Path(tmp).unlink()
         except: pass
+        if tmp_profile:
+            import shutil
+            try: shutil.rmtree(str(tmp_profile), ignore_errors=True)
+            except: pass
+
+
+def _cli_arg(name, default=""):
+    for i, a in enumerate(sys.argv):
+        if a == name and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return default
 
 
 if __name__ == "__main__":
@@ -450,5 +568,18 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if "--login" in sys.argv:
         raise SystemExit(0 if login() else 1)
+    if "--rewrite" in sys.argv:
+        frames = [f.strip() for f in _cli_arg("--frames").split(",") if f.strip()]
+        raw = _cli_arg("--raw_text")
+        tmpl = _cli_arg("--template") or None
+        topic = _cli_arg("--topic")
+        mc = _cli_arg("--max_chars")
+        r = vision_and_rewrite(
+            frames, raw, rewrite_template=tmpl,
+            max_chars=int(mc) if mc and mc.isdigit() else None,
+            topic=topic, reuse_edge=True,
+        )
+        print(json.dumps(r, ensure_ascii=False))
+        raise SystemExit(0)
     print(f"子进程隔离 | profile={PROFILE_DIR}")
     print(f"已初始化: {has_profile()}")

@@ -3,6 +3,8 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
+const { spawn } = require('node:child_process');
 const { BrowserWindow, ipcMain } = require('electron');
 
 const YUANBAO_URL = 'https://yuanbao.tencent.com/';
@@ -24,6 +26,30 @@ const MAIN_WORLD_SHIM = `(function () {
     } catch (_) { /* swallow */ }
   };
 })();`;
+
+// 元宝改写 CLI（复用用户 Edge 登录态驱动 msedge.exe + CDP）
+const YUANBAO_CLI = path.join(__dirname, '..', '..', 'server', 'yuanbao_client.py');
+
+function resolvePython() {
+  const venv = path.join(
+    os.homedir(), '.workbuddy', 'binaries', 'python', 'envs', 'default', 'Scripts', 'python.exe'
+  );
+  if (fs.existsSync(venv)) return venv;
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+function sendYuanbaoDone(target, data) {
+  try {
+    if (target && !target.isDestroyed()) {
+      target.webContents.send('yuanbao-done', { action: 'yb-done', data });
+    }
+  } catch (_) { /* swallow */ }
+}
+
+function cleanupDir(dir) {
+  if (!dir) return;
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* noop */ }
+}
 
 function createYuanbaoWindow({ mainWindow, log }) {
   const preloadYuanbao = path.join(__dirname, 'preload-yuanbao.js');
@@ -117,37 +143,52 @@ function createYuanbaoWindow({ mainWindow, log }) {
   ipcMain.handle('yuanbao:run-rewrite', async (_evt, args) => {
     if (!args || typeof args !== 'object') return { ok: false, error: 'args must be an object' };
     try {
-      const w = await ensureLoaded();
-      if (!w || w.isDestroyed()) return { ok: false, error: 'BrowserWindow 创建失败' };
-      w.show(); w.focus();
-      log?.info?.('[yuanbao] window shown for run-rewrite');
-
-      // 确保主世界 shim 存在（chrome.runtime.sendMessage → __desktopYuanbao 转发桥）
-      try { await w.webContents.executeJavaScript(MAIN_WORLD_SHIM, true); } catch (_) {}
-
-      // 轮询等 content-yuanbao.js 注入
-      let injected = false;
-      for (let i = 0; i < 30; i++) {
-        try {
-          const t = await w.webContents.executeJavaScript(
-            `(() => { try { return typeof window.__ybInject; } catch (_) { return 'error'; } })()`
-          );
-          if (t === 'function') { injected = true; break; }
-        } catch (_) {}
-        await new Promise((r) => setTimeout(r, 500));
-      }
-      if (!injected) {
-        try {
-          await w.webContents.executeJavaScript(MAIN_WORLD_SHIM, true);
-          await w.webContents.executeJavaScript(contentYuanbaoSource, true);
-        } catch (_) {}
+      // 1) 帧图 base64 → 临时 jpg 文件（供 yuanbao_client 上传）
+      let tmpDir = null;
+      const frameFiles = [];
+      const frames = Array.isArray(args.frames_b64) ? args.frames_b64 : [];
+      if (frames.length) {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vu_frames_'));
+        frames.forEach((b64, i) => {
+          if (typeof b64 !== 'string' || !b64) return;
+          try {
+            const fp = path.join(tmpDir, `frame_${i}.jpg`);
+            fs.writeFileSync(fp, Buffer.from(b64, 'base64'));
+            frameFiles.push(fp);
+          } catch (_) { /* skip */ }
+        });
       }
 
-      const safeArgs = JSON.stringify(args);
-      await w.webContents.executeJavaScript(
-        `window.__ybInject && window.__ybInject(${safeArgs}); 'started';`, true
-      );
-      log?.info?.('[yuanbao] run-rewrite dispatched');
+      // 2) spawn 本机 venv python 跑 yuanbao_client --rewrite（用系统 msedge.exe + 复用 Edge 登录态）
+      const py = resolvePython();
+      const cmdArgs = [
+        YUANBAO_CLI, '--rewrite',
+        '--frames', frameFiles.join(','),
+        '--raw_text', args.raw_text || '',
+        '--template', args.template || '',
+        '--topic', args.topic || '',
+      ];
+      if (args.max_chars) cmdArgs.push('--max_chars', String(args.max_chars));
+
+      log?.info?.(`[yuanbao] spawn msedge 改写: ${py} ${cmdArgs.join(' ')}`);
+
+      const child = spawn(py, cmdArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '', err = '';
+      child.stdout?.on('data', (d) => { out += d; });
+      child.stderr?.on('data', (d) => { err += d; });
+      child.on('error', (e) => {
+        sendYuanbaoDone(mainWindow, { rewritten: null, error: 'spawn 失败: ' + e.message });
+        cleanupDir(tmpDir);
+      });
+      child.on('close', () => {
+        let parsed = { rewritten: null, error: '' };
+        try { parsed = JSON.parse(out.trim()); } catch (_) {
+          parsed = { rewritten: null, error: (out.trim() || err.trim() || '无输出').slice(0, 500) };
+        }
+        sendYuanbaoDone(mainWindow, parsed);
+        cleanupDir(tmpDir);
+      });
+
       return { ok: true, message: 'started' };
     } catch (e) {
       log?.error?.('[yuanbao] run-rewrite failed:', e.message);

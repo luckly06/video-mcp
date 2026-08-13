@@ -1827,7 +1827,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
     var elActions = document.getElementById("tts-rewrite-actions");
     if (elActions) elActions.style.display = on ? "" : "none";
     if (rewriteHint) rewriteHint.textContent = on
-      ? "已启用改写。先点「元宝登录」扫码登录，再点「AI 改写预览」生成文案。"
+      ? "已启用改写。改写会自动复用你 Edge 里已登录的元宝（若 Edge 正在运行，请先关闭它）。"
       : "未启用改写。系统会用字幕/ASR 原文直接生成配音。";
   }
   if (chkRewrite) {
@@ -1860,16 +1860,16 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
     });
   }
-  // 🆕元宝登录按钮 — 桌面端：弹浮动 BrowserWindow（用户首次扫码登录元宝，登录态持久化）
+  // 🆕元宝登录按钮 — 用系统 Edge 打开元宝网页（复用 Edge 已登录态，无需内置窗口扫码）
   var ybBtn = document.getElementById("btn-yuanbao-login");
   if (ybBtn) {
     ybBtn.addEventListener("click", async function () {
-      if (!window.desktop || !window.desktop.openYuanbao) {
-        toast("桌面端元宝 IPC 未启用", "err"); return;
+      if (!window.desktop || !window.desktop.openExternal) {
+        toast("桌面端 IPC 未启用", "err"); return;
       }
-      var r = await window.desktop.openYuanbao();
+      var r = await window.desktop.openExternal("https://yuanbao.tencent.com/");
       if (!r || !r.ok) { toast("打开元宝失败：" + (r && r.reason || "未知"), "err"); return; }
-      toast("元宝浏览器已打开；首次需扫码登录元宝", "ok");
+      toast("已用系统 Edge 打开元宝；请确认已登录，改写时会自动复用该登录态", "ok");
     });
   }
 
@@ -1966,7 +1966,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
           var diagMsg = d.error || "未获得回复";
           previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">未获得改写结果</div>' +
             '<div style="font-size:11px;color:var(--gray-300);margin-bottom:6px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,monospace;background:rgba(255,255,255,.04);padding:6px 8px;border-radius:4px;">' + escapeHtml(diagMsg) + '</div>' +
-            '<div style="font-size:12px;color:var(--gray-400);">如首次使用，请先点「元宝登录」扫码登录元宝（登录态持久化）。</div>';
+            '<div style="font-size:12px;color:var(--gray-400);">改写会复用你 Edge 里已登录的元宝；若 Edge 正在运行，请先关闭 Edge 再重试。</div>';
           previewBox.style.display = "";
           toast("元宝未返回改写结果", "warn");
         }
