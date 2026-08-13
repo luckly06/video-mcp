@@ -108,14 +108,16 @@ def _edge_running():
 
 
 def ensure_edge_debug_port():
-    """确保 Edge 以调试端口(9223)运行，复用其登录态（不复制 profile、不要求用户手动关 Edge）。
+    """确保 Edge 以调试端口(9223)运行并复用其登录态。
 
-    返回 (ok: bool, msg: str)：
-      - Edge 已带调试端口 → 直连
-      - Edge 未运行 → 用默认 profile + --remote-debugging-port=9223 启动
-      - Edge 运行（含关闭窗口后的后台驻留）→ taskkill 强制重启为调试模式（登录态不变）
+    返回 (ok: bool, msg: str, tmp_profile: str|None)：
+      - tmp_profile=None：复用已运行的 Edge（9223 已有 CDP），无需清理
+      - tmp_profile 非空：本函数 taskkill 旧 Edge 后，复制默认 profile 登录态到临时目录
+        并用它启动了调试版 Edge；调用方改写完成后需关闭 Edge 并清理该目录
     """
     import socket
+    import tempfile as _tempfile
+    import shutil as _shutil
 
     def _cdp_ready():
         try:
@@ -126,49 +128,45 @@ def ensure_edge_debug_port():
             return False
 
     if _cdp_ready():
-        return True, "Edge 调试端口已就绪"
+        return True, "Edge 调试端口已就绪", None
 
     edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-    local = os.environ.get("LOCALAPPDATA", "")
-    profile = os.path.join(local, "Microsoft", "Edge", "User Data")
 
-    def _launch():
-        subprocess.Popen(
-            [edge, "--remote-debugging-port=9223", "--user-data-dir=" + profile,
-             "--no-first-run", "--no-default-browser-check",
-             "--disable-blink-features=AutomationControlled"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    # 1) Edge 未运行 → 直接启动调试版
-    if not _edge_running():
-        try:
-            _launch()
-        except Exception as e:
-            return False, f"启动调试版 Edge 失败: {e}"
-        for _ in range(30):
-            time.sleep(0.5)
-            if _cdp_ready():
-                return True, "已以调试模式启动 Edge"
-
-    # 2) Edge 仍在运行（含后台驻留）→ 强制结束所有 msedge.exe 进程后重启为调试模式
+    # 1) 杀掉所有 Edge（含后台驻留），等待完全退出（释放 cookie 锁 + 单例锁）
     if _edge_running():
         try:
             subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"],
-                           capture_output=True, timeout=30)
+                           capture_output=True, timeout=60)
         except Exception:
             pass
-        time.sleep(2)
+        for _ in range(40):
+            time.sleep(0.5)
+            if not _edge_running():
+                break
 
+    # 2) 复制默认 profile 登录态到临时目录（Edge 已关，cookie 可读）
+    tmp_profile = Path(_tempfile.mkdtemp(prefix="vu_edge_"))
+    if not copy_edge_login_state(tmp_profile):
+        _shutil.rmtree(str(tmp_profile), ignore_errors=True)
+        return False, "复制 Edge 登录态失败", None
+
+    # 3) 用临时目录启动调试版 Edge（独立 profile，无单例锁、秒起）
     try:
-        _launch()
+        subprocess.Popen(
+            [edge, "--remote-debugging-port=9223", "--user-data-dir=" + str(tmp_profile),
+             "--no-first-run", "--no-default-browser-check",
+             "--disable-blink-features=AutomationControlled"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
-        return False, f"启动调试版 Edge 失败: {e}"
+        _shutil.rmtree(str(tmp_profile), ignore_errors=True)
+        return False, f"启动调试版 Edge 失败: {e}", None
 
-    for _ in range(30):
+    # 4) 等 9223 就绪（独立 profile 通常几秒）
+    for _ in range(60):
         time.sleep(0.5)
         if _cdp_ready():
-            return True, "已以调试模式重启 Edge（登录态不变，原标签页已恢复）"
-    return False, "启动调试版 Edge 超时（15s 未就绪）"
+            return True, "已以调试模式启动 Edge（复用登录态）", str(tmp_profile)
+    return False, "启动调试版 Edge 超时（30s 未就绪）", str(tmp_profile)
 
 
 def _pick_channel():
@@ -569,10 +567,13 @@ def vision_and_rewrite(frames, raw_text, rewrite_template=None,
                        reuse_edge=True):
     channel = _pick_channel()
     profile = PROFILE_DIR
+    tmp_profile = None
     if reuse_edge:
-        ok, msg = ensure_edge_debug_port()
+        ok, msg, tmp_profile = ensure_edge_debug_port()
         if not ok:
             return {"rewritten": None, "vision_desc": "", "error": msg}
+        if tmp_profile:
+            profile = tmp_profile
     script = REWRITE_TEMPLATE.format(
         station_dir=str(_HERE),
         profile=str(profile),
@@ -611,6 +612,17 @@ def vision_and_rewrite(frames, raw_text, rewrite_template=None,
     finally:
         try: Path(tmp).unlink()
         except: pass
+        if tmp_profile:
+            import shutil as _shutil
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"],
+                               capture_output=True, timeout=30)
+            except Exception:
+                pass
+            try:
+                _shutil.rmtree(tmp_profile, ignore_errors=True)
+            except Exception:
+                pass
 
 
 def _cli_arg(name, default=""):
