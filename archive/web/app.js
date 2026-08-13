@@ -1827,7 +1827,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
     var elActions = document.getElementById("tts-rewrite-actions");
     if (elActions) elActions.style.display = on ? "" : "none";
     if (rewriteHint) rewriteHint.textContent = on
-      ? "已启用改写。改写复用你 Edge 里已登录的元宝（免扫码）；首次可能需关一次 Edge 让其以调试模式重启。"
+      ? "已启用改写。改写复用你 Edge 里已登录的元宝（免扫码，自动切换调试模式）。"
       : "未启用改写。系统会用字幕/ASR 原文直接生成配音。";
   }
   if (chkRewrite) {
@@ -1966,7 +1966,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
           var diagMsg = d.error || "未获得回复";
           previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">未获得改写结果</div>' +
             '<div style="font-size:11px;color:var(--gray-300);margin-bottom:6px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,monospace;background:rgba(255,255,255,.04);padding:6px 8px;border-radius:4px;">' + escapeHtml(diagMsg) + '</div>' +
-            '<div style="font-size:12px;color:var(--gray-400);">改写复用你 Edge 里已登录的元宝；若提示需调试端口，关闭 Edge 后重试即可（之后无需再关）。</div>';
+            '<div style="font-size:12px;color:var(--gray-400);">改写复用你 Edge 里已登录的元宝；首次会自动重启 Edge 为调试模式（登录态与标签页保留）。</div>';
           previewBox.style.display = "";
           toast("元宝未返回改写结果", "warn");
         }

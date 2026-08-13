@@ -107,12 +107,12 @@ def _edge_running():
 
 
 def ensure_edge_debug_port():
-    """确保 Edge 以调试端口(9223)运行，复用其登录态（不复制 profile、不关 Edge）。
+    """确保 Edge 以调试端口(9223)运行，复用其登录态（不复制 profile、不要求用户手动关 Edge）。
 
     返回 (ok: bool, msg: str)：
-      - Edge 已带调试端口 → (True, ...)
+      - Edge 已带调试端口 → 直连
       - Edge 未运行 → 用默认 profile + --remote-debugging-port=9223 启动
-      - Edge 运行但未带调试端口 → (False, ...)（唯一需用户关一次 Edge 的情况）
+      - Edge 运行（含关闭窗口后的后台驻留）→ taskkill 强制重启为调试模式（登录态不变）
     """
     import socket
 
@@ -127,26 +127,46 @@ def ensure_edge_debug_port():
     if _cdp_ready():
         return True, "Edge 调试端口已就绪"
 
-    if _edge_running():
-        return False, ("Edge 正在运行但未开调试端口(9223)。请关闭 Edge 后重试，"
-                       "桌面端会自动以调试模式启动 Edge（登录态不变）。")
-
     edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
     local = os.environ.get("LOCALAPPDATA", "")
     profile = os.path.join(local, "Microsoft", "Edge", "User Data")
-    try:
+
+    def _launch():
         subprocess.Popen(
             [edge, "--remote-debugging-port=9223", "--user-data-dir=" + profile,
              "--no-first-run", "--no-default-browser-check",
              "--disable-blink-features=AutomationControlled"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # 1) Edge 未运行 → 直接启动调试版
+    if not _edge_running():
+        try:
+            _launch()
+        except Exception as e:
+            return False, f"启动调试版 Edge 失败: {e}"
+        for _ in range(30):
+            time.sleep(0.5)
+            if _cdp_ready():
+                return True, "已以调试模式启动 Edge"
+
+    # 2) Edge 仍在运行（含后台驻留）→ 强制结束所有 msedge.exe 进程后重启为调试模式
+    if _edge_running():
+        try:
+            subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"],
+                           capture_output=True, timeout=30)
+        except Exception:
+            pass
+        time.sleep(2)
+
+    try:
+        _launch()
     except Exception as e:
         return False, f"启动调试版 Edge 失败: {e}"
 
     for _ in range(30):
         time.sleep(0.5)
         if _cdp_ready():
-            return True, "已以调试模式启动 Edge"
+            return True, "已以调试模式重启 Edge（登录态不变，原标签页已恢复）"
     return False, "启动调试版 Edge 超时（15s 未就绪）"
 
 
