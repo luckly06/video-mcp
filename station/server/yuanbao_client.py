@@ -106,6 +106,50 @@ def _edge_running():
         return False
 
 
+def ensure_edge_debug_port():
+    """确保 Edge 以调试端口(9223)运行，复用其登录态（不复制 profile、不关 Edge）。
+
+    返回 (ok: bool, msg: str)：
+      - Edge 已带调试端口 → (True, ...)
+      - Edge 未运行 → 用默认 profile + --remote-debugging-port=9223 启动
+      - Edge 运行但未带调试端口 → (False, ...)（唯一需用户关一次 Edge 的情况）
+    """
+    import socket
+
+    def _cdp_ready():
+        try:
+            s = socket.create_connection(("127.0.0.1", 9223), timeout=2)
+            s.close()
+            return True
+        except Exception:
+            return False
+
+    if _cdp_ready():
+        return True, "Edge 调试端口已就绪"
+
+    if _edge_running():
+        return False, ("Edge 正在运行但未开调试端口(9223)。请关闭 Edge 后重试，"
+                       "桌面端会自动以调试模式启动 Edge（登录态不变）。")
+
+    edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    local = os.environ.get("LOCALAPPDATA", "")
+    profile = os.path.join(local, "Microsoft", "Edge", "User Data")
+    try:
+        subprocess.Popen(
+            [edge, "--remote-debugging-port=9223", "--user-data-dir=" + profile,
+             "--no-first-run", "--no-default-browser-check",
+             "--disable-blink-features=AutomationControlled"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        return False, f"启动调试版 Edge 失败: {e}"
+
+    for _ in range(30):
+        time.sleep(0.5)
+        if _cdp_ready():
+            return True, "已以调试模式启动 Edge"
+    return False, "启动调试版 Edge 超时（15s 未就绪）"
+
+
 def _pick_channel():
     env = os.environ.get("VU_YUANBAO_CHANNEL", "").strip()
     if env: return env
@@ -383,6 +427,9 @@ async def main():
         except Exception:
             need_launch = True
         if need_launch:
+            if {reuse_edge}:
+                print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "Edge 未开调试端口(9223)。请以调试模式启动 Edge：msedge.exe --remote-debugging-port=9223（或点桌面端「启动调试版 Edge」）。"}}, ensure_ascii=False))
+                return
             subprocess.Popen([
                 r"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
                 "--remote-debugging-port=9223",
@@ -501,21 +548,14 @@ def vision_and_rewrite(frames, raw_text, rewrite_template=None,
                        reuse_edge=True):
     channel = _pick_channel()
     profile = PROFILE_DIR
-    tmp_profile = None
     if reuse_edge:
-        if _edge_running():
-            return {"rewritten": None, "vision_desc": "",
-                    "error": "Edge 浏览器正在运行。请先关闭 Edge 再点改写（复用 Edge 登录态需独占其 profile）。"}
-        tmp_profile = Path(tempfile.mkdtemp(prefix="vu_edge_"))
-        if copy_edge_login_state(tmp_profile):
-            profile = tmp_profile
-            logger.info(f"[yuanbao] 复用 Edge 登录态 profile: {profile}")
-        else:
-            logger.warning("[yuanbao] 复制 Edge 登录态失败，回退专用 profile")
-            tmp_profile = None
+        ok, msg = ensure_edge_debug_port()
+        if not ok:
+            return {"rewritten": None, "vision_desc": "", "error": msg}
     script = REWRITE_TEMPLATE.format(
         station_dir=str(_HERE),
         profile=str(profile),
+        reuse_edge=reuse_edge,
         headless=str(headless),
         frames=repr(frames or []),
         topic=json.dumps(topic or "", ensure_ascii=False),
@@ -550,10 +590,6 @@ def vision_and_rewrite(frames, raw_text, rewrite_template=None,
     finally:
         try: Path(tmp).unlink()
         except: pass
-        if tmp_profile:
-            import shutil
-            try: shutil.rmtree(str(tmp_profile), ignore_errors=True)
-            except: pass
 
 
 def _cli_arg(name, default=""):
