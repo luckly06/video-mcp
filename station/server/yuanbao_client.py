@@ -108,31 +108,43 @@ def _edge_running():
 
 
 def ensure_edge_debug_port():
-    """确保 Edge 以调试端口(9223)运行并复用其登录态。
+    """确保 Edge 以调试端口运行并复用其登录态（独立临时 profile，自动选空闲端口）。
 
-    返回 (ok: bool, msg: str, tmp_profile: str|None)：
-      - tmp_profile=None：复用已运行的 Edge（9223 已有 CDP），无需清理
-      - tmp_profile 非空：本函数 taskkill 旧 Edge 后，复制默认 profile 登录态到临时目录
-        并用它启动了调试版 Edge；调用方改写完成后需关闭 Edge 并清理该目录
+    返回 (ok: bool, msg: str, tmp_profile: str|None, port: int|None, edge_pid: int|None)：
+      - tmp_profile=None：复用已运行的 Edge（调试端口已有 CDP），无需清理
+      - tmp_profile 非空：本函数已（1）关闭用户原 Edge 以释放 cookie 锁、
+        （2）复制登录态到临时目录、（3）用独立临时 profile 启动调试版 Edge；
+        并返回其 pid 供调用方精确回收（不影响用户原浏览器）
     """
     import socket
     import tempfile as _tempfile
     import shutil as _shutil
 
-    def _cdp_ready():
+    def _cdp_ready(port):
         try:
-            s = socket.create_connection(("127.0.0.1", 9223), timeout=2)
+            s = socket.create_connection(("127.0.0.1", port), timeout=2)
             s.close()
             return True
         except Exception:
             return False
 
-    if _cdp_ready():
-        return True, "Edge 调试端口已就绪", None
+    def _free_port():
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        p = s.getsockname()[1]
+        s.close()
+        return p
+
+    # 0) 已存在调试端口（用户手动开启或上次残留）→ 直连
+    for cand in (9223,):
+        if _cdp_ready(cand):
+            return True, "Edge 调试端口已就绪", None, cand, None
 
     edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    if not Path(edge).exists():
+        return False, f"未找到 Edge 可执行文件：{edge}", None, None, None
 
-    # 1) 杀掉所有 Edge（含后台驻留），等待完全退出（释放 cookie 锁 + 单例锁）
+    # 1) 关闭用户原 Edge（仅为了释放 cookie 锁以便复制登录态；稍后会重新拉起其原浏览器）
     if _edge_running():
         try:
             subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"],
@@ -144,29 +156,52 @@ def ensure_edge_debug_port():
             if not _edge_running():
                 break
 
-    # 2) 复制默认 profile 登录态到临时目录（Edge 已关，cookie 可读）
+    # 2) 复制默认 profile 登录态到临时目录（独立锁，避开启动加速单例冲突）
     tmp_profile = Path(_tempfile.mkdtemp(prefix="vu_edge_"))
     if not copy_edge_login_state(tmp_profile):
         _shutil.rmtree(str(tmp_profile), ignore_errors=True)
-        return False, "复制 Edge 登录态失败", None
+        return False, "复制 Edge 登录态失败（无法读取 Cookies）", None, None, None
 
-    # 3) 用临时目录启动调试版 Edge（独立 profile，无单例锁、秒起）
+    # 2.5) 重新拉起用户原本的 Edge（默认 profile，不带调试端口），让其浏览器回归
     try:
-        subprocess.Popen(
-            [edge, "--remote-debugging-port=9223", "--user-data-dir=" + str(tmp_profile),
+        subprocess.Popen([edge], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    # 3) 选一个空闲端口，避免 9223 被残留进程占用导致绑定失败（最常见的超时根因）
+    port = _free_port()
+    log_path = tmp_profile / "edge_launch.log"
+    try:
+        proc = subprocess.Popen(
+            [edge, f"--remote-debugging-port={port}",
+             f"--user-data-dir={tmp_profile}",
              "--no-first-run", "--no-default-browser-check",
-             "--disable-blink-features=AutomationControlled"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+             "--disable-blink-features=AutomationControlled",
+             "--remote-debugging-address=127.0.0.1"],
+            stdout=str(log_path), stderr=subprocess.STDOUT)
     except Exception as e:
         _shutil.rmtree(str(tmp_profile), ignore_errors=True)
-        return False, f"启动调试版 Edge 失败: {e}", None
+        return False, f"启动调试版 Edge 失败: {e}", None, None, None
 
-    # 4) 等 9223 就绪（独立 profile 通常几秒）
+    # 4) 等调试端口就绪（最多 30s）
     for _ in range(60):
         time.sleep(0.5)
-        if _cdp_ready():
-            return True, "已以调试模式启动 Edge（复用登录态）", str(tmp_profile)
-    return False, "启动调试版 Edge 超时（30s 未就绪）", str(tmp_profile)
+        if _cdp_ready(port):
+            return True, f"已以调试模式启动 Edge（端口 {port}，原浏览器已回归）", \
+                   str(tmp_profile), port, proc.pid
+
+    # 超时：抓取 Edge 自身日志辅助定位
+    try:
+        diag = log_path.read_text(errors="replace")[:1200]
+    except Exception:
+        diag = "(无日志输出)"
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    _shutil.rmtree(str(tmp_profile), ignore_errors=True)
+    return False, f"启动调试版 Edge 超时（30s 未就绪）。Edge 日志:\n{diag}", \
+           str(tmp_profile), port, proc.pid
 
 
 def _pick_channel():
@@ -424,7 +459,7 @@ async def read_last_reply(page, bl):
 async def main():
     profile = Path(r"{profile}")
     profile.mkdir(parents=True, exist_ok=True)
-    import platform, subprocess, socket
+    import platform, subprocess, socket, os
     
     # 服务器（Linux）用无头 Chromium persistent context，Windows 用 CDP + Edge
     if platform.system() == "Linux":
@@ -438,20 +473,21 @@ async def main():
                   "--disable-blink-features=AutomationControlled"])
         page = browser_ctx.pages[0] if browser_ctx.pages else await browser_ctx.new_page()
     else:
-        CDP_URL = "http://127.0.0.1:9223"
+        CDP_PORT = int(os.environ.get("VU_CDP_PORT", "9223"))
+        CDP_URL = "http://127.0.0.1:" + str(CDP_PORT)
         need_launch = False
         try:
-            s = socket.create_connection(("127.0.0.1", 9223), timeout=2)
+            s = socket.create_connection(("127.0.0.1", CDP_PORT), timeout=2)
             s.close()
         except Exception:
             need_launch = True
         if need_launch:
             if {reuse_edge}:
-                print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "Edge 未开调试端口(9223)。请以调试模式启动 Edge：msedge.exe --remote-debugging-port=9223（或点桌面端「启动调试版 Edge」）。"}}, ensure_ascii=False))
+                print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "Edge 未开调试端口(" + str(CDP_PORT) + ")。请以调试模式启动 Edge：msedge.exe --remote-debugging-port=" + str(CDP_PORT) + "（或点桌面端「启动调试版 Edge」）。"}}, ensure_ascii=False))
                 return
             subprocess.Popen([
                 r"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-                "--remote-debugging-port=9223",
+                "--remote-debugging-port=" + str(CDP_PORT),
                 "--user-data-dir=" + str(profile),
                 "--no-first-run", "--no-default-browser-check",
                 "--disable-blink-features=AutomationControlled",
@@ -568,12 +604,15 @@ def vision_and_rewrite(frames, raw_text, rewrite_template=None,
     channel = _pick_channel()
     profile = PROFILE_DIR
     tmp_profile = None
+    cdp_port = 9223
+    edge_pid = None
     if reuse_edge:
-        ok, msg, tmp_profile = ensure_edge_debug_port()
+        ok, msg, tmp_profile, cdp_port, edge_pid = ensure_edge_debug_port()
         if not ok:
             return {"rewritten": None, "vision_desc": "", "error": msg}
         if tmp_profile:
             profile = tmp_profile
+    os.environ["VU_CDP_PORT"] = str(cdp_port)
     script = REWRITE_TEMPLATE.format(
         station_dir=str(_HERE),
         profile=str(profile),
@@ -612,10 +651,12 @@ def vision_and_rewrite(frames, raw_text, rewrite_template=None,
     finally:
         try: Path(tmp).unlink()
         except: pass
-        if tmp_profile:
+        os.environ.pop("VU_CDP_PORT", None)
+        if tmp_profile and edge_pid:
             import shutil as _shutil
+            # 仅回收我们拉起的临时调试 Edge（按 PID 树），不影响用户原浏览器
             try:
-                subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"],
+                subprocess.run(["taskkill", "/F", "/PID", str(edge_pid), "/T"],
                                capture_output=True, timeout=30)
             except Exception:
                 pass

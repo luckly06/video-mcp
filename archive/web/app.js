@@ -1966,7 +1966,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
           var diagMsg = d.error || "未获得回复";
           previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">未获得改写结果</div>' +
             '<div style="font-size:11px;color:var(--gray-300);margin-bottom:6px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,monospace;background:rgba(255,255,255,.04);padding:6px 8px;border-radius:4px;">' + escapeHtml(diagMsg) + '</div>' +
-            '<div style="font-size:12px;color:var(--gray-400);">改写复用你 Edge 里已登录的元宝；首次会自动重启 Edge 为调试模式（登录态与标签页保留）。</div>';
+            '<div style="font-size:12px;color:var(--gray-400);">改写复用你 Edge 里已登录的元宝；会自动拉起 Edge 调试实例（你的原 Edge 浏览器随后自动回归，不受影响）。</div>';
           previewBox.style.display = "";
           toast("元宝未返回改写结果", "warn");
         }
