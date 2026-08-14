@@ -815,9 +815,17 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
     # TTS 生效：产物时长 = 配音时长（基于文案长度），以配音时长作为期望值，
     # 否则输出(配音时长) < 原视频时长 → duration_close 误判失败。
-    if applied.get("tts_applied") and applied.get("tts_duration"):
-        expected = applied["tts_duration"]
-        dur_tol = max(0.5, expected * 0.05)
+    # 兜底：tts_duration 来自对临时 wav 的探测，而临时 wav 不在 OUTPUT/VIDEO 目录内，
+    # _probe_seconds 的白名单校验会失败返回 0.0 → tts_duration 被写成 None。此时成片
+    # 时长(=配音时长, -shortest) 就是权威值，用它兜底，既修正自检基准，又把 tts_duration
+    # 回填给前端显示「配音时长匹配」。
+    if applied.get("tts_applied"):
+        _tts_dur = applied.get("tts_duration") or out_info.get("duration")
+        if _tts_dur:
+            expected = _tts_dur
+            dur_tol = max(0.5, expected * 0.05)
+            if not applied.get("tts_duration"):
+                applied["tts_duration"] = round(_tts_dur, 3)
 
     duration_close = abs(out_info["duration"] - expected) <= dur_tol
 
