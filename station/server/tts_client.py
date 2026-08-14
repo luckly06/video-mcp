@@ -14,8 +14,38 @@ import base64
 import logging
 from pathlib import Path
 
-_MIMO_API_KEY = os.environ.get("MIMO_API_KEY", "")
 _MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
+
+# ── 自动加载同目录 .env（MIMO_API_KEY 等）──────────────────────────────
+# 关键修复：桌面端 local-server.js 拉起后端时不会注入 MIMO_API_KEY，
+# 而 tts_client 此前只在模块导入时读一次 os.environ，导致 is_available()
+# 永远为 False、TTS 被静默跳过（文案在但产物没配音）。这里在导入时把
+# station/server/.env 载入 os.environ，并改为延迟读 key 消除导入时序坑。
+def _load_dotenv():
+    """把模块同目录下的 .env 载入 os.environ（已存在的变量不覆盖）。"""
+    try:
+        env_path = Path(__file__).resolve().parent / ".env"
+        if not env_path.exists():
+            return
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except Exception:
+        pass
+
+
+_load_dotenv()
+
+
+def _api_key():
+    """延迟读取 MIMO_API_KEY（不在导入时缓存）。"""
+    return os.environ.get("MIMO_API_KEY", "")
 
 # 预置中文音色列表（mimo-v2.5-tts 模型）
 VOICES = {
@@ -30,7 +60,7 @@ logger = logging.getLogger("tts_client")
 
 def _client():
     """惰性加载 OpenAI 客户端（避免 import 失败阻塞模块加载）。"""
-    if not _MIMO_API_KEY:
+    if not _api_key():
         return None
     try:
         from openai import OpenAI  # noqa: E402
@@ -42,7 +72,7 @@ def _client():
 
 def is_available():
     """检查 TTS 客户端是否可用（API Key 已设置且 openai 已安装）。"""
-    if not _MIMO_API_KEY:
+    if not _api_key():
         return False
     try:
         from openai import OpenAI  # noqa: F401

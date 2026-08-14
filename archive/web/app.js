@@ -1015,6 +1015,10 @@ async function doDedup() {
       learnProgressDuration("dedup");
       setWorkflowStep(4);
       renderDedup(res.data);
+      const _ap = res.data.applied_params || {};
+      if (_ap.tts_text && !_ap.tts_applied) {
+        toast("AI 配音未生效：" + (_ap.tts_warning || res.data.tts || "请检查 MIMO_API_KEY / openai"), "warn");
+      }
       const c = res.data.checks || {};
       const ph = c.phash || {};
       addMemory("dedup_video", "warned",
@@ -1086,7 +1090,8 @@ function renderDedup(d) {
   const ttsLine = applied.tts_text
     ? ("TTS 配音 : " + (applied.tts_applied ? "[已替换]" : "[失败]") +
        " 音色=" + (applied.tts_voice || "冰糖") +
-       " 文本=" + (applied.tts_text || "—") + "\n")
+       " 文本=" + (applied.tts_text || "—") +
+       (applied.tts_warning ? " 原因=" + applied.tts_warning : "") + "\n")
     : "";
   const detail =
     "输出文件 : " + (d.output_path || "?") + "\n" +

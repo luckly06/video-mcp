@@ -33,6 +33,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, quote, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# 启动早期加载同目录 .env（MIMO_API_KEY 等），确保读取环境变量的模块
+# （tts_client / asr_client）在导入前就能拿到配置。桌面端 local-server.js
+# 拉起后端时只透传 process.env，不会注入 .env，故此处兜底加载。
+try:
+    _env_path = Path(__file__).resolve().parent / ".env"
+    if _env_path.exists():
+        with open(_env_path, "r", encoding="utf-8") as _fh:
+            for _line in _fh:
+                _line = _line.strip()
+                if not _line or _line.startswith("#") or "=" not in _line:
+                    continue
+                _k, _v = _line.split("=", 1)
+                _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
+                if _k and _k not in os.environ:
+                    os.environ[_k] = _v
+except Exception:
+    pass
+
 import pipeline as P  # noqa: E402
 
 PROTOCOL_VERSION = "2026-07-28"

@@ -719,6 +719,8 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     # --- TTS 配音（如果提供了文案且 MiMo 可用）---
     tts_status = None
     if tts_text and tts_text.strip():
+        # 回填供前端展示（设计：截断 100 字），无论成败都记录，避免"静默跳过"
+        applied["tts_text"] = tts_text.strip()[:100]
         try:
             # sys.path 已被模块顶部 insert 到 server/ 目录，直接 import 即可
             import tts_client as T
@@ -747,14 +749,20 @@ def dedup_video(src, params=None, out_name=None, seed=None,
                         applied["tts_speed"] = speed
                         tts_status = "ok"
                     else:
+                        applied["tts_applied"] = False
+                        applied["tts_warning"] = "混音失败（ffmpeg 合并 TTS 音轨失败）"
                         tts_status = "混音失败"
                         logger.warning("TTS 混音失败: %s", err2[:200])
                 finally:
                     try: wav_path.unlink(missing_ok=True)
                     except Exception: pass
             else:
+                applied["tts_applied"] = False
+                applied["tts_warning"] = "TTS 不可用（未配 MIMO_API_KEY 或 openai 未安装）"
                 tts_status = "TTS 不可用（未配 Key 或 openai 未安装）"
         except Exception as e:
+            applied["tts_applied"] = False
+            applied["tts_warning"] = str(e)[:200]
             tts_status = str(e)[:200]
             logger.warning("TTS 配音跳过: %s", e)
     elif tts_text:
