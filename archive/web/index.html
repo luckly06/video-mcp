@@ -359,7 +359,13 @@
 
     <aside id="audit-panel" class="audit-sidebar">
       <section class="audit-card audit-log-card">
-        <div class="audit-heading"><div><div class="section-eyebrow">验收记录</div><h2>最近操作</h2></div><span id="memory-count" class="memory-count">0 条记录</span></div>
+        <div class="audit-heading">
+          <div><div class="section-eyebrow">验收记录</div><h2>最近操作</h2></div>
+          <span class="audit-heading-right">
+            <span id="memory-count" class="memory-count">0 条记录</span>
+            <button type="button" class="collapse-toggle" aria-expanded="true" title="折叠/展开验收记录" aria-label="折叠或展开验收记录"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </span>
+        </div>
         <div class="audit-search" aria-label="筛选验收记录">
           <label class="audit-search-field" for="memory-date"><span>会话</span><input id="memory-date" type="date" aria-label="按日期筛选会话" /></label>
           <label class="audit-search-field" for="memory-search"><span>状态</span><input id="memory-search" type="search" placeholder="状态、工具或摘要" autocomplete="off" aria-label="按文字筛选状态、工具或摘要" /></label>
@@ -378,7 +384,13 @@
       </section>
 
       <section class="audit-card tool-card-panel">
-        <div class="audit-heading"><div><div class="section-eyebrow">工具与分级</div><h2>服务能力</h2></div><span id="tools-count" class="memory-count">0 个工具</span></div>
+        <div class="audit-heading">
+          <div><div class="section-eyebrow">工具与分级</div><h2>服务能力</h2></div>
+          <span class="audit-heading-right">
+            <span id="tools-count" class="memory-count">0 个工具</span>
+            <button type="button" class="collapse-toggle" aria-expanded="true" title="折叠/展开工具与分级" aria-label="折叠或展开工具与分级"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </span>
+        </div>
         <div id="tool-filters" class="tool-filters" role="group" aria-label="按安全等级筛选工具">
           <button class="tool-filter active" type="button" data-tool-filter="all" aria-pressed="true">全部 0</button>
           <button class="tool-filter" type="button" data-tool-filter="audit" aria-pressed="false">审计 0</button>

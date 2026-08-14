@@ -2156,3 +2156,15 @@ el.btnRegen.addEventListener("click", () => {
    --------------------------------------------------------------------------- */
 renderMemory();
 connectAndBootstrap();
+
+/* 右侧边栏面板折叠（验收记录 / 工具与分级 可收纳） */
+(function initAuditCollapse() {
+  document.querySelectorAll(".audit-sidebar .collapse-toggle").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var card = btn.closest(".audit-card");
+      if (!card) return;
+      var collapsed = card.classList.toggle("collapsed");
+      btn.setAttribute("aria-expanded", String(!collapsed));
+    });
+  });
+})();
