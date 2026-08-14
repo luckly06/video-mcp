@@ -176,9 +176,12 @@ TOOLS = [
                 "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
                 "seed": {"type": "integer", "description": "随机种子；缺省随机回填"},
                 "skip_phash": {"type": "boolean", "description": "跳过 pHash 自检（省 3-5 分钟 CPU 时间，仅保留 MD5+分辨率+时长校验）。默认 false"},
-                "tts_text": {"type": "string", "description": "TTS 配音文案；不为空时启用 MiMo TTS 替换原音轨"},
+                "tts_text": {"type": "string", "description": "TTS 配音文案；不为空时启用 MiMo TTS 替换原音轨（手动模式）"},
                 "tts_voice": {"type": "string", "description": "TTS 配音人声，默认冰糖"},
                 "tts_speed": {"type": "number", "description": "TTS 语速，默认 1.0"},
+                "rewrite_template": {"type": "string", "description": "元宝改写模板；非空时走「改写→配音」自动链路（自动模式下与 tts_text 互斥，tts_text 优先）"},
+                "rewrite_topic": {"type": "string", "description": "改写主题/方向提示（可选），随模板一同发给元宝"},
+                "rewrite_frames": {"type": "integer", "description": "改写抽帧数（默认 5），用于给元宝提供画面上下文"},
             },
             "required": ["src"],
         },
@@ -301,6 +304,80 @@ def _run_hook(script, payload):
 # ---------------------------------------------------------------------------
 # 工具执行
 # ---------------------------------------------------------------------------
+def _build_copy_context(src, n_frames=5):
+    """抽取视频改写上下文：ASR 文字 + 关键帧（文件路径 + base64）。供元宝改写使用。
+
+    与 extract_copy_context 工具共用同一套抽取逻辑，避免重复代码。
+    frames_paths 为磁盘上的帧图路径，可直接传给 yuanbao_client.vision_and_rewrite。
+    """
+    import base64 as _b64
+    import json as _json
+    import logging
+    from pathlib import Path as _Path
+    import copy_rewriter as CR
+    import asr_client as AC
+    from pipeline import VIDEO_DIR, FFMPEG, FFPROBE, _resolve_safe
+
+    # src 走白名单校验（与 dedup_video / probe_video 一致）
+    try:
+        video_path = str(_resolve_safe(src, VIDEO_DIR, must_exist=True))
+    except Exception as e:
+        raise P.PipelineError(f"src 不在 VIDEO_DIR 内或不存在: {e}")
+
+    # 1) 时长（用 ffprobe 单独走一次）
+    try:
+        probe = subprocess.run(
+            [str(FFPROBE), "-v", "error", "-show_entries", "format=duration",
+             "-of", "json", video_path],
+            capture_output=True, text=True, timeout=15,
+        )
+        duration = float(_json.loads(probe.stdout or "{}").get("format", {}).get("duration", 0) or 0)
+    except Exception:
+        duration = 0.0
+
+    # 2) ASR（失败返回空字符串，不阻塞帧图）
+    raw_text = ""
+    source = ""
+    try:
+        raw_text = AC.transcribe_video(video_path, str(FFMPEG)) or ""
+        source = "asr" if raw_text else ""
+    except Exception as e:
+        logging.getLogger("vu").warning(f"ASR 失败: {e}")
+
+    # 3) 抽帧 → 文件路径 + base64
+    frames_paths = []
+    frames_b64 = []
+    try:
+        frame_paths = CR._extract_frames(_Path(video_path), FFMPEG, n=int(n_frames))
+        for fp in frame_paths:
+            frames_paths.append(str(fp))
+            try:
+                with open(fp, "rb") as fh:
+                    frames_b64.append(_b64.b64encode(fh.read()).decode("ascii"))
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # 4) 最大字数上限：让元宝改写时按视频时长控制篇幅。
+    #    max_chars = ceil(duration × R × 安全余量)。R = MiMo TTS 实际语速（字/秒），
+    #    产物时长 = 配音时长（基于文案长度，混音用 -shortest 把视频截到配音长度），
+    #    故要让「配音时长 ≈ 视频时长」：向「略短」偏置（×0.95）只裁尾部画面、旁白完整。
+    #    ← 校准后改 TTS_CHARS_PER_SEC（建议 4~6，用 calibrate_tts_rate.py 实测）
+    TTS_CHARS_PER_SEC = 4.5      # ← 校准后改这里（建议 4~6）
+    TTS_SAFE_MARGIN = 0.95
+    max_chars = max(30, int(duration * TTS_CHARS_PER_SEC * TTS_SAFE_MARGIN)) if duration > 0 else 30
+
+    return {
+        "raw_text": raw_text,
+        "source": source,
+        "duration": duration,
+        "max_chars": max_chars,
+        "frames_paths": frames_paths,
+        "frames_b64": frames_b64,
+    }
+
+
 def _exec_tool(name, args):
     if name == "list_assets":
         return {"assets": P.list_assets()}
@@ -309,76 +386,48 @@ def _exec_tool(name, args):
     if name == "probe_video":
         return P.probe_video(args["src"])
     if name == "extract_copy_context":
-        # 给改写流程用的上下文：ASR 文字 + 帧图 base64
-        # 复用 copy_rewriter._extract_frames + asr_client.transcribe_video
-        import base64
-        import copy_rewriter as CR
-        import asr_client as AC
-        from pipeline import VIDEO_DIR, FFMPEG, _resolve_safe
-
+        # 给改写流程用的上下文：ASR 文字 + 帧图 base64（与 dedup_video 改写路径共用）
         n_frames = int(args.get("n_frames") or 5)
-        # src 走白名单校验（与 dedup_video / probe_video 一致）
-        try:
-            video_path = str(_resolve_safe(args["src"], VIDEO_DIR, must_exist=True))
-        except Exception as e:
-            raise P.PipelineError(f"src 不在 VIDEO_DIR 内或不存在: {e}")
-
-        # 1) 时长（用 ffprobe 单独走一次，避免和 metrics._probe_duration 耦合）
-        try:
-            import json as _json
-            probe = subprocess.run(
-                [str(P.FFPROBE), "-v", "error", "-show_entries", "format=duration",
-                 "-of", "json", video_path],
-                capture_output=True, text=True, timeout=15,
-            )
-            duration = float(_json.loads(probe.stdout or "{}").get("format", {}).get("duration", 0) or 0)
-        except Exception:
-            duration = 0.0
-
-        # 2) ASR（失败返回空字符串，不阻塞帧图）
-        raw_text = ""
-        source = ""
-        try:
-            raw_text = AC.transcribe_video(video_path, str(P.FFMPEG)) or ""
-            source = "asr" if raw_text else ""
-        except Exception as e:
-            import logging
-            logging.getLogger("vu").warning(f"ASR 失败: {e}")
-
-        # 3) 抽帧 → JPEG → base64
-        frames_b64 = []
-        try:
-            frame_paths = CR._extract_frames(Path(video_path), P.FFMPEG, n=n_frames)
-            for fp in frame_paths:
-                try:
-                    with open(fp, "rb") as fh:
-                        frames_b64.append(base64.b64encode(fh.read()).decode("ascii"))
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        # 4) 最大字数上限：让元宝改写时按视频时长控制篇幅。
-        #    max_chars = ceil(duration × R × 安全余量)。
-        #    R = MiMo TTS 实际语速（字/秒）。本机校准法：取 N 字固定中文 →
-        #    tts_client.tts() 生成 wav → ffprobe 量秒数 → R = N / 秒数。
-        #    中文 TTS 正常语速多为 4~6 字/秒。产物时长 = 配音时长（基于文案长度，
-        #    混音用 -shortest 把视频截到配音长度），故这里要让「配音时长 ≈ 视频时长」：
-        #    写多了会被 -shortest 裁掉旁白（丢内容），写少了视频被大幅截短（丢画面）。
-        #    向「略短」偏置（×0.95）：配音略短于视频 → -shortest 只裁尾部画面、旁白完整。
-        #    ← 校准后改 TTS_CHARS_PER_SEC（建议 4~6，用 calibrate_tts_rate.py 实测）
-        TTS_CHARS_PER_SEC = 4.5      # ← 校准后改这里（建议 4~6）
-        TTS_SAFE_MARGIN = 0.95
-        max_chars = max(30, int(duration * TTS_CHARS_PER_SEC * TTS_SAFE_MARGIN)) if duration > 0 else 30
-
+        ctx = _build_copy_context(args["src"], n_frames)
         return {
-            "raw_text": raw_text,
-            "source": source,
-            "duration": duration,
-            "max_chars": max_chars,
-            "frames_b64": frames_b64,
+            "raw_text": ctx["raw_text"],
+            "source": ctx["source"],
+            "duration": ctx["duration"],
+            "max_chars": ctx["max_chars"],
+            "frames_b64": ctx["frames_b64"],
         }
     if name == "dedup_video":
+        # 🆕 改写→配音：用户选「元宝改写」模式（rewrite_template 非空、且未手动填文案）时，
+        # 先用 ASR+抽帧构造上下文，调 vision_and_rewrite 生成旁白文案，再喂给 TTS 混音。
+        # 手动填了文案（tts_text）时优先用手动文案，跳过改写。
+        tts_text = args.get("tts_text")
+        rewrite_template = args.get("rewrite_template")
+        rewrite_meta = {"requested": False}
+        if rewrite_template and not tts_text:
+            rewrite_meta["requested"] = True
+            try:
+                import yuanbao_client as YB
+                n_frames = int(args.get("rewrite_frames") or 5)
+                ctx = _build_copy_context(args["src"], n_frames)
+                rw = YB.vision_and_rewrite(
+                    frames=ctx["frames_paths"],
+                    raw_text=ctx["raw_text"],
+                    rewrite_template=rewrite_template,
+                    max_chars=ctx["max_chars"],
+                    topic=args.get("rewrite_topic"),
+                    reuse_edge=True,
+                )
+                if rw.get("rewritten"):
+                    tts_text = rw["rewritten"]
+                    rewrite_meta["source"] = ctx["source"] or "vision"
+                    rewrite_meta["rewritten_len"] = len(tts_text)
+                else:
+                    rewrite_meta["error"] = rw.get("error") or "元宝未在超时内返回改写结果"
+                    logging.getLogger("vu").warning("改写未返回文案: %s", rewrite_meta["error"])
+            except Exception as e:
+                rewrite_meta["error"] = str(e)[:300]
+                logging.getLogger("vu").warning(f"改写异常: {e}")
+
         r = P.dedup_video(
             args["src"],
             params=args.get("params"),
@@ -388,11 +437,18 @@ def _exec_tool(name, args):
             dimensions=args.get("dimensions"),
             flip_mode=args.get("flip_mode"),
             trim_phase=args.get("trim_phase"),
-            tts_text=args.get("tts_text"),
+            tts_text=tts_text,
             tts_voice=args.get("tts_voice"),
             tts_speed=args.get("tts_speed"),
             skip_phash=args.get("skip_phash", False),
         )
+        # 回填改写元信息到 applied_params，供前端报告/弹窗展示（应用参数 JSON 也会带上）
+        r["applied_params"]["rewrite_requested"] = rewrite_meta["requested"]
+        if rewrite_meta.get("error"):
+            r["applied_params"]["rewrite_error"] = rewrite_meta["error"]
+        if rewrite_meta.get("source"):
+            r["applied_params"]["rewrite_source"] = rewrite_meta["source"]
+        r["rewrite_meta"] = rewrite_meta
         r["job_id"] = _new_job("dedup", {"src": r["src"]["name"], "output": r["output_path"]})
         return r
     if name == "batch_fission":

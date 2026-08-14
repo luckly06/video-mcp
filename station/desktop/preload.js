@@ -42,4 +42,10 @@ contextBridge.exposeInMainWorld('desktop', {
     ipcRenderer.on('yuanbao-done', handler);
     return () => ipcRenderer.removeListener('yuanbao-done', handler);
   },
+
+  // TTS 失败原生弹窗（桌面端）：渲染进程调用，主进程弹系统对话框
+  async showTtsWarning(payload) {
+    try { return await ipcRenderer.invoke('app:show-tts-warning', payload); }
+    catch (e) { return { ok: false, reason: e.message || String(e) }; }
+  },
 });

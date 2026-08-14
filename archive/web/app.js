@@ -978,6 +978,64 @@ function readTTS() {
   }
 }
 
+/**
+ * TTS 配音未生效时，弹出原生对话框提示用户（桌面端）；
+ * 非桌面端（纯网页）降级为页内 toast。
+ * 触发条件：用户「启用了 TTS」但产物没有成功配音。两种意图都算“启用”：
+ *   - 手动填文案：args.tts_text 有值，但产物 applied.tts_applied 为 false → 展示失败原因。
+ *   - 改写+配音：args.rewrite_template 有值，但产物无 tts_applied →
+ *     改写失败（元宝未登录/超时）或改写成功但 TTS 混音失败。
+ * @param {object} args 本次请求透传的 TTS 参数（含 tts_text / rewrite_template）
+ * @param {object} applied 产物 applied_params（用于取失败原因）
+ * @param {string} label 场景标签（去重 / 裂变）
+ */
+function notifyTtsFailure(args, applied, label) {
+  args = args || {};
+  applied = applied || {};
+  const isAuto = !args.tts_text && !!args.rewrite_template;
+  const title = "AI 配音（TTS）未生效";
+  let message;
+  let detail;
+  if (isAuto) {
+    const rewriteErr = applied.rewrite_error;
+    if (applied.tts_text && !applied.tts_applied) {
+      // 改写成功，但配音混音失败
+      const warning = (applied.tts_warning || "请检查 MIMO_API_KEY / openai 是否配置").trim();
+      message = (label ? label + "：" : "") + "改写文案已生成，但配音未替换进产物。";
+      detail =
+        "改写来源：" + (applied.rewrite_source || "元宝改写") + "\n" +
+        "失败原因：" + warning + "\n\n" +
+        "排查：检查 station/server/.env 的 MIMO_API_KEY 是否正确、openai 库是否已安装（pip install openai）。";
+    } else if (rewriteErr) {
+      // 改写本身失败（元宝未登录 / 超时 / 未返回）
+      message = (label ? label + "：" : "") + "「改写 + 配音」模式未生成配音：改写未返回文案。";
+      detail =
+        "改写错误：" + rewriteErr + "\n\n" +
+        "可用方案：\n" +
+        "· 确认元宝已登录（检查调试 Edge 窗口是否跳登录页）；\n" +
+        "· 或切到「手动填文案」模式，直接粘贴文案即可生成配音。";
+    } else {
+      message = (label ? label + "：" : "") + "「改写 + 配音」模式未生成配音。";
+      detail =
+        "未生成旁白文案，TTS 未触发。\n\n" +
+        "可用方案：切到「手动填文案」模式，直接粘贴文案即可生成配音。";
+    }
+  } else {
+    const warning = (applied.tts_warning || "请检查 MIMO_API_KEY / openai 是否配置").trim();
+    const text = (args.tts_text || "").toString();
+    message = (label ? label + "：" : "") + "你启用了 AI 配音，但配音没有替换进产物。";
+    detail =
+      "配音文案：" + (text.length > 80 ? text.slice(0, 80) + "…" : text) + "\n" +
+      "失败原因：" + warning + "\n\n" +
+      "排查：检查 station/server/.env 的 MIMO_API_KEY 是否正确、openai 库是否已安装（pip install openai）。";
+  }
+  if (window.desktop && window.desktop.showTtsWarning) {
+    window.desktop.showTtsWarning({ title, message, detail });
+  } else {
+    toast(message, "warn");
+  }
+}
+
 async function doDedup() {
   const src = currentAsset();
   if (!src || !requireProbedAsset(src)) return;
@@ -1016,8 +1074,10 @@ async function doDedup() {
       setWorkflowStep(4);
       renderDedup(res.data);
       const _ap = res.data.applied_params || {};
-      if (_ap.tts_text && !_ap.tts_applied) {
-        toast("AI 配音未生效：" + (_ap.tts_warning || res.data.tts || "请检查 MIMO_API_KEY / openai"), "warn");
+      // 用户启用了 TTS（手动文案或改写模式）但产物未成功配音 → 原生弹窗提示
+      const _ttsRequested = !!(args.tts_text) || !!(args.rewrite_template);
+      if (_ttsRequested && !_ap.tts_applied) {
+        notifyTtsFailure(args, _ap, "去重");
       }
       const c = res.data.checks || {};
       const ph = c.phash || {};
@@ -1087,12 +1147,19 @@ function renderDedup(d) {
   const ttsProcess = applied.tts_process
     ? ("TTS 流程  : " + applied.tts_process + "\n")
     : "";
-  const ttsLine = applied.tts_text
-    ? ("TTS 配音 : " + (applied.tts_applied ? "[已替换]" : "[失败]") +
+  let ttsLine = "";
+  if (applied.tts_text) {
+    let line = "TTS 配音 : " + (applied.tts_applied ? "[已替换]" : "[失败]") +
        " 音色=" + (applied.tts_voice || "冰糖") +
-       " 文本=" + (applied.tts_text || "—") +
-       (applied.tts_warning ? " 原因=" + applied.tts_warning : "") + "\n")
-    : "";
+       " 文本=" + (applied.tts_text || "—");
+    if (applied.rewrite_requested) {
+      line += " 来源=" + (applied.rewrite_source ? "元宝改写(" + applied.rewrite_source + ")" : "元宝改写");
+    }
+    if (applied.tts_warning) line += " 原因=" + applied.tts_warning;
+    ttsLine = line + "\n";
+  } else if (applied.rewrite_requested && applied.rewrite_error) {
+    ttsLine = "TTS 配音 : [改写失败] 原因=" + applied.rewrite_error + "\n";
+  }
   const detail =
     "输出文件 : " + (d.output_path || "?") + "\n" +
     "源  MD5  : " + (src.md5 || "?") + "\n" +
@@ -1172,6 +1239,16 @@ async function doFission() {
       if (!res.data.cancelled) learnProgressDuration("fission");
       setWorkflowStep(res.data.cancelled ? 3 : 4);
       renderFission(res.data);
+      // 用户启用了 TTS（手动文案或改写模式）但产物未成功配音 → 原生弹窗提示
+      const _ttsRequested = !!(args.tts_text) || !!(args.rewrite_template);
+      if (_ttsRequested) {
+        const _variants = res.data.variants || [];
+        const _anyTts = _variants.some((v) => v.applied_params && v.applied_params.tts_applied);
+        if (!_anyTts) {
+          const _rep = (_variants.find((v) => v.applied_params && v.applied_params.tts_text) || {}).applied_params || {};
+          notifyTtsFailure(args, _rep, "裂变");
+        }
+      }
       const allPass = res.data.matrix && res.data.matrix.all_pass;
       const deliveryReady = res.data.delivery_ready === true;
       if (res.data.cancelled) {

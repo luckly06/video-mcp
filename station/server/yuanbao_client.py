@@ -677,7 +677,7 @@ async def main():
     if frames:
         try:
             import base64 as _b64
-            _imgs = []
+            _imgs, _temp = [], []
             for i, b in enumerate(frames[:3]):
                 _src = b
                 if _src.startswith('data:'):
@@ -688,38 +688,60 @@ async def main():
                     with open(_p, "wb") as _f:
                         _f.write(_data)
                     _imgs.append(_p)
+                    _temp.append(_p)
                 except Exception:
                     if os.path.exists(b):
-                        _imgs.append(b)
+                        _imgs.append(b)   # 真实帧路径，不加入 _temp（不删除源文件）
             if _imgs:
-                # 1) 先直接定位常驻隐藏 input；不存在再点「+」展开上传菜单（只点容器，不点「图片」子项，
-                #    避免元宝自行 fileInput.click() 弹出原生对话框）
-                fi = page.locator('input[type="file"]').first
-                if await fi.count() == 0:
-                    ub = page.locator('[class*="UploadFileSelector_iconContainer"]').first
-                    if await ub.count() > 0:
-                        await ub.click()
-                        await asyncio.sleep(0.8)
-                    fi = page.locator('input[type="file"]').first
-                if await fi.count() > 0:
-                    # 2) 受信注入，不弹窗，且触发 React onChange
-                    await fi.set_input_files(_imgs)
-                    log("已 set_input_files %d 张图片" % len(_imgs))
-                    # 3) 等图片缩略图真正出现在输入框，确保上传完成再发文案
-                    _ok = False
-                    for _ in range(30):
-                        await asyncio.sleep(0.5)
-                        _n = await page.locator('div[contenteditable="true"] img, [class*="upload"] img, [class*="image"] img').count()
-                        if _n > 0:
-                            _ok = True
-                            break
-                    log("图片缩略图出现: " + str(_ok))
-                    await asyncio.sleep(1)
+                # 关键：必须走「+ 上传图标 → 点『图片』菜单项」这条 UI 路径，
+                # 才能挂载『真正负责随消息发送的图片 input』。直接对常驻
+                # input[type=file].first 灌文件，元宝会把它当成别的入口，
+                # 预览虽然出现，但发出的消息里不带图（此前一直踩这个坑）。
+                # 这里用 Playwright 的 file_chooser 接管（受信注入，不弹系统对话框）。
+                ub = page.locator('[class*="UploadFileSelector_iconContainer"]').first
+                if await ub.count() > 0:
+                    await ub.click()
+                    await asyncio.sleep(0.6)
+                pic = page.locator('xpath=//*[normalize-space(text())="图片"]').first
+                if await pic.count() > 0:
+                    try:
+                        async with page.expect_file_chooser(timeout=5000) as _ci:
+                            await pic.click()   # 触发该图片 input 的原生选择框
+                        _chooser = await _ci.value
+                        await _chooser.set_files(_imgs)   # 受信注入，等同 set_input_files
+                        log("已 set_files %d 张图片（经『图片』菜单，图片 input）" % len(_imgs))
+                    except Exception as _ce:
+                        # 退化：『图片』没触发选择框时，直接对图片 input 注入
+                        log("『图片』未触发选择框，退化直注: " + str(_ce)[:120])
+                        fi = page.locator('input[type="file"]').first
+                        if await fi.count() > 0:
+                            await fi.set_input_files(_imgs)
+                            log("退化：直接 set_input_files %d 张" % len(_imgs))
+                        else:
+                            log("未找到图片 input，图片未上传")
                 else:
-                    log("未找到 input[type=file]，图片未上传")
-                for _p in _imgs:
+                    # 退化：找不到『图片』菜单项，直接对常驻 input 注入
+                    fi = page.locator('input[type="file"]').first
+                    if await fi.count() > 0:
+                        await fi.set_input_files(_imgs)
+                        log("退化：直接 set_input_files %d 张（无『图片』入口）" % len(_imgs))
+                    else:
+                        log("未找到图片入口，图片未上传")
+                # 等图片缩略图真正出现在输入框，确保上传完成再发文案
+                _ok = False
+                for _ in range(30):
+                    await asyncio.sleep(0.5)
+                    _n = await page.locator('div[contenteditable="true"] img, [class*="upload"] img, [class*="image"] img').count()
+                    if _n > 0:
+                        _ok = True
+                        break
+                log("图片缩略图出现: " + str(_ok))
+                await asyncio.sleep(1)
+                for _p in _temp:
                     try: os.remove(_p)
                     except Exception: pass
+            else:
+                log("无可用图片（帧路径不存在或解码失败）")
         except Exception as eu:
             log("图片上传异常: " + str(eu)[:200])
 

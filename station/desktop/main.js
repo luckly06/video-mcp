@@ -10,7 +10,7 @@
 'use strict';
 
 const path = require('node:path');
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 
 const { createMainWindow } = require('./lib/window');
 const { buildMenu } = require('./lib/menu');
@@ -49,6 +49,27 @@ const log = createLogger({
 // ---------- 4. 主窗口工厂 + 下载接管 ----------
 let mainWindow = null;
 let localServerChild = null;
+
+// ---------- 4.5 IPC：TTS 失败原生弹窗 ----------
+// 渲染进程在「用户启用了 TTS 但产物未成功配音」时调用，弹出系统级对话框提示用户。
+ipcMain.handle('app:show-tts-warning', async (evt, payload) => {
+  try {
+    const win = BrowserWindow.fromWebContents(evt.sender) || mainWindow;
+    if (!win) return { ok: false, reason: 'no-window' };
+    await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: (payload && payload.title) || '提示',
+      message: (payload && payload.message) || '',
+      detail: (payload && payload.detail) || '',
+      buttons: ['知道了'],
+      defaultId: 0,
+      noLink: true,
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e && e.message ? e.message : String(e) };
+  }
+});
 
 async function bootstrap() {
   // 本地 MCP 后端：优先复用已有服务；否则 spawn 本机 venv 的 mcp_server.py（127.0.0.1:8765）。
