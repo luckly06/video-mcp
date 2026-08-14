@@ -160,6 +160,7 @@ function createYuanbaoWindow({ mainWindow, iconPath, log }) {
           } catch (_) { /* skip */ }
         });
       }
+      log?.info?.(`[yuanbao] rewrite frames_b64=${frames.length} frame_files=${frameFiles.length}`);
 
       // 2) spawn 本机 venv python 跑 yuanbao_client --rewrite（用系统 msedge.exe + 复用 Edge 登录态）
       const py = resolvePython();

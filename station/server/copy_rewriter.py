@@ -70,12 +70,15 @@ def _extract_frames(video_path, ffmpeg_path, n=5):
     try:
         result = subprocess.run(
             [str(ffmpeg_path), "-i", str(video_path), "-f", "null", "-"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, timeout=15,
         )
     except Exception:
         return []
     duration = 60.0
-    m = re.search(r"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)", result.stderr or "")
+    stderr = result.stderr or b""
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    m = re.search(r"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)", stderr)
     if m:
         duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3)) + int(m.group(4)) / 100
     if duration <= 0:
@@ -96,7 +99,7 @@ def _extract_frames(video_path, ffmpeg_path, n=5):
                  "-vframes", "1", "-q:v", "8", "-vf", "scale=512:-1", str(out)],
                 capture_output=True, timeout=10,
             )
-            if rc.returncode == 0 and out.stat().st_size > 500:
+            if rc.returncode == 0 and out.exists() and out.stat().st_size > 500:
                 frames.append(str(out))
         return frames
     except Exception:

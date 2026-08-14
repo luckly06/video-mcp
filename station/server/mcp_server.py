@@ -446,8 +446,8 @@ def _build_copy_context(src, n_frames=5):
                     frames_b64.append(_b64.b64encode(fh.read()).decode("ascii"))
             except Exception:
                 continue
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger("vu").warning(f"抽帧失败: {e}")
 
     # 4) 最大字数上限：让元宝改写时按视频时长控制篇幅。
     #    max_chars = ceil(duration × R × 安全余量)。R = MiMo TTS 实际语速（字/秒），

@@ -20,6 +20,8 @@ npm start            # 等价于 electron .
 
 **打包态上传目录**：双击 exe 启动时，上传素材会写入 `%USERPROFILE%\\Videos\\视频去重素材`，再由后端处理，避免继续依赖 `AppData/Local/Temp` 临时路径。
 
+**元宝改写关键帧**：元宝改写会携带抽取的关键帧；抽帧异常会写入后端日志，桌面端会记录 `frames_b64` / `frame_files` 数量（不输出图片内容）。
+
 本地后端依赖（缺失时按能力降级，不影响启动）：
 - Python venv：优先 `%USERPROFILE%\.workbuddy\binaries\python\envs\default\Scripts\python.exe`，回退系统 `python`
 - ffmpeg/ffprobe：`station/vendor/ffmpeg/`（相对锚定，自动定位）
