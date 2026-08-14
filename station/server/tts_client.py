@@ -67,7 +67,7 @@ def _client():
     except ImportError:
         logger.warning("openai 未安装，TTS 不可用。pip install openai")
         return None
-    return OpenAI(api_key=_MIMO_API_KEY, base_url=_MIMO_BASE_URL, timeout=15.0)
+    return OpenAI(api_key=_api_key(), base_url=_MIMO_BASE_URL, timeout=15.0)
 
 
 def is_available():
