@@ -686,30 +686,30 @@ async def main():
             # 在页面 DOM 内用 DataTransfer 灌文件（对齐 content-yuanbao.js:79-85）
             # 不点任何 Playwright 按钮，直接操作隐藏的 input[type=file]；
             # 若找不到 input，再用 evaluate 在页面内点上传按钮（避免 Playwright 事件链触发原生对话框）
-            uploaded = await page.evaluate("""([frames_b64]) => {
+            uploaded = await page.evaluate("""([frames_b64]) => {{
                 var fi = document.querySelector('input[type="file"]');
                 // 如果找不到隐藏的 file input，尝试在页面内点上传按钮让它出现
-                if (!fi) {
+                if (!fi) {{
                     var ub = document.querySelector('[class*="UploadFileSelector_iconContainer"]');
                     if (ub) ub.click();
                     fi = document.querySelector('input[type="file"]');
-                }
+                }}
                 if (!fi) return 'NO_INPUT';
-                try {
+                try {{
                     const dt = new DataTransfer();
-                    frames_b64.forEach((b64, i) => {
+                    frames_b64.forEach((b64, i) => {{
                         const arr = b64.split(','), bstr = atob(arr.length > 1 ? arr[1] : arr[0]);
                         const u8 = new Uint8Array(bstr.length);
                         for (let j = 0; j < bstr.length; j++) u8[j] = bstr.charCodeAt(j);
-                        const f = new File([u8], '_yb_frame_' + i + '.png', { type: 'image/png' });
+                        const f = new File([u8], '_yb_frame_' + i + '.png', {{ type: 'image/png' }});
                         dt.items.add(f);
-                    });
+                    }});
                     fi.files = dt.files;
-                    fi.dispatchEvent(new Event('input', { bubbles: true }));
-                    fi.dispatchEvent(new Event('change', { bubbles: true }));
+                    fi.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    fi.dispatchEvent(new Event('change', {{ bubbles: true }}));
                     return 'OK:' + frames_b64.length;
-                } catch(e) { return 'ERR:' + e.message; }
-            }""", _b64_frames)
+                }} catch(e) {{ return 'ERR:' + e.message; }}
+            }}""", _b64_frames)
             log("图片上传结果: " + str(uploaded))
             if str(uploaded).startswith("OK"):
                 await asyncio.sleep(4)
