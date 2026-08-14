@@ -668,46 +668,53 @@ async def main():
         print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝显示未登录：复制到调试 Edge 的登录态未生效（Cookie 加密绑定所致）。请在弹出的调试 Edge 窗口里扫码登录一次，之后会一直复用该实例。"}}, ensure_ascii=False))
         return
 
-    # === 图片上传：对齐已验证的 content-yuanbao.js（直接灌 input[type=file]，不依赖原生对话框）===
+    # === 图片上传：用 page.evaluate 在页面内执行 DataTransfer 灌文件 ===
+    # 关键：不能用 Playwright .click() 点「上传」或「图片」按钮——那会经过浏览器事件链
+    #       触发 <input type=file> 的原生 .click() → 弹出系统文件选择器 → 卡死。
+    #       必须像 content-yuanbao.js 一样在 DOM 内用 DataTransfer 绕过原生对话框。
     frames = {frames}
     if frames:
         try:
             import base64 as _b64
-            _imgs = []
-            for i, b in enumerate(frames[:3]):
+            _b64_frames = []
+            for b in frames[:3]:
                 _src = b
                 if _src.startswith('data:'):
                     _src = _src.split(',', 1)[1]
-                try:
-                    _data = _b64.b64decode(_src)
-                    _p = r"{station_dir}" + ("/_yb_frame_%d.png" % i)
-                    with open(_p, "wb") as _f:
-                        _f.write(_data)
-                    _imgs.append(_p)
-                except Exception:
-                    if os.path.exists(b):
-                        _imgs.append(b)  # 已经是文件路径
-            if _imgs:
-                ub = page.locator('[class*="UploadFileSelector_iconContainer"]').first
-                if await ub.count() > 0:
-                    await ub.click()
-                    await asyncio.sleep(0.8)
-                # 点"图片"菜单（XPath 精确匹配文本，避免误触其它含"图片"的节点）
-                pic = page.locator("xpath=//*[normalize-space(text())='图片']").first
-                if await pic.count() > 0:
-                    await pic.click()
-                    await asyncio.sleep(0.5)
-                await asyncio.sleep(0.8)
-                fi = page.locator('input[type="file"]').first
-                if await fi.count() > 0:
-                    await fi.set_input_files(_imgs)
-                    log("已上传 %d 张图片" % len(_imgs))
-                    await asyncio.sleep(4)
-                else:
-                    log("未找到 input[type=file]，图片未上传")
-                for _p in _imgs:
-                    try: os.remove(_p)
-                    except Exception: pass
+                _b64_frames.append(_src)
+
+            # 在页面 DOM 内用 DataTransfer 灌文件（对齐 content-yuanbao.js:79-85）
+            # 不点任何 Playwright 按钮，直接操作隐藏的 input[type=file]；
+            # 若找不到 input，再用 evaluate 在页面内点上传按钮（避免 Playwright 事件链触发原生对话框）
+            uploaded = await page.evaluate("""([frames_b64]) => {
+                var fi = document.querySelector('input[type="file"]');
+                // 如果找不到隐藏的 file input，尝试在页面内点上传按钮让它出现
+                if (!fi) {
+                    var ub = document.querySelector('[class*="UploadFileSelector_iconContainer"]');
+                    if (ub) ub.click();
+                    fi = document.querySelector('input[type="file"]');
+                }
+                if (!fi) return 'NO_INPUT';
+                try {
+                    const dt = new DataTransfer();
+                    frames_b64.forEach((b64, i) => {
+                        const arr = b64.split(','), bstr = atob(arr.length > 1 ? arr[1] : arr[0]);
+                        const u8 = new Uint8Array(bstr.length);
+                        for (let j = 0; j < bstr.length; j++) u8[j] = bstr.charCodeAt(j);
+                        const f = new File([u8], '_yb_frame_' + i + '.png', { type: 'image/png' });
+                        dt.items.add(f);
+                    });
+                    fi.files = dt.files;
+                    fi.dispatchEvent(new Event('input', { bubbles: true }));
+                    fi.dispatchEvent(new Event('change', { bubbles: true }));
+                    return 'OK:' + frames_b64.length;
+                } catch(e) { return 'ERR:' + e.message; }
+            }""", _b64_frames)
+            log("图片上传结果: " + str(uploaded))
+            if str(uploaded).startswith("OK"):
+                await asyncio.sleep(4)
+            else:
+                log("图片上传失败: " + str(uploaded))
         except Exception as eu:
             log("图片上传异常: " + str(eu)[:200])
 
