@@ -6,11 +6,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { BrowserWindow, ipcMain } = require('electron');
+const { resolveExtensionFilePath, resolveServerScriptPath } = require('./paths');
 
 const YUANBAO_URL = 'https://yuanbao.tencent.com/';
-const CONTENT_YUANBAO_JS_PATH = path.join(
-  __dirname, '..', '..', 'extension', 'content-yuanbao.js'
-);
+const CONTENT_YUANBAO_JS_PATH = resolveExtensionFilePath('content-yuanbao.js');
 
 // content-yuanbao.js 跑在页面主世界；contextIsolation 下 preload 无法直接给它塞
 // chrome.runtime.sendMessage，所以先在主世界注入这个 shim，把 sendMessage 转发到
@@ -28,7 +27,7 @@ const MAIN_WORLD_SHIM = `(function () {
 })();`;
 
 // 元宝改写 CLI（复用用户 Edge 登录态驱动 msedge.exe + CDP）
-const YUANBAO_CLI = path.join(__dirname, '..', '..', 'server', 'yuanbao_client.py');
+const YUANBAO_CLI = resolveServerScriptPath('yuanbao_client.py');
 
 function resolvePython() {
   const venv = path.join(
@@ -51,7 +50,7 @@ function cleanupDir(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* noop */ }
 }
 
-function createYuanbaoWindow({ mainWindow, log }) {
+function createYuanbaoWindow({ mainWindow, iconPath, log }) {
   const preloadYuanbao = path.join(__dirname, 'preload-yuanbao.js');
   let contentYuanbaoSource = '';
   try { contentYuanbaoSource = fs.readFileSync(CONTENT_YUANBAO_JS_PATH, 'utf8'); }
@@ -67,6 +66,7 @@ function createYuanbaoWindow({ mainWindow, log }) {
     win = new BrowserWindow({
       width: 720, height: 900, x: 100, y: 100,
       title: '元宝 (独立窗口)',
+      icon: iconPath || undefined,
       backgroundColor: '#0e1014',
       parent: mainWindow || undefined, modal: false, show: false,
       webPreferences: {

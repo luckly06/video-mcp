@@ -2,16 +2,95 @@
   "name": "video-dedup-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron 桌面壳，包裹 archive/web/，对接远端 MCP。dev-only，本轮不打包。",
+  "description": "视频去重工位 Electron 桌面版",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging --remote-debugging-port=9222",
-    "test": "node --test lib/__tests__/"
+    "test": "node --test lib/__tests__/",
+    "pack": "electron-builder --dir --win --x64",
+    "dist": "electron-builder --win portable --x64"
   },
   "dependencies": {},
   "devDependencies": {
-    "electron": "^31.7.7"
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.videoUniqueness.desktop",
+    "productName": "视频去重工位",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build",
+        "to": "build",
+        "filter": [
+          "icon.ico",
+          "icon.png"
+        ]
+      },
+      {
+        "from": "../../archive/web",
+        "to": "archive/web"
+      },
+      {
+        "from": "../server",
+        "to": "station/server",
+        "filter": [
+          "**/*",
+          "!logs/**",
+          "!__pycache__/**",
+          "!*.pyc"
+        ]
+      },
+      {
+        "from": "../shared",
+        "to": "station/shared"
+      },
+      {
+        "from": "../hooks",
+        "to": "station/hooks"
+      },
+      {
+        "from": "../extension",
+        "to": "station/extension",
+        "filter": [
+          "content-yuanbao.js",
+          "manifest.json",
+          "icons/**"
+        ]
+      },
+      {
+        "from": "../vendor",
+        "to": "station/vendor",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "asar": true
   },
   "engines": {
     "node": ">=20.0.0"

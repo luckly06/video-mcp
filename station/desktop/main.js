@@ -18,6 +18,7 @@ const { attachDownloadHandlers } = require('./lib/download');
 const { createLogger } = require('./lib/logger');
 const { createYuanbaoWindow } = require('./lib/yuanbao-window');
 const { startLocalServer, stopLocalServer } = require('./lib/local-server');
+const { resolveAppIconPath, resolveWebIndexPath } = require('./lib/paths');
 
 // ---------- 1. userData 隔离 ----------
 // 避免与机器上其他 Electron 应用共享缓存目录
@@ -42,7 +43,7 @@ if (!gotLock) {
 
 // ---------- 3. 日志 ----------
 const log = createLogger({
-  logDir: path.join(__dirname, 'logs'),
+  logDir: path.join(USER_DATA, 'logs'),
   filename: 'desktop.log',
 });
 
@@ -89,7 +90,8 @@ async function bootstrap() {
   mainWindow = createMainWindow({
     apiBase,
     loadTarget: process.env.VIDEODEDUP_LOAD_TARGET
-      || path.join(__dirname, '..', '..', 'archive', 'web', 'index.html'),
+      || resolveWebIndexPath(),
+    iconPath: resolveAppIconPath(),
     log,
   });
 
@@ -100,7 +102,7 @@ async function bootstrap() {
   });
 
   // 元宝独立浮动 BrowserWindow（与 Chrome 扩展 content-yuanbao.js 复用同一份 DOM driver）
-  const yuanbao = createYuanbaoWindow({ mainWindow, log });
+  const yuanbao = createYuanbaoWindow({ mainWindow, iconPath: resolveAppIconPath(), log });
   log.info('[main] yuanbao window attached (independent floating)');
 
   buildMenu({ mainWindow, log });

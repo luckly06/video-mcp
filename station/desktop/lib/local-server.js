@@ -15,12 +15,13 @@ const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const { resolveServerScriptPath } = require('./paths');
 
 const SERVER_HOST = '127.0.0.1';
 const SERVER_PORT = 8765;
 
-// station/server/mcp_server.py（相对 desktop/lib 向上两级）
-const SERVER_PY = path.join(__dirname, '..', '..', 'server', 'mcp_server.py');
+// station/server/mcp_server.py（开发态走仓库；打包态走 process.resourcesPath）
+const SERVER_PY = resolveServerScriptPath('mcp_server.py');
 
 /**
  * 解析本机 Python 解释器（顺序即优先级）：
@@ -91,6 +92,12 @@ function startLocalServer({ log } = {}) {
     const env = { ...process.env, VU_HOST: SERVER_HOST, VU_PORT: String(SERVER_PORT) };
     const asr = resolveAsrModels(env);
     if (asr) env.VU_ASR_MODELS = asr;
+
+    if (!fs.existsSync(SERVER_PY)) {
+      const error = `server script not found: ${SERVER_PY}`;
+      log?.error?.(`[local-server] ${error}`);
+      return { baseUrl, child: null, error };
+    }
 
     log?.info?.(`[local-server] 拉起本地后端: ${py} ${SERVER_PY}`);
     if (asr) log?.info?.(`[local-server] VU_ASR_MODELS=${asr}`);

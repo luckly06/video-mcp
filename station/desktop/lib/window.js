@@ -14,16 +14,18 @@ const { BrowserWindow } = require('electron');
  * @param {object} opts
  * @param {string} opts.apiBase   注入到 URL query，让 renderer 端的 17-23 行兜底逻辑读取
  * @param {string} opts.loadTarget 要加载的本地文件绝对路径
+ * @param {string} opts.iconPath   窗口图标路径
  * @param {object} opts.log       logger 实例（仅 console 转发，主进程不走文件）
  * @returns {BrowserWindow}
  */
-function createMainWindow({ apiBase, loadTarget, log }) {
+function createMainWindow({ apiBase, loadTarget, iconPath, log }) {
   const win = new BrowserWindow({
     width: 1280,
     height: 900,
     minWidth: 960,
     minHeight: 640,
     title: '视频去重工位',
+    icon: iconPath || undefined,
     backgroundColor: '#0e1014',
     show: false,
     webPreferences: {
