@@ -28,6 +28,7 @@
   --blocked-bg: #FDECEC;
   --pass: #64748B;
   --pass-bg: #F1F5F9;
+  --ui-font-scale: 1;
 }
 
 * { box-sizing: border-box; }
@@ -159,6 +160,12 @@ code {
 .sidebars-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 6px 11px; border: 1px solid var(--border-subtle); border-radius: 9px; background: #fff; color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: border-color var(--ease-standard), color var(--ease-standard), background var(--ease-standard), box-shadow var(--ease-standard); }
 .sidebars-toggle svg { width: 16px; height: 16px; flex-shrink: 0; }
 .sidebars-toggle:hover, .sidebars-toggle.is-active { border-color: var(--brand-primary-light); color: var(--brand-primary-dark); background: #F5FAFF; box-shadow: 0 4px 14px rgba(61, 132, 204, .10); }
+.font-scale-control { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 4px 6px 4px 9px; border: 1px solid var(--border-subtle); border-radius: 10px; background: #fff; color: var(--text-secondary); box-shadow: 0 4px 14px rgba(15, 23, 42, .04); }
+.font-scale-caption { padding-right: 2px; color: var(--text-tertiary); font-size: 11px; white-space: nowrap; }
+.font-scale-btn, .font-scale-value { min-width: 34px; height: 26px; padding: 0 8px; border: 0; border-radius: 7px; background: var(--surface-muted); color: var(--text-secondary); font-size: 12px; line-height: 26px; cursor: pointer; transition: background var(--ease-standard), color var(--ease-standard), box-shadow var(--ease-standard), opacity var(--ease-standard); }
+.font-scale-value { min-width: 46px; background: #F5FAFF; color: var(--brand-primary-dark); font-family: Consolas, monospace; font-weight: 600; }
+.font-scale-btn:hover, .font-scale-value:hover { background: #EAF3FC; color: var(--brand-primary-dark); box-shadow: inset 0 0 0 1px var(--brand-primary-light); }
+.font-scale-btn:disabled { cursor: not-allowed; opacity: .45; box-shadow: none; }
 .brand-group, .topbar-actions { display: flex; align-items: center; gap: 12px; }
 .brand-mark {
   width: 40px; height: 40px; display: grid; place-items: center;
@@ -266,6 +273,20 @@ code {
 .dim-chk small { color: var(--text-tertiary); font-size: 10px; }
 .dim-chk:has(input:checked) { border-color: #A9CDED; background: #F1F8FE; color: var(--brand-primary-dark); }
 .dim-chk.dim-flip:has(input:checked) { border-color: #F1C87A; background: var(--warned-bg); color: var(--warned); }
+.dimension-faq { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 12px; align-items: start; margin: -2px 0 14px 92px; padding: 12px; border: 1px solid #F4D59B; border-radius: var(--radius-md); background: linear-gradient(180deg, #FFFBF3 0%, #FFFFFF 100%); }
+.faq-button { width: 50px; height: 50px; border-radius: 50%; border: none; background-color: #ffe53b; background-image: linear-gradient(147deg, #ffe53b 0%, #ff2525 74%); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0px 10px 10px rgba(0, 0, 0, 0.151); position: relative; flex: none; }
+.faq-button svg { height: 1.5em; fill: white; }
+.faq-button:hover svg, .faq-button:focus-visible svg { animation: jello-vertical 0.7s both; }
+@keyframes jello-vertical { 0% { transform: scale3d(1, 1, 1); } 30% { transform: scale3d(0.75, 1.25, 1); } 40% { transform: scale3d(1.25, 0.75, 1); } 50% { transform: scale3d(0.85, 1.15, 1); } 65% { transform: scale3d(1.05, 0.95, 1); } 75% { transform: scale3d(0.95, 1.05, 1); } 100% { transform: scale3d(1, 1, 1); } }
+.faq-button .tooltip { position: absolute; top: -20px; opacity: 0; background-color: #ffe53b; background-image: linear-gradient(147deg, #ffe53b 0%, #ff2525 74%); color: white; padding: 5px 10px; border-radius: 5px; display: flex; align-items: center; justify-content: center; transition-duration: 0.2s; pointer-events: none; letter-spacing: 0.5px; font-size: 11px; font-weight: 600; }
+.faq-button .tooltip::before { position: absolute; content: ""; width: 10px; height: 10px; background-color: #ff2525; background-size: 1000%; background-position: center; transform: rotate(45deg); bottom: -15%; transition-duration: 0.3s; }
+.faq-button:hover .tooltip, .faq-button:focus-visible .tooltip { top: -40px; opacity: 1; transition-duration: 0.3s; }
+.dimension-faq-title h4 { margin: 3px 0 2px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.dimension-faq-title p { margin: 0 0 10px; color: var(--text-secondary); font-size: 12px; }
+.dimension-faq-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; margin: 0; }
+.dimension-faq-list > div { padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 8px; background: rgba(255,255,255,.74); }
+.dimension-faq-list dt { margin: 0 0 3px; color: var(--brand-primary-dark); font-size: 12px; font-weight: 700; }
+.dimension-faq-list dd { margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.55; }
 .flip-parameter { padding-top: 14px; border-top: 1px solid var(--border-subtle); }
 .flip-parameter:not(.is-active) { opacity: .58; }
 .flip-parameter.is-active .field-label::after { content: "高破坏维度"; margin-left: 7px; color: var(--warned); font-size: 10px; }
@@ -591,6 +612,7 @@ code {
   .page-intro { display: block; }
   .protocol-summary { display: inline-block; margin-top: 13px; }
   .workflow-steps { grid-template-columns: repeat(2, 1fr); }
+  .dimension-faq { margin-left: 0; }
   .probe-grid, .checks, .explainer-grid { grid-template-columns: 1fr; }
   .explainer-grid > div { border-right: 0; border-bottom: 1px solid var(--border-subtle); }
   .explainer-grid > div:nth-child(2) { border-bottom: 0; }
@@ -599,6 +621,9 @@ code {
   .card-heading > .btn, .fission-controls { margin-top: 14px; }
 }
 @media (max-width: 620px) {
+  .dimension-faq { grid-template-columns: 1fr; }
+  .faq-button { justify-self: start; }
+  .dimension-faq-list { grid-template-columns: 1fr; }
   .artifact-highlight { grid-template-columns: 1fr; gap: 3px; }
   .artifact-highlight > :last-child { white-space: normal; }
   .artifact-section-head { align-items: flex-start; flex-direction: column; gap: 2px; }

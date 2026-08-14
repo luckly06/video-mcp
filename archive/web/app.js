@@ -72,6 +72,9 @@ const el = {
   workflowSteps: $("workflow-steps"),
   btnOpenOutputTop: $("btn-open-output-top"),
   btnToggleSidebars: $("btn-toggle-sidebars"),
+  btnFontSmaller: $("btn-font-smaller"),
+  btnFontReset: $("btn-font-reset"),
+  btnFontLarger: $("btn-font-larger"),
 
   whitelist: $("whitelist"),
   toolsList: $("tools-list"),
@@ -168,6 +171,45 @@ let outputDirs = { dedup: null, fission: null, dedupConfigured: false, fissionCo
 let selectedFissionArtifact = null;
 let currentWorkflowStep = 1;
 let lastModalTrigger = null;
+
+/* 桌面端界面字号缩放：Chromium/Electron 支持 CSS zoom；localStorage 记住用户偏好。 */
+const FONT_SCALE_KEY = "vu_ui_font_scale";
+const FONT_SCALE_MIN = 0.85;
+const FONT_SCALE_MAX = 1.25;
+const FONT_SCALE_STEP = 0.05;
+let currentFontScale = 1;
+
+function normalizeFontScale(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, Math.round(n * 100) / 100));
+}
+
+function fontScaleLabel(scale) {
+  return Math.round(normalizeFontScale(scale) * 100) + "%";
+}
+
+function readStoredFontScale() {
+  try { return normalizeFontScale(localStorage.getItem(FONT_SCALE_KEY)); }
+  catch (_) { return 1; }
+}
+
+function applyFontScale(scale, options = {}) {
+  currentFontScale = normalizeFontScale(scale);
+  document.documentElement.style.setProperty("--ui-font-scale", String(currentFontScale));
+  document.body.style.zoom = String(currentFontScale);
+  if (el.btnFontReset) el.btnFontReset.textContent = fontScaleLabel(currentFontScale);
+  if (el.btnFontSmaller) el.btnFontSmaller.disabled = currentFontScale <= FONT_SCALE_MIN + 0.001;
+  if (el.btnFontLarger) el.btnFontLarger.disabled = currentFontScale >= FONT_SCALE_MAX - 0.001;
+  if (options.persist !== false) {
+    try { localStorage.setItem(FONT_SCALE_KEY, String(currentFontScale)); } catch (_) {}
+  }
+  if (options.notify) toast("界面字号已调整为 " + fontScaleLabel(currentFontScale), "ok");
+}
+
+function stepFontScale(delta) {
+  applyFontScale(currentFontScale + delta * FONT_SCALE_STEP, { notify: true });
+}
 let activeProgress = new Map();
 let activeFissionTaskId = null;
 let fissionCancelPending = false;
@@ -1870,6 +1912,9 @@ el.btnToggleSidebars.addEventListener("click", () => {
   const label = el.btnToggleSidebars.querySelector("span");
   if (label) label.textContent = collapsed ? "展开侧栏" : "收纳侧栏";
 });
+if (el.btnFontSmaller) el.btnFontSmaller.addEventListener("click", () => stepFontScale(-1));
+if (el.btnFontLarger) el.btnFontLarger.addEventListener("click", () => stepFontScale(1));
+if (el.btnFontReset) el.btnFontReset.addEventListener("click", () => applyFontScale(1, { notify: true }));
 el.btnOpenOutputFission.addEventListener("click", () => downloadArtifact(selectedFissionArtifact, "裂变"));
 
 // 打开去重产物文件夹（subdir="去重"）
@@ -2363,6 +2408,7 @@ el.btnRegen.addEventListener("click", () => {
 /* ---------------------------------------------------------------------------
    启动
    --------------------------------------------------------------------------- */
+applyFontScale(readStoredFontScale(), { persist: false });
 renderMemory();
 connectAndBootstrap();
 

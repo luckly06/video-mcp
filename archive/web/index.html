@@ -94,6 +94,12 @@
       </svg>
       <span>收纳侧栏</span>
     </button>
+    <div class="font-scale-control" role="group" aria-label="界面字号调节">
+      <span class="font-scale-caption">字号</span>
+      <button id="btn-font-smaller" class="font-scale-btn" type="button" title="缩小界面字号" aria-label="缩小界面字号">A−</button>
+      <button id="btn-font-reset" class="font-scale-value" type="button" title="重置界面字号" aria-label="重置界面字号">100%</button>
+      <button id="btn-font-larger" class="font-scale-btn" type="button" title="放大界面字号" aria-label="放大界面字号">A＋</button>
+    </div>
     <div class="topbar-actions">
       <div id="badge-status" class="service-badge" role="status">
         <span class="status-dot" aria-hidden="true"></span>
@@ -219,6 +225,25 @@
             <label class="dim-chk"><input type="checkbox" data-dim="speed" checked /><span><b>变速</b><small>speed</small></span></label>
             <label class="dim-chk"><input type="checkbox" data-dim="trim" checked /><span><b>去头尾</b><small>trim</small></span></label>
             <label class="dim-chk dim-flip"><input type="checkbox" data-dim="flip" /><span><b>翻转</b><small>flip · 高破坏</small></span></label>
+          </div>
+        </div>
+        <div class="dimension-faq" aria-labelledby="dimension-faq-title">
+          <button class="faq-button" type="button" aria-label="处理维度说明">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512" aria-hidden="true">
+              <path d="M80 160c0-35.3 28.7-64 64-64h32c35.3 0 64 28.7 64 64v3.6c0 21.8-11.1 42.1-29.4 53.8l-42.2 27.1c-25.2 16.2-40.4 44.1-40.4 74V320c0 17.7 14.3 32 32 32s32-14.3 32-32v-1.4c0-8.2 4.2-15.8 11-20.2l42.2-27.1c36.6-23.6 58.8-64.1 58.8-107.7V160c0-70.7-57.3-128-128-128H144C73.3 32 16 89.3 16 160c0 17.7 14.3 32 32 32s32-14.3 32-32zm80 320a40 40 0 1 0 0-80 40 40 0 1 0 0 80z"></path>
+            </svg>
+            <span class="tooltip">FAQ</span>
+          </button>
+          <div class="dimension-faq-body">
+            <div class="dimension-faq-title"><span class="step-kicker">解答内容</span><h4 id="dimension-faq-title">这些处理维度是什么意思？</h4><p>小白用户保持默认即可；想要更强去重时，再按说明增加维度或提高强度。</p></div>
+            <dl class="dimension-faq-list">
+              <div><dt>画面</dt><dd>轻微调整亮度、对比度、饱和度等，让视频特征变化，但肉眼基本还是原片。</dd></div>
+              <div><dt>微旋转</dt><dd>把画面旋转一点点，再补边/缩放回正常尺寸，用来改变平台识别到的画面结构。</dd></div>
+              <div><dt>裁切</dt><dd>裁掉边缘一小圈再放回原分辨率，适合去掉边缘相似特征；过重可能让主体变大。</dd></div>
+              <div><dt>变速</dt><dd>把播放速度轻微变快或变慢，并尽量保持音画同步；一般不建议拉得太重。</dd></div>
+              <div><dt>去头尾</dt><dd>剪掉开头和结尾的一小段，让视频时间轴不同；短视频太短时系统会自动跳过。</dd></div>
+              <div><dt>翻转</dt><dd>镜像或旋转画面，去重力度强，但有文字、人脸、方向感的视频可能明显违和，所以默认关闭。</dd></div>
+            </dl>
           </div>
         </div>
         <div class="parameter-group flip-parameter" id="flip-mode-row">
