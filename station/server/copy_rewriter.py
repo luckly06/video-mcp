@@ -47,6 +47,7 @@ SYSTEM_PROMPT = """你是短视频配音文案优化师。
 3. **有行动**：结尾留互动引导（"点赞关注"、"评论区聊聊"等）
 4. **时长适配**：30-100 字，适合 15-60 秒短视频
 5. **纯文案**：只输出最终文案，不要解释、前缀、标注
+6. **禁止元信息**：绝对不要输出任何元信息或说明，包括但不限于——字数统计（如"文案共136字"）、合规确认（如"符合197字限制"）、注释（如"注：…"）、创作说明、括号/【】备注、钩子/卖点清单。结尾不要加"注："或任何补充说明。直接输出纯旁白正文即可，无需汇报你是否达标。
 
 ## 示例
 输入：这段打斗太精彩了
@@ -397,7 +398,7 @@ def _build_prompt(original_text, template=None, max_chars=None, topic=None):
     parts.append("需要改写的原文：" + original_text)
     # 🆕 结尾再强调一次字数限制（语言模型对最后一句约束最敏感）
     if max_chars:
-        parts.append(f"⚠️ 重要：你输出的文案务必控制在 {max_chars} 字以内，不要超出。")
+        parts.append(f"⚠️ 重要：你输出的配音文案务必控制在 {max_chars} 字以内，不要超出。直接给出正文即可，不要附带字数说明或合规确认。")
     return "\n\n".join(parts)
 
 
@@ -406,12 +407,37 @@ def _normalize(text):
     return (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def _strip_tts_meta(s):
+    """剔除元宝常自带的元信息尾巴（如「注：文案共136字，符合197字限制…」）。
+
+    这些并非配音正文，若不清除，TTS 会把「注」「文案共」「符合限制」等内容念出来。
+    优先级：优先按「注：」截断；再清理行内残留的字数/合规/卖点清单片段。
+    """
+    import re
+    if not s:
+        return s
+    # 1) 以「注：/注:」为界，截掉其后全部内容（元宝多把统计放在注里，且通常在结尾）
+    m = re.search(r"注\s*[:：]", s)
+    if m:
+        head = s[:m.start()].strip()
+        # 只有前面确有正文才截断，避免极端情况下整段被清空
+        if len(re.sub(r"[\s，。！？、；：]", "", head)) >= 4:
+            s = head
+    # 2) 行内残留清理（兜底，覆盖没有「注」前缀但含统计的写法）
+    s = re.sub(r"文案共\s*\d+\s*字[^，。！？]*", "", s)
+    s = re.sub(r"符合\s*\d+\s*字[^，。！？]*限制", "", s)
+    s = re.sub(r"[（(]?\s*包含钩子[^）)]*[）)]?", "", s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    return s
+
+
 def _clean_reply(text):
     """把网页回复整理成可直接配音的一行文案。
 
     - DeepSeek 用 <p> 分块，extractCleanText 会留 \\n；TTS 原样接收会读出停顿，
       故合并为一行（tts_client.tts() 不做任何文本清洗，必须在这里处理）。
     - 去掉模型常见的整段引号包裹与「文案：」这类前缀。
+    - 剔除「注：…」等元信息尾巴（TTS 会把它也念出来）。
     """
     import re
     s = _normalize(text)
@@ -427,6 +453,8 @@ def _clean_reply(text):
     # 整体被引号包裹时剥掉
     if len(s) > 1 and s[0] in "\"'“‘「『" and s[-1] in "\"'”’」』":
         s = s[1:-1].strip()
+    # 🆕 剔除「注：文案共136字…」等元信息尾巴
+    s = _strip_tts_meta(s)
     return s
 
 

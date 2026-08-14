@@ -1052,13 +1052,13 @@ async function doDedup() {
   setWorkflowStep(3);
   try {
     await withBusy(el.btnDedup, "开始单条去重", async () => {
-      const res = await callToolWithConfirm("dedup_video", args, () => {
-        startProgress("dedup", "正在生成单条变体并执行五项自检", {
-          duration: lastProbeInfo && lastProbeInfo.duration,
-          level,
-          dimensions,
-        });
+      // orb 必须在 callToolWithConfirm 之前就显示（后者首次调用若直接返回结果则回调永不执行）
+      startProgress("dedup", "正在生成单条变体并执行五项自检", {
+        duration: lastProbeInfo && lastProbeInfo.duration,
+        level,
+        dimensions,
       });
+      const res = await callToolWithConfirm("dedup_video", args);
       if (res.kind === "cancelled") {
         setWorkflowStep(2);
         return;
@@ -1101,7 +1101,29 @@ function renderDedup(d) {
   el.btnDeliver.title = dedupDeliveryReady ? "" : "五项自检全部通过后才可确认交付";
   setCheck(el.chkMd5, c.md5_changed);
   setCheck(el.chkRes, c.resolution_kept);
-  setCheck(el.chkDur, c.duration_close);
+
+  // 时长合规：动态标签（根据通过/失败 + TTS 状态显示有意义的说明）
+  const srcDur = (d.src && d.src.duration) || 0;
+  const outDur = (d.output && d.output.duration) || 0;
+  const ap = d.applied_params || {};
+  const ttsOn = !!(ap.tts_applied && ap.tts_duration);
+  if (c.duration_close === true) {
+    if (ttsOn) {
+      setCheck(el.chkDur, true, "配音时长匹配（" + outDur.toFixed(1) + "s ≈ TTS " + ap.tts_duration.toFixed(1) + "s）");
+    } else {
+      var delta = Math.abs(outDur - srcDur);
+      setCheck(el.chkDur, true, "变化处于允许范围（" + delta.toFixed(2) + "s）");
+    }
+  } else {
+    if (ttsOn) {
+      var diff = Math.abs(outDur - ap.tts_duration);
+      setCheck(el.chkDur, false, "配音时长偏差 " + diff.toFixed(2) + "s（超出 ±5%）");
+    } else {
+      var delta2 = Math.abs(outDur - srcDur);
+      setCheck(el.chkDur, false, "变化超出允许范围（Δ" + delta2.toFixed(2) + "s）");
+    }
+  }
+
   setCheck(el.chkMinDur, c.min_duration_ok);
 
   // phash 行：avg / min / weak_frame_ratio / method
@@ -1179,12 +1201,14 @@ function renderDedup(d) {
   el.dedupCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-function setCheck(node, ok) {
+function setCheck(node, ok, label) {
   node.classList.remove("pass", "fail");
   const mk = node.querySelector(".check-mark");
+  const sm = node.querySelector("small");
   if (ok === true) { node.classList.add("pass"); mk.innerHTML = '<svg class="ico-14" style="color:var(--audit)" aria-label="通过"><use href="#ico-checkmark"/></svg>'; }
   else if (ok === false) { node.classList.add("fail"); mk.innerHTML = '<svg class="ico-14" style="color:var(--warned)" aria-label="未通过"><use href="#ico-xmark"/></svg>'; }
   else { mk.textContent = "—"; }
+  if (label !== undefined && sm) sm.textContent = label;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1213,18 +1237,18 @@ async function doFission() {
   setWorkflowStep(3);
   try {
     await withBusy(el.btnFission, "开始裂变", async () => {
-      const res = await callToolWithConfirm("batch_fission", args, () => {
-        activeFissionTaskId = args.task_id;
-        fissionCancelPending = false;
-        el.btnCancelFission.disabled = false;
-        el.btnCancelFission.textContent = "取消裂变";
-        startProgress("fission", "正在逐个生成变体并计算距离矩阵", {
-          duration: lastProbeInfo && lastProbeInfo.duration,
-          count,
-          level,
-          dimensions,
-        });
+      // orb + 取消状态必须在 callToolWithConfirm 之前就就位（后者首次调用若直接返回结果则回调永不执行）
+      activeFissionTaskId = args.task_id;
+      fissionCancelPending = false;
+      el.btnCancelFission.disabled = false;
+      el.btnCancelFission.textContent = "取消裂变";
+      startProgress("fission", "正在逐个生成变体并计算距离矩阵", {
+        duration: lastProbeInfo && lastProbeInfo.duration,
+        count,
+        level,
+        dimensions,
       });
+      const res = await callToolWithConfirm("batch_fission", args);
       if (res.kind === "cancelled") {
         setWorkflowStep(2);
         return;
@@ -1958,10 +1982,15 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
   // 🆕元宝改写预览按钮
   var btnPreview = document.getElementById("btn-rewrite-preview");
   var previewBox = document.getElementById("rewrite-preview");
+  var _rewriteInFlight = false; // 防止重复点击导致多路 yuanbao-done 串台（加载旧文案）
   if (btnPreview) {
     btnPreview.addEventListener("click", async function () {
       var src = currentAsset();
       if (!src) { toast("请先上传并探测视频素材", "warn"); return; }
+      if (_rewriteInFlight) { toast("改写进行中，请等待本次完成", "warn"); return; }
+      _rewriteInFlight = true;
+      // 清空上一次残留的改写结果，避免失败/串台时旧文案被「确认使用」误填
+      if (previewBox) previewBox.dataset.rewritten = "";
       var elTemplate = document.getElementById("tts-template");
       var template = elTemplate ? elTemplate.value.trim() : "";
       var elTopic = document.getElementById("tts-topic");
@@ -1995,8 +2024,12 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
         // 一次性监听 done 事件（content-yuanbao.js:48 chrome.runtime.sendMessage → 主世界 shim → __desktopYuanbao → IPC yuanbao-done）
         var donePayload = await new Promise(function (resolve) {
           var resolved = false;
+          var reqId = null;
           var unsub = window.desktop.onYuanbaoDone(function (payload) {
             if (resolved) return;
+            // 只接受本次请求的回包；上一次/并发请求的旧回包会被忽略，杜绝加载旧文案
+            var rid = payload && payload.data && payload.data.request_id;
+            if (reqId && rid && rid !== reqId) return;
             resolved = true; try { unsub && unsub(); } catch (_) {}
             resolve(payload);
           });
@@ -2007,12 +2040,19 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
             topic: topic,
             max_chars: ctx.max_chars || 30,
           }).then(function (r) {
+            if (r && r.request_id) reqId = r.request_id;
             if (!r || !r.ok) {
               if (resolved) return;
               resolved = true; try { unsub && unsub(); } catch (_) {}
               resolve({ action: "yb-done", data: { error: (r && r.error) || "元宝窗口未就绪" } });
             }
           });
+          // 安全兜底：长时间无回包时释放监听（避免监听器泄漏），按改写超时上限放宽
+          setTimeout(function () {
+            if (resolved) return;
+            resolved = true; try { unsub && unsub(); } catch (_) {}
+            resolve({ action: "yb-done", data: { error: "改写等待超时（无回包），请重试" } });
+          }, 180000);
         });
 
         var d = (donePayload && donePayload.data) || {};
@@ -2045,6 +2085,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
           }, 50);
           toast("元宝改写完成", "ok");
         } else {
+          previewBox.dataset.rewritten = ""; // 失败即清空，绝不保留旧文案
           var diagMsg = d.error || "未获得回复";
           previewBox.innerHTML = '<div style="font-size:12px;color:var(--warned);font-weight:600;margin-bottom:6px;">未获得改写结果</div>' +
             '<div style="font-size:11px;color:var(--gray-300);margin-bottom:6px;max-height:240px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,monospace;background:rgba(255,255,255,.04);padding:6px 8px;border-radius:4px;">' + escapeHtml(diagMsg) + '</div>' +
@@ -2057,6 +2098,7 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
         previewBox.style.display = "";
         toast("改写请求失败：" + (e.message || e), "err");
       } finally {
+        _rewriteInFlight = false;
         this.textContent = origLabel;
         this.disabled = false;
       }

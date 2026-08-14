@@ -142,6 +142,8 @@ function createYuanbaoWindow({ mainWindow, log }) {
 
   ipcMain.handle('yuanbao:run-rewrite', async (_evt, args) => {
     if (!args || typeof args !== 'object') return { ok: false, error: 'args must be an object' };
+    // 每次改写一个唯一 id，回包打标后原样带回；前端据此丢弃上一次/并发的旧回包（避免加载旧文案）
+    const requestId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     try {
       // 1) 帧图 base64 → 临时 jpg 文件（供 yuanbao_client 上传）
       let tmpDir = null;
@@ -177,7 +179,7 @@ function createYuanbaoWindow({ mainWindow, log }) {
       child.stdout?.on('data', (d) => { out += d; });
       child.stderr?.on('data', (d) => { err += d; });
       child.on('error', (e) => {
-        sendYuanbaoDone(mainWindow, { rewritten: null, error: 'spawn 失败: ' + e.message });
+        sendYuanbaoDone(mainWindow, { rewritten: null, error: 'spawn 失败: ' + e.message, request_id: requestId });
         cleanupDir(tmpDir);
       });
       child.on('close', () => {
@@ -185,11 +187,12 @@ function createYuanbaoWindow({ mainWindow, log }) {
         try { parsed = JSON.parse(out.trim()); } catch (_) {
           parsed = { rewritten: null, error: (out.trim() || err.trim() || '无输出').slice(0, 500) };
         }
+        parsed.request_id = requestId;
         sendYuanbaoDone(mainWindow, parsed);
         cleanupDir(tmpDir);
       });
 
-      return { ok: true, message: 'started' };
+      return { ok: true, message: 'started', request_id: requestId };
     } catch (e) {
       log?.error?.('[yuanbao] run-rewrite failed:', e.message);
       return { ok: false, error: e.message || String(e) };

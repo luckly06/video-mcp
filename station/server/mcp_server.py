@@ -428,6 +428,14 @@ def _exec_tool(name, args):
                 rewrite_meta["error"] = str(e)[:300]
                 logging.getLogger("vu").warning(f"改写异常: {e}")
 
+        # 🆕 兜底清洗：无论手动文案还是元宝改写，都剔除「注：文案共N字…」等会被 TTS 念出来的元信息
+        if tts_text:
+            try:
+                import copy_rewriter as CR
+                tts_text = CR._strip_tts_meta(tts_text)
+            except Exception:
+                pass
+
         r = P.dedup_video(
             args["src"],
             params=args.get("params"),
