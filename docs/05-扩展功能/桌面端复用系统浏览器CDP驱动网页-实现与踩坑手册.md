@@ -285,6 +285,7 @@ async def _wait_reply(page, timeout):
 | 9 | `taskkill` 杀掉所有 Edge 后**不重开**用户浏览器 | 用户标签页全丢、体验崩 | 复制完登录态后重开用户浏览器；收尾只按 PID 树回收调试实例 |
 | 10 | 复制登录态时用 `copy2` 直接拷 **Cookies**（运行中被锁） | 文件级独占锁，读都读不到 | 先关浏览器；用 `sqlite3 backup` 拿一致快照 |
 | 11 | 用 `str.format()` 给**含 JS/代码**的模板注入参数（模板里有 `{ }` 花括号：`{type:'image/png'}`、`if{}`、箭头函数体、`new Event({bubbles:true})`） | `.format()` 把所有 `{` 当占位符解析 → `ValueError: unexpected '{' in field name`，脚本生成直接崩（表象：改写子进程报「未获得改写结果」） | 模板里所有**字面花括号必须转义为 `{{` `}}`**；或彻底别用 `.format()`，改用 `.replace()` + 唯一哨兵令牌（如 `<<<FRAMES>>>`）避免整类坑 |
+| 12 | 用 `input.files = DataTransfer + dispatchEvent('change')` 在**页面内**给 **React 应用**的 file input 灌文件（如元宝上传图片） | React 受控组件只认**受信**的 input/change 事件；JS 合成的 `new Event('change')` 是 untrusted，React 的 onChange **不触发** → 文件看似塞进去了，但框架没收到，上游（元宝）自然收不到图片（表象：提示词里没有图片，但也不报错） | 用 Playwright 的 `locator('input[type=file"]').set_input_files(paths)`——浏览器内部**受信**注入，React 能正确响应，且**不弹系统文件对话框**（与 `expect_file_chooser` 无关）。扩展版 content script 的 DataTransfer 写法只限非 React / 非受控 input 才有效 |
 
 ---
 
