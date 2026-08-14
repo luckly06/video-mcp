@@ -376,7 +376,9 @@ function resetResultsForAssetChange() {
   currentFissionArtifacts = [];
   selectedFissionArtifact = null;
   el.btnDeliver.disabled = true;
-  el.btnOpenOutput.disabled = true;
+  el.btnOpenOutput.classList.add("is-disabled");
+  el.btnOpenOutput.setAttribute("aria-disabled", "true");
+  { const _c = el.btnOpenOutput.querySelector(".dl-toggle-input"); if (_c) _c.checked = false; }
   el.btnOpenOutputFission.disabled = true;
   el.probeCard.classList.add("hidden");
   el.dedupCard.classList.add("hidden");
@@ -1154,10 +1156,13 @@ function renderDedup(d) {
     el.dedupArtifactName.textContent = currentDedupArtifact;
     el.dedupArtifact.title = d.output_path;
     el.dedupArtifact.classList.remove("hidden");
-    el.btnOpenOutput.disabled = false;
+    el.btnOpenOutput.classList.remove("is-disabled");
+    el.btnOpenOutput.setAttribute("aria-disabled", "false");
   } else {
     el.dedupArtifact.classList.add("hidden");
-    el.btnOpenOutput.disabled = true;
+    el.btnOpenOutput.classList.add("is-disabled");
+    el.btnOpenOutput.setAttribute("aria-disabled", "true");
+    { const _c = el.btnOpenOutput.querySelector(".dl-toggle-input"); if (_c) _c.checked = false; }
   }
 
   const src = d.src || {};
@@ -1818,8 +1823,40 @@ el.btnDedup.addEventListener("click", doDedup);
 el.btnFission.addEventListener("click", doFission);
 el.btnCancelFission.addEventListener("click", cancelFission);
 el.btnOpenOutputTop.addEventListener("click", () => downloadArtifact(currentDedupArtifact));
-el.btnOpenOutput.addEventListener("click", () => downloadArtifact(currentDedupArtifact));
 el.btnOpenOutputFission.addEventListener("click", () => downloadArtifact(selectedFissionArtifact));
+
+// 下载产物（Uiverse 动画按钮）：未下载 → 点击下载并播放动画；已下载(变绿) → 点击打开产物文件夹
+el.btnOpenOutput.addEventListener("click", () => {
+  if (el.btnOpenOutput.classList.contains("is-disabled")) return;
+  const check = el.btnOpenOutput.querySelector(".dl-toggle-input");
+  if (!check) return;
+  if (!check.checked) {
+    check.checked = true; // 触发 CSS 下载动画
+    if (currentDedupArtifact) downloadArtifact(currentDedupArtifact);
+    else toast("暂无可下载的产物", "warn");
+  } else {
+    openOutputFolderDl(currentDedupArtifact);
+  }
+});
+el.btnOpenOutput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.btnOpenOutput.click(); }
+});
+
+// 打开产物文件夹（复用本地后端 /local/open-output，Windows 下 os.startfile 定位文件）
+async function openOutputFolderDl(filename) {
+  try {
+    const resp = await fetch(OPEN_OUTPUT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(filename ? { filename } : {}),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok !== true) throw new Error(data.message || "HTTP " + resp.status);
+    toast(filename ? "已在输出文件夹中定位：" + filename : "已打开输出文件夹。", "ok");
+  } catch (e) {
+    toast("打开输出文件夹失败：" + (e.message || e), "warn");
+  }
+}
 el.fissionList.addEventListener("click", (e) => {
   const item = e.target.closest("[data-artifact-name]");
   if (!item) return;

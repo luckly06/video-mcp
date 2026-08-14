@@ -312,7 +312,17 @@
           <div class="artifact-highlight hidden" id="dedup-artifact"><span class="artifact-label">产物文件</span><strong id="dedup-artifact-name"></strong><span>已生成，可下载保存</span></div>
           <pre id="dedup-detail" class="dedup-detail"></pre>
           <div class="result-actions">
-            <button id="btn-open-output" class="btn btn-primary" type="button" disabled>下载产物</button>
+            <div class="dl-toggle is-disabled" id="btn-open-output" role="button" tabindex="0" aria-label="下载产物：点击下载，下载完成后点击打开文件夹" aria-disabled="true">
+              <input type="checkbox" class="dl-toggle-input" aria-hidden="true" tabindex="-1" />
+              <span class="dl-toggle-circle">
+                <svg class="dl-toggle-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none">
+                  <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 19V5m0 14-4-4m4 4 4-4"></path>
+                </svg>
+                <div class="dl-toggle-square"></div>
+              </span>
+              <p class="dl-toggle-title">下载产物</p>
+              <p class="dl-toggle-title">打开文件夹</p>
+            </div>
             <button id="btn-download-fission" class="btn btn-primary" type="button" disabled style="display:none">下载选中的裂变产物</button>
             <button id="btn-deliver" class="btn btn-success" type="button" disabled title="五项自检全部通过后才可确认交付">确认交付</button>
             <button id="btn-regen" class="btn btn-secondary" type="button">再生成变体</button>
