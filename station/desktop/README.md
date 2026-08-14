@@ -16,7 +16,9 @@ npm start            # 等价于 electron .
 
 启动后弹出 1280×900 窗口，标题「视频去重工位」，加载 `archive/web/index.html`。
 
-**本地后端**：`npm start` 会自动 spawn 本机 Python venv 的 `station/server/mcp_server.py`（监听 `127.0.0.1:8765`），就绪后再建窗口；退出时自动回收子进程。若端口已有一个 server 在跑，直接复用不重复 spawn。
+**本地后端**：`npm start` 会自动 spawn 本机 Python venv 的 `station/server/mcp_server.py`（默认监听 `127.0.0.1:8765`），就绪后再建窗口；退出时自动回收子进程。开发态若端口已有一个 server 在跑，直接复用不重复 spawn；打包态会优先避开旧 `8765` 后端，尝试 `8766-8774` 拉起随包新后端。
+
+**打包态上传目录**：双击 exe 启动时，上传素材会写入 `%USERPROFILE%\\Videos\\视频去重素材`，再由后端处理，避免继续依赖 `AppData/Local/Temp` 临时路径。
 
 本地后端依赖（缺失时按能力降级，不影响启动）：
 - Python venv：优先 `%USERPROFILE%\.workbuddy\binaries\python\envs\default\Scripts\python.exe`，回退系统 `python`

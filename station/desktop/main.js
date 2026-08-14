@@ -18,7 +18,7 @@ const { attachDownloadHandlers } = require('./lib/download');
 const { createLogger } = require('./lib/logger');
 const { createYuanbaoWindow } = require('./lib/yuanbao-window');
 const { startLocalServer, stopLocalServer } = require('./lib/local-server');
-const { resolveAppIconPath, resolveWebIndexPath } = require('./lib/paths');
+const { resolveAppIconPath, resolveDesktopAssetsDir, resolveWebIndexPath } = require('./lib/paths');
 
 // ---------- 1. userData 隔离 ----------
 // 避免与机器上其他 Electron 应用共享缓存目录
@@ -81,7 +81,11 @@ async function bootstrap() {
     apiBase = override.replace(/\/+$/, '');
     log.info(`[main] 使用外部 API_BASE = ${apiBase}（不拉起本地后端）`);
   } else {
-    const local = await startLocalServer({ log });
+    const local = await startLocalServer({
+      log,
+      assetsDir: app.isPackaged ? resolveDesktopAssetsDir() : undefined,
+      preferFresh: app.isPackaged,
+    });
     localServerChild = local.child;
     apiBase = local.baseUrl;
   }

@@ -1005,10 +1005,12 @@ class Handler(BaseHTTPRequestHandler):
                     if not m:
                         raise ValueError("未找到文件名")
                     filename = Path(m.group(1)).name
-                    dest = P.VIDEO_DIR / filename
+                    upload_dir = P.VIDEO_DIR
+                    upload_dir.mkdir(parents=True, exist_ok=True)
+                    dest = upload_dir / filename
                     # 清理旧上传（超过 1 小时）
                     now = time.time()
-                    for f in P.VIDEO_DIR.glob("*"):
+                    for f in upload_dir.glob("*"):
                         if f.is_file() and f.name != ".gitkeep" and now - f.stat().st_mtime > 3600:
                             try: f.unlink()
                             except Exception: pass

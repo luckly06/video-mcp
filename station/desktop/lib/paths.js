@@ -34,10 +34,15 @@ function resolveAppIconPath() {
     : path.join(__dirname, '..', 'build', 'icon.ico');
 }
 
+function resolveDesktopAssetsDir() {
+  return path.join(app.getPath('videos'), '视频去重素材');
+}
+
 module.exports = {
   resolveResource,
   resolveWebIndexPath,
   resolveServerScriptPath,
   resolveExtensionFilePath,
   resolveAppIconPath,
+  resolveDesktopAssetsDir,
 };

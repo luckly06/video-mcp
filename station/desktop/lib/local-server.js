@@ -19,6 +19,7 @@ const { resolveServerScriptPath } = require('./paths');
 
 const SERVER_HOST = '127.0.0.1';
 const SERVER_PORT = 8765;
+const PACKAGED_FRESH_PORT_TRIES = 10;
 
 // station/server/mcp_server.py（开发态走仓库；打包态走 process.resourcesPath）
 const SERVER_PY = resolveServerScriptPath('mcp_server.py');
@@ -52,6 +53,21 @@ function resolveAsrModels(env) {
   return null;
 }
 
+function baseUrlFor(port) {
+  return `http://${SERVER_HOST}:${port}`;
+}
+
+function resolveAssetsDir(env, assetsDir, log) {
+  const configured = (env.VU_ASSETS || assetsDir || '').trim();
+  if (!configured) return null;
+
+  const resolved = path.resolve(configured);
+  fs.mkdirSync(resolved, { recursive: true });
+  env.VU_ASSETS = resolved;
+  log?.info?.(`[local-server] VU_ASSETS=${resolved}`);
+  return resolved;
+}
+
 /** 探测后端是否已就绪（POST /mcp server/discover 返回 200）。 */
 function probe(baseUrl) {
   return new Promise((resolve) => {
@@ -77,21 +93,40 @@ function probe(baseUrl) {
  * 启动本地 MCP 后端。
  * @param {object} [opts]
  * @param {object} [opts.log] logger 实例（可选）
+ * @param {string} [opts.assetsDir] 打包态用户可写素材目录
+ * @param {boolean} [opts.preferFresh] 是否避开已存在端口服务，强制拉起新后端
  * @returns {Promise<{baseUrl:string, child:object|null, reused:boolean, error?:string}>}
  */
-function startLocalServer({ log } = {}) {
-  const baseUrl = `http://${SERVER_HOST}:${SERVER_PORT}`;
+async function startLocalServer({ log, assetsDir, preferFresh = false } = {}) {
+  const ports = preferFresh
+    ? Array.from({ length: PACKAGED_FRESH_PORT_TRIES }, (_, i) => SERVER_PORT + i)
+    : [SERVER_PORT];
+  let firstReusableBaseUrl = null;
 
-  return probe(baseUrl).then((alreadyUp) => {
+  for (const port of ports) {
+    const baseUrl = baseUrlFor(port);
+    const alreadyUp = await probe(baseUrl);
     if (alreadyUp) {
+      if (preferFresh) {
+        firstReusableBaseUrl = firstReusableBaseUrl || baseUrl;
+        log?.info?.(`[local-server] 端口已有 MCP，打包态跳过旧服务: ${baseUrl}`);
+        continue;
+      }
       log?.info?.(`[local-server] 端口已就绪，复用现有 MCP: ${baseUrl}`);
       return { baseUrl, child: null, reused: true };
     }
 
     const py = resolvePython();
-    const env = { ...process.env, VU_HOST: SERVER_HOST, VU_PORT: String(SERVER_PORT) };
+    const env = { ...process.env, VU_HOST: SERVER_HOST, VU_PORT: String(port) };
     const asr = resolveAsrModels(env);
     if (asr) env.VU_ASR_MODELS = asr;
+    try {
+      resolveAssetsDir(env, assetsDir, log);
+    } catch (e) {
+      const error = `assets dir unavailable: ${e && e.message ? e.message : String(e)}`;
+      log?.error?.(`[local-server] ${error}`);
+      return { baseUrl, child: null, error };
+    }
 
     if (!fs.existsSync(SERVER_PY)) {
       const error = `server script not found: ${SERVER_PY}`;
@@ -143,7 +178,17 @@ function startLocalServer({ log } = {}) {
         });
       })();
     });
-  });
+  }
+
+  if (firstReusableBaseUrl) {
+    log?.info?.(`[local-server] 未找到空闲备用端口，回退复用现有 MCP: ${firstReusableBaseUrl}`);
+    return { baseUrl: firstReusableBaseUrl, child: null, reused: true };
+  }
+
+  const baseUrl = baseUrlFor(SERVER_PORT);
+  const error = `no free port in ${SERVER_PORT}-${SERVER_PORT + PACKAGED_FRESH_PORT_TRIES - 1}`;
+  log?.error?.(`[local-server] ${error}`);
+  return { baseUrl, child: null, error };
 }
 
 /** 停止本地后端子进程。 */
