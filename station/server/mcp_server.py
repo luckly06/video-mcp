@@ -358,8 +358,16 @@ def _exec_tool(name, args):
         except Exception:
             pass
 
-        # 4) 最大字数：中文 TTS 约 3 字/秒，最少 30 字
-        max_chars = max(30, int(duration * 3)) if duration > 0 else 30
+        # 4) 最大字数上限：让元宝改写时按视频时长控制篇幅。
+        #    max_chars = ceil(duration × R × 安全余量)。
+        #    R = MiMo TTS 实际语速（字/秒）。本机校准法：取 N 字固定中文 →
+        #    tts_client.tts() 生成 wav → ffprobe 量秒数 → R = N / 秒数。
+        #    默认 3 字/秒偏保守（文案偏短 → 音频短 → 时长合规失败）；
+        #    中文 TTS 正常语速多为 4~6 字/秒，且「写少了」致命、「写多了」会被
+        #    -shortest 截断（视频时长不变），故乘 1.15 余量向「写多」偏置。
+        TTS_CHARS_PER_SEC = 4.5      # ← 校准后改这里（建议 4~6）
+        TTS_SAFE_MARGIN = 1.15
+        max_chars = max(30, int(duration * TTS_CHARS_PER_SEC * TTS_SAFE_MARGIN)) if duration > 0 else 30
 
         return {
             "raw_text": raw_text,

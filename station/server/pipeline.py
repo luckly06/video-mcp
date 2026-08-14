@@ -331,6 +331,29 @@ def probe_video(path, base_dir=None):
     }
 
 
+def _probe_seconds(path):
+    """轻量取视频时长（秒）。失败返回 0.0。用于 TTS 混音时把音频补齐到视频时长。"""
+    try:
+        p = _resolve_safe(path, OUTPUT_DIR, must_exist=True)
+    except Exception:
+        try:
+            p = _resolve_safe(path, VIDEO_DIR, must_exist=True)
+        except Exception:
+            return 0.0
+    if not FFPROBE.exists():
+        return 0.0
+    try:
+        cmd = [str(FFPROBE), "-v", "quiet", "-print_format", "json",
+               "-show_format", str(p)]
+        rc, out, _ = _run(cmd, timeout=60)
+        if rc != 0:
+            return 0.0
+        data = json.loads(out)
+        return float(data.get("format", {}).get("duration", 0) or 0)
+    except Exception:
+        return 0.0
+
+
 # ---------------------------------------------------------------------------
 # 去重管线核心
 # ---------------------------------------------------------------------------
@@ -729,18 +752,38 @@ def dedup_video(src, params=None, out_name=None, seed=None,
                 speed = float(tts_speed or 1.0)
                 wav_path = T.tts_to_temp(tts_text.strip(), voice=voice, speed=speed)
                 try:
-                    # 替换音轨：取原视频流 + TTS 音频
+                    # 取去重后视频时长，把 TTS 音频补齐到该时长再混音。
+                    # 关键修复：旧逻辑用 -shortest 直接取「视频/音频较短者」，
+                    # 当 TTS 文案偏短、音频短于视频时，会把【视频】截短 → 成片时长
+                    # 大幅缩水 → duration_close 自检失败（用户报「时长不够」）。
+                    # 这里用 apad 把音频静音补齐到视频时长；-shortest 仍保留
+                    # （音频长于视频时截断，视频时长不变，时长自检安全）。
+                    _vdur = _probe_seconds(str(out_path))
                     tmp_out = Path(str(out_path) + ".tts.mp4")
-                    mix_cmd = [
-                        str(FFMPEG), "-y",
-                        "-i", str(out_path),
-                        "-i", str(wav_path),
-                        "-c:v", "copy",
-                        "-c:a", "aac", "-b:a", "128k",
-                        "-shortest",
-                        "-map", "0:v:0", "-map", "1:a:0",
-                        str(tmp_out),
-                    ]
+                    if _vdur > 0:
+                        mix_cmd = [
+                            str(FFMPEG), "-y",
+                            "-i", str(out_path),
+                            "-i", str(wav_path),
+                            "-filter_complex", f"[1:a]apad=whole_dur={_vdur:.3f}[a]",
+                            "-map", "0:v:0", "-map", "[a]:0",
+                            "-c:v", "copy",
+                            "-c:a", "aac", "-b:a", "128k",
+                            "-shortest",
+                            str(tmp_out),
+                        ]
+                    else:
+                        # 取不到视频时长时退化为原逻辑，避免引入更糟的失败
+                        mix_cmd = [
+                            str(FFMPEG), "-y",
+                            "-i", str(out_path),
+                            "-i", str(wav_path),
+                            "-c:v", "copy",
+                            "-c:a", "aac", "-b:a", "128k",
+                            "-shortest",
+                            "-map", "0:v:0", "-map", "1:a:0",
+                            str(tmp_out),
+                        ]
                     rc2, _, err2 = _run(mix_cmd, timeout=120)
                     if rc2 == 0:
                         tmp_out.replace(out_path)
