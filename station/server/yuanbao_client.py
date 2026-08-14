@@ -668,79 +668,107 @@ async def main():
         print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝显示未登录：复制到调试 Edge 的登录态未生效（Cookie 加密绑定所致）。请在弹出的调试 Edge 窗口里扫码登录一次，之后会一直复用该实例。"}}, ensure_ascii=False))
         return
 
-    # === 图片上传：点 + 弹菜单 → Playwright click"图片" → expect file_chooser ===
+    # === 图片上传：对齐已验证的 content-yuanbao.js（直接灌 input[type=file]，不依赖原生对话框）===
     frames = {frames}
     if frames:
-        ub = page.locator('div[class*="UploadFileSelector_iconContainer"]').first
-        if await ub.count() > 0:
-            try: await page.screenshot(path=r"{station_dir}" + "/yb_before_click.png")
-            except: pass
-            await ub.click()
-            await asyncio.sleep(1)
-            try: await page.screenshot(path=r"{station_dir}" + "/yb_menu_open.png")
-            except: pass
-            # 用 Playwright 真鼠标事件点"图片"菜单（React 需要完整 MouseEvent）
-            pic = page.get_by_text("图片", exact=True).first
-            if await pic.count() == 0:
-                pic = page.locator('div').filter(has_text="图片").first
-            print(f"[yuanbao] 图片菜单 count={{await pic.count()}}", file=sys.stderr)
-            try:
-                # 点图片时预期触发原生文件对话框 → Playwright 拦截
-                async with page.expect_file_chooser(timeout=10000) as fc:
-                    await pic.click(force=True)
-                chooser = await fc.value
-                await chooser.set_files(frames[:3])
-                print(f"[yuanbao] file_chooser ok", file=sys.stderr)
-                # 等图片在输入框里出现（元宝会在 editor 里显示缩略图）
-                await asyncio.sleep(5)
-                try: await page.screenshot(path=r"{station_dir}" + "/yb_images_attached.png")
-                except: pass
-            except Exception as eu:
-                print(f"[yuanbao] file_chooser err: {{eu}}", file=sys.stderr)
-                # 兜底：等 file input 出现用 set_input_files
-                await asyncio.sleep(1)
-                n = await page.locator('input[type="file"]').count()
-                print(f"[yuanbao] file inputs={{n}}", file=sys.stderr)
-                if n > 0:
-                    try:
-                        await page.locator('input[type="file"]').last.set_input_files(frames[:3])
-                        print(f"[yuanbao] set_input_files ok", file=sys.stderr)
-                        await asyncio.sleep(2)
-                    except Exception as eu2:
-                        print(f"[yuanbao] set_input_files err: {{eu2}}", file=sys.stderr)
-            try: await page.screenshot(path=r"{station_dir}" + "/yb_after_click.png")
-            except: pass
+        try:
+            import base64 as _b64
+            _imgs = []
+            for i, b in enumerate(frames[:3]):
+                _src = b
+                if _src.startswith('data:'):
+                    _src = _src.split(',', 1)[1]
+                try:
+                    _data = _b64.b64decode(_src)
+                    _p = r"{station_dir}" + ("/_yb_frame_%d.png" % i)
+                    with open(_p, "wb") as _f:
+                        _f.write(_data)
+                    _imgs.append(_p)
+                except Exception:
+                    if os.path.exists(b):
+                        _imgs.append(b)  # 已经是文件路径
+            if _imgs:
+                ub = page.locator('[class*="UploadFileSelector_iconContainer"]').first
+                if await ub.count() > 0:
+                    await ub.click()
+                    await asyncio.sleep(0.8)
+                # 点"图片"菜单（XPath 精确匹配文本，避免误触其它含"图片"的节点）
+                pic = page.locator("xpath=//*[normalize-space(text())='图片']").first
+                if await pic.count() > 0:
+                    await pic.click()
+                    await asyncio.sleep(0.5)
+                await asyncio.sleep(0.8)
+                fi = page.locator('input[type="file"]').first
+                if await fi.count() > 0:
+                    await fi.set_input_files(_imgs)
+                    log("已上传 %d 张图片" % len(_imgs))
+                    await asyncio.sleep(4)
+                else:
+                    log("未找到 input[type=file]，图片未上传")
+                for _p in _imgs:
+                    try: os.remove(_p)
+                    except Exception: pass
+        except Exception as eu:
+            log("图片上传异常: " + str(eu)[:200])
 
     # === 改写 ===
     raw = {raw_text}
     topic = {topic}
     pmt = _R._build_prompt(raw, template={tmpl}, max_chars={max_chars}, topic=topic)
 
-    sel = 'textarea[placeholder*="输入"],div[contenteditable="true"]'
-    try:
-        await page.wait_for_selector(sel, timeout=15000)
-    except Exception as e:
+    # 多选择器 + 可见性校验，对齐 content-yuanbao.js 的 SEL_EDITOR
+    editor = None
+    for _sel in ['div[contenteditable="true"]', 'textarea[placeholder*="输入"]', 'textarea[placeholder*="描述"]']:
+        cands = page.locator(_sel)
+        nc = await cands.count()
+        for i in range(nc):
+            e = cands.nth(i)
+            try:
+                if await e.is_visible():
+                    editor = e
+                    break
+            except Exception:
+                pass
+        if editor is not None:
+            break
+    if editor is None:
         try: await page.screenshot(path=r"{station_dir}" + "/logs/yb_no_editor.png")
         except Exception: pass
-        log("找不到输入框: " + str(e)[:200])
+        log("找不到可见的输入框")
         print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝页面找不到输入框（截图见 station/server/logs/yb_no_editor.png），可能未登录或页面结构变化。"}}, ensure_ascii=False))
         return
-    ed = page.locator(sel).first
-    await ed.click()
-    await asyncio.sleep(0.3)
-    await ed.fill(pmt)
-    await asyncio.sleep(0.3)
-    log("已填入提示词 %d 字，回车发送" % len(pmt))
+
+    # 填充：contenteditable 用 innerText，textarea 用 value；都需 dispatch input 事件
+    # （Playwright 的 fill() 仅支持 input/textarea，对 contenteditable 会失效——这是此前发不出去的根因）
+    await editor.evaluate(
+        "(el, text) => {{ if (el.getAttribute('contenteditable') === 'true') {{ el.innerText = text; }} else {{ el.value = text; }} el.dispatchEvent(new Event('input', {{bubbles:true}})); }}",
+        pmt)
+    await asyncio.sleep(0.4)
+    log("已填入提示词 %d 字" % len(pmt))
+
+    # 发送：先 Enter，再回退点"发送"按钮（对齐 content-yuanbao.js）
     bl = await page.locator('.hyc-common-markdown,[class*="answer"],[class*="reply"],[class*="bubble"]').count()
-    await page.keyboard.press("Enter")
+    try:
+        await editor.press("Enter")
+    except Exception:
+        pass
+    await asyncio.sleep(0.5)
+    if not await is_generating(page):
+        try:
+            btn = page.locator('button:has-text("发送"), [aria-label*="发送"]').first
+            if await btn.count() > 0:
+                await btn.click()
+                await asyncio.sleep(0.5)
+        except Exception:
+            pass
+
+    # 等回复（基线对话数 + 双采样稳定）
     rw = ""
-    last_text = ""
     t0 = asyncio.get_event_loop().time()
     while asyncio.get_event_loop().time() - t0 < {timeout}:
         if not await is_generating(page):
             t = await read_last_reply(page, bl)
             if t:
-                # 等文本稳定：隔 2 秒再读一次，不变才接受
                 await asyncio.sleep(2)
                 if not await is_generating(page):
                     t2 = await read_last_reply(page, bl)
