@@ -1043,7 +1043,7 @@ function readTTS() {
 /**
  * TTS 配音未生效时，弹出原生对话框提示用户（桌面端）；
  * 非桌面端（纯网页）降级为页内 toast。
- * 触发条件：用户「启用了 TTS」但产物没有成功配音。两种意图都算“启用”：
+ * 触发条件：仅单条去重中，用户「启用了 TTS」但产物没有成功配音。两种意图都算“启用”：
  *   - 手动填文案：args.tts_text 有值，但产物 applied.tts_applied 为 false → 展示失败原因。
  *   - 改写+配音：args.rewrite_template 有值，但产物无 tts_applied →
  *     改写失败（元宝未登录/超时）或改写成功但 TTS 混音失败。
@@ -1140,7 +1140,8 @@ async function doDedup() {
       setWorkflowStep(4);
       renderDedup(res.data);
       const _ap = res.data.applied_params || {};
-      // 用户启用了 TTS（手动文案或改写模式）但产物未成功配音 → 原生弹窗提示
+      // 单条去重：用户启用了 TTS（手动文案或改写模式）但产物未成功配音 → 原生弹窗提示。
+      // 批量裂变当前设计为不支持 TTS 配音，因此不应复用此提醒。
       const _ttsRequested = !!(args.tts_text) || !!(args.rewrite_template);
       if (_ttsRequested && !_ap.tts_applied) {
         notifyTtsFailure(args, _ap, "去重");
@@ -1337,16 +1338,7 @@ async function doFission() {
       if (!res.data.cancelled) learnProgressDuration("fission");
       setWorkflowStep(res.data.cancelled ? 3 : 4);
       renderFission(res.data);
-      // 用户启用了 TTS（手动文案或改写模式）但产物未成功配音 → 原生弹窗提示
-      const _ttsRequested = !!(args.tts_text) || !!(args.rewrite_template);
-      if (_ttsRequested) {
-        const _variants = res.data.variants || [];
-        const _anyTts = _variants.some((v) => v.applied_params && v.applied_params.tts_applied);
-        if (!_anyTts) {
-          const _rep = (_variants.find((v) => v.applied_params && v.applied_params.tts_text) || {}).applied_params || {};
-          notifyTtsFailure(args, _rep, "裂变");
-        }
-      }
+      // 批量裂变当前不支持 TTS 配音；即使页面上存在改写/TTS 参数，也不弹 TTS 未生效提醒。
       const allPass = res.data.matrix && res.data.matrix.all_pass;
       const deliveryReady = res.data.delivery_ready === true;
       if (res.data.cancelled) {

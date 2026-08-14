@@ -114,6 +114,7 @@ station/desktop/
 ## 已知边界
 
 - **下载带宽瓶颈未优化**：服务端 `/local/download` 仍 100 MB ≈ 3-4 分钟。本轮只在体验层加原生进度条；带宽问题须 OSS 迁移（独立决策 `docs/05-扩展功能/decisions/2026-08-12-下载瓶颈冻结与对象存储迁移.md`）。
+- **批量裂变不支持 TTS 配音**：TTS 未生效弹窗只用于单条去重中用户主动启用 AI 配音但配音失败的场景；裂变流程不提示配置 `MIMO_API_KEY` / `openai`。
 - **HMAC requestState 进程本地**：服务端重启会作废进行中的确认流。renderer 需在收到 401/State 错误时引导用户重试。
 - **未签名**：当前产物为 Windows portable exe，未做代码签名，首次运行可能触发系统安全提示。
 
