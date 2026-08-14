@@ -668,76 +668,58 @@ async def main():
         print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝显示未登录：复制到调试 Edge 的登录态未生效（Cookie 加密绑定所致）。请在弹出的调试 Edge 窗口里扫码登录一次，之后会一直复用该实例。"}}, ensure_ascii=False))
         return
 
-    # === 图片上传：用 page.evaluate 在页面内执行 DataTransfer 灌文件 ===
-    # 关键：不能用 Playwright .click() 点「上传」或「图片」按钮——那会经过浏览器事件链
-    #       触发 <input type=file> 的原生 .click() → 弹出系统文件选择器 → 卡死。
-    #       必须像 content-yuanbao.js 一样在 DOM 内用 DataTransfer 绕过原生对话框。
+    # === 图片上传：Playwright set_input_files 直接灌真实文件路径（受信注入）===
+    # 关键结论：元宝是 React 应用。直接 input.files=DataTransfer + dispatchEvent 在 React 受控组件下
+    #           不触发 onChange → 元宝收不到图片（图片没带上）。必须用 Playwright 的 set_input_files，
+    #           它由浏览器内部受信派发 input/change 事件，React 能正确响应，且【不弹系统文件对话框】
+    #           （set_input_files 与 expect_file_chooser 无关，不会触发原生选择框）。
     frames = {frames}
     if frames:
         try:
             import base64 as _b64
-            _b64_frames = []
-            for b in frames[:3]:
+            _imgs = []
+            for i, b in enumerate(frames[:3]):
                 _src = b
                 if _src.startswith('data:'):
                     _src = _src.split(',', 1)[1]
-                _b64_frames.append(_src)
-
-            # 严格对齐已验证的扩展版 content-yuanbao.js uploadImages（合成事件，不触发原生对话框）：
-            # 聚焦编辑器 → 点上传按钮容器(ub) → 点「图片」菜单 → 轮询 input[type=file] → DataTransfer 灌文件。
-            # 关键：必须点「图片」进入图片模式，否则页面会把文件输入框 .click() → 弹出系统文件选择器。
-            # 全程绝不调用文件输入框自身的 .click()，所以不会弹原生对话框。
-            uploaded = await page.evaluate("""async ([frames_b64]) => {{
-                const sleep = ms => new Promise(r => setTimeout(r, ms));
-                function findElByText(t) {{
-                    const els = [...document.querySelectorAll('*')];
-                    return els.find(e => (e.textContent || '').trim() === t && e.children.length === 0) || null;
-                }}
-                // 1) 聚焦编辑器（元宝上传按钮依赖编辑器聚焦才会出现）
-                for (const sel of ['div[contenteditable=\"true\"]', 'textarea[placeholder*=\"输入\"]', 'textarea[placeholder*=\"描述\"]']) {{
-                    const e = document.querySelector(sel);
-                    if (e) {{ e.focus(); try {{ e.click(); }} catch(_) {{ }} break; }}
-                }}
-                await sleep(400);
-                // 2) 点上传按钮容器
-                const ub = document.querySelector('[class*=\"UploadFileSelector_iconContainer\"]');
-                if (ub) ub.click();
-                await sleep(600);
-                // 3) 点「图片」菜单（进入图片上传模式）
-                const pic = findElByText('图片');
-                if (pic) pic.click();
-                await sleep(800);
-                // 4) 轮询 input[type=file]，用 DataTransfer 直接灌文件（绝不 .click() 文件输入框）
-                return await new Promise(resolve => {{
-                    let tries = 0;
-                    const iv = setInterval(() => {{
-                        tries++;
-                        const fi = document.querySelector('input[type=\"file\"]');
-                        if (fi) {{
-                            try {{
-                                const dt = new DataTransfer();
-                                frames_b64.forEach((b64, i) => {{
-                                    const arr = b64.split(','), bstr = atob(arr.length > 1 ? arr[1] : arr[0]);
-                                    const u8 = new Uint8Array(bstr.length);
-                                    for (let j = 0; j < bstr.length; j++) u8[j] = bstr.charCodeAt(j);
-                                    const f = new File([u8], '_yb_frame_' + i + '.png', {{ type: 'image/png' }});
-                                    dt.items.add(f);
-                                }});
-                                fi.files = dt.files;
-                                fi.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                fi.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                clearInterval(iv);
-                                resolve('OK:' + frames_b64.length);
-                            }} catch(e) {{ clearInterval(iv); resolve('ERR:' + e.message); }}
-                        }} else if (tries > 25) {{ clearInterval(iv); resolve('NO_INPUT'); }}
-                    }}, 200);
-                }});
-            }}""", _b64_frames)
-            log("图片上传结果: " + str(uploaded))
-            if str(uploaded).startswith("OK"):
-                await asyncio.sleep(4)
-            else:
-                log("图片上传失败: " + str(uploaded))
+                try:
+                    _data = _b64.b64decode(_src)
+                    _p = r"{station_dir}" + ("/_yb_frame_%d.png" % i)
+                    with open(_p, "wb") as _f:
+                        _f.write(_data)
+                    _imgs.append(_p)
+                except Exception:
+                    if os.path.exists(b):
+                        _imgs.append(b)
+            if _imgs:
+                # 1) 先直接定位常驻隐藏 input；不存在再点「+」展开上传菜单（只点容器，不点「图片」子项，
+                #    避免元宝自行 fileInput.click() 弹出原生对话框）
+                fi = page.locator('input[type="file"]').first
+                if await fi.count() == 0:
+                    ub = page.locator('[class*="UploadFileSelector_iconContainer"]').first
+                    if await ub.count() > 0:
+                        await ub.click()
+                        await asyncio.sleep(0.8)
+                    fi = page.locator('input[type="file"]').first
+                if await fi.count() > 0:
+                    # 2) 受信注入，不弹窗，且触发 React onChange
+                    await fi.set_input_files(_imgs)
+                    log("已 set_input_files %d 张图片" % len(_imgs))
+                    # 3) 等图片缩略图真正出现在输入框，确保上传完成再发文案
+                    _ok = False
+                    for _ in range(30):
+                        await asyncio.sleep(0.5)
+                        _n = await page.locator('div[contenteditable="true"] img, [class*="upload"] img, [class*="image"] img').count()
+                        if _n > 0:
+                            _ok = True
+                            break
+                    log("图片缩略图出现: " + str(_ok))
+                    await asyncio.sleep(1)
+                else:
+                    log("未找到 input[type=file]，图片未上传")
+                for _p in _imgs:
+                    try: os.remove(_p)
+                    except Exception: pass
         except Exception as eu:
             log("图片上传异常: " + str(eu)[:200])
 
