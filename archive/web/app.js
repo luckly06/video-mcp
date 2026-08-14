@@ -1903,18 +1903,8 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
 
   modeBtns.forEach(function (btn) {
     btn.addEventListener("click", function () {
-      modeBtns.forEach(function (b) {
-        b.classList.remove("active");
-        b.style.background = "transparent";
-        b.style.color = "var(--gray-600)";
-        b.style.boxShadow = "none";
-        b.style.fontWeight = "500";
-      });
+      modeBtns.forEach(function (b) { b.classList.remove("active"); });
       this.classList.add("active");
-      this.style.background = "var(--bg)";
-      this.style.color = "var(--text)";
-      this.style.boxShadow = "0 1px 3px rgba(0,0,0,.08)";
-      this.style.fontWeight = "600";
 
       var mode = this.getAttribute("data-mode");
       if (autoGroup) autoGroup.style.display = mode === "auto" ? "" : "none";

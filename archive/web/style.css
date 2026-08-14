@@ -608,3 +608,27 @@ code {
     linear-gradient(90deg, #e8429b, #9b5be8, #3fc7e8, #b8f25f, #f5b946) border-box;
   box-shadow: 0 0 0 3px rgba(63,199,232,.32);
 }
+
+/* ── TTS 模式二选一按钮（选中态复用输入框彩虹彩色边框） ── */
+.tts-mode-btn {
+  padding: 6px 14px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-600);
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: border-color .2s, box-shadow .2s, background .2s, color .2s;
+}
+.tts-mode-btn:hover { color: var(--brand-primary-dark); }
+.tts-mode-btn.active {
+  color: var(--brand-primary-dark);
+  font-weight: 600;
+  background:
+    linear-gradient(var(--bg), var(--bg)) padding-box,
+    linear-gradient(90deg, #e8429b, #9b5be8, #3fc7e8, #b8f25f, #f5b946) border-box;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 3px rgba(155,91,232,.18);
+}
