@@ -752,38 +752,23 @@ def dedup_video(src, params=None, out_name=None, seed=None,
                 speed = float(tts_speed or 1.0)
                 wav_path = T.tts_to_temp(tts_text.strip(), voice=voice, speed=speed)
                 try:
-                    # 取去重后视频时长，把 TTS 音频补齐到该时长再混音。
-                    # 关键修复：旧逻辑用 -shortest 直接取「视频/音频较短者」，
-                    # 当 TTS 文案偏短、音频短于视频时，会把【视频】截短 → 成片时长
-                    # 大幅缩水 → duration_close 自检失败（用户报「时长不够」）。
-                    # 这里用 apad 把音频静音补齐到视频时长；-shortest 仍保留
-                    # （音频长于视频时截断，视频时长不变，时长自检安全）。
-                    _vdur = _probe_seconds(str(out_path))
+                    # 产物时长 = 配音时长（基于文案长度）：混音用 -shortest 取
+                    # min(视频, 音频) = 配音时长，把视频截到配音长度。
+                    # 文案长度已按视频时长限制（mcp_server.max_chars = 视频时长×语速×0.95），
+                    # 故配音≈视频、旁白完整、尾部画面被裁，无静音尾。
+                    _tts_dur = _probe_seconds(str(wav_path))
+                    applied["tts_duration"] = round(_tts_dur, 3) if _tts_dur > 0 else None
                     tmp_out = Path(str(out_path) + ".tts.mp4")
-                    if _vdur > 0:
-                        mix_cmd = [
-                            str(FFMPEG), "-y",
-                            "-i", str(out_path),
-                            "-i", str(wav_path),
-                            "-filter_complex", f"[1:a]apad=whole_dur={_vdur:.3f}[a]",
-                            "-map", "0:v:0", "-map", "[a]:0",
-                            "-c:v", "copy",
-                            "-c:a", "aac", "-b:a", "128k",
-                            "-shortest",
-                            str(tmp_out),
-                        ]
-                    else:
-                        # 取不到视频时长时退化为原逻辑，避免引入更糟的失败
-                        mix_cmd = [
-                            str(FFMPEG), "-y",
-                            "-i", str(out_path),
-                            "-i", str(wav_path),
-                            "-c:v", "copy",
-                            "-c:a", "aac", "-b:a", "128k",
-                            "-shortest",
-                            "-map", "0:v:0", "-map", "1:a:0",
-                            str(tmp_out),
-                        ]
+                    mix_cmd = [
+                        str(FFMPEG), "-y",
+                        "-i", str(out_path),
+                        "-i", str(wav_path),
+                        "-c:v", "copy",
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-shortest",
+                        "-map", "0:v:0", "-map", "1:a:0",
+                        str(tmp_out),
+                    ]
                     rc2, _, err2 = _run(mix_cmd, timeout=120)
                     if rc2 == 0:
                         tmp_out.replace(out_path)
@@ -823,9 +808,18 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         expected = out_dur if out_dur is not None else src_info["duration"]
         if speed_factor:
             expected = expected / speed_factor
-        duration_close = abs(out_info["duration"] - expected) <= max(0.5, expected * 0.03)
+        dur_tol = max(0.5, expected * 0.03)
     else:
-        duration_close = abs(src_info["duration"] - out_info["duration"]) < 1.0
+        expected = src_info["duration"]
+        dur_tol = 1.0
+
+    # TTS 生效：产物时长 = 配音时长（基于文案长度），以配音时长作为期望值，
+    # 否则输出(配音时长) < 原视频时长 → duration_close 误判失败。
+    if applied.get("tts_applied") and applied.get("tts_duration"):
+        expected = applied["tts_duration"]
+        dur_tol = max(0.5, expected * 0.05)
+
+    duration_close = abs(out_info["duration"] - expected) <= dur_tol
 
     md5_changed = src_info["md5"] != out_info["md5"]
     resolution_kept = (src_info["width"], src_info["height"]) == (out_info["width"], out_info["height"])

@@ -362,11 +362,13 @@ def _exec_tool(name, args):
         #    max_chars = ceil(duration × R × 安全余量)。
         #    R = MiMo TTS 实际语速（字/秒）。本机校准法：取 N 字固定中文 →
         #    tts_client.tts() 生成 wav → ffprobe 量秒数 → R = N / 秒数。
-        #    默认 3 字/秒偏保守（文案偏短 → 音频短 → 时长合规失败）；
-        #    中文 TTS 正常语速多为 4~6 字/秒，且「写少了」致命、「写多了」会被
-        #    -shortest 截断（视频时长不变），故乘 1.15 余量向「写多」偏置。
+        #    中文 TTS 正常语速多为 4~6 字/秒。产物时长 = 配音时长（基于文案长度，
+        #    混音用 -shortest 把视频截到配音长度），故这里要让「配音时长 ≈ 视频时长」：
+        #    写多了会被 -shortest 裁掉旁白（丢内容），写少了视频被大幅截短（丢画面）。
+        #    向「略短」偏置（×0.95）：配音略短于视频 → -shortest 只裁尾部画面、旁白完整。
+        #    ← 校准后改 TTS_CHARS_PER_SEC（建议 4~6，用 calibrate_tts_rate.py 实测）
         TTS_CHARS_PER_SEC = 4.5      # ← 校准后改这里（建议 4~6）
-        TTS_SAFE_MARGIN = 1.15
+        TTS_SAFE_MARGIN = 0.95
         max_chars = max(30, int(duration * TTS_CHARS_PER_SEC * TTS_SAFE_MARGIN)) if duration > 0 else 30
 
         return {
