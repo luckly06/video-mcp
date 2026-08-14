@@ -71,6 +71,7 @@ const el = {
   badgeStatus: $("badge-status"),
   workflowSteps: $("workflow-steps"),
   btnOpenOutputTop: $("btn-open-output-top"),
+  btnToggleSidebars: $("btn-toggle-sidebars"),
 
   whitelist: $("whitelist"),
   toolsList: $("tools-list"),
@@ -129,6 +130,14 @@ const el = {
   ssimMatrix: $("ssim-matrix"),
   fissionList: $("fission-list"),
   btnOpenOutputFission: $("btn-open-output-fission"),
+  btnOpenDedupFolder: $("btn-open-dedup-folder"),
+  btnOpenFissionFolder: $("btn-open-fission-folder"),
+  btnConfigDedupFolder: $("btn-config-dedup-folder"),
+  btnConfigFissionFolder: $("btn-config-fission-folder"),
+  folderSection: $("folder-section"),
+  folderConfigBadge: $("folder-config-badge"),
+  dedupOutputDirText: $("dedup-output-dir-text"),
+  fissionOutputDirText: $("fission-output-dir-text"),
   fissionProgress: $("fission-progress"),
   fissionProgressLabel: $("fission-progress-label"),
   fissionProgressTime: $("fission-progress-time"),
@@ -155,6 +164,7 @@ let lastProbeInfo = null;
 let dedupDeliveryReady = false;
 let currentDedupArtifact = null;
 let currentFissionArtifacts = [];
+let outputDirs = { dedup: null, fission: null, dedupConfigured: false, fissionConfigured: false, configured: false };
 let selectedFissionArtifact = null;
 let currentWorkflowStep = 1;
 let lastModalTrigger = null;
@@ -509,17 +519,22 @@ async function cancelFission() {
   }
 }
 
-function downloadArtifact(filename) {
+function artifactFileName(path) {
+  return String(path || "").split(/[\\/]/).pop();
+}
+
+function downloadArtifact(filename, kind) {
   if (!filename) { toast("请先生成产物。", "warn"); return; }
-  const url = DOWNLOAD_BASE + encodeURIComponent(filename);
+  const suffix = kind ? ("?subdir=" + encodeURIComponent(kind)) : "";
+  const url = DOWNLOAD_BASE + encodeURIComponent(filename) + suffix;
   // 创建隐藏 a 标签触发下载
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename.split("/").pop();
+  a.download = artifactFileName(filename);
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  toast("开始下载：" + filename.split("/").pop());
+  toast("开始下载：" + artifactFileName(filename));
   addMemory("download", "human", "下载产物文件：" + filename);
 }
 
@@ -564,8 +579,8 @@ async function connectAndBootstrap() {
     el.assetSelect.innerHTML = '<option value="">未连接 Server</option>';
     return;
   }
-  // 连接成功 → 并行拉工具清单与素材
-  await Promise.all([loadTools(), loadAssets()]);
+  // 连接成功 → 并行拉工具清单、素材与产物目录配置
+  await Promise.all([loadTools(), loadAssets(), loadOutputDirs()]);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1055,7 +1070,7 @@ async function doDedup() {
   const tts = readTTS();
   if (tts) Object.assign(args, tts);
   // 🆕 确保已配置输出目录：未配置则弹系统文件夹选择并持久化；已配置直接返回
-  const od = await ensureOutputDir();
+  const od = await ensureOutputDir("dedup");
   if (!od) return; // 用户取消选择输出目录 → 中止本次去重
   args.output_dir = od;
   setWorkflowStep(3);
@@ -1158,9 +1173,9 @@ function renderDedup(d) {
     el.phashHint.classList.add("hidden");
   }
 
-  currentDedupArtifact = d.output_path ? baseName(d.output_path) : null;
+  currentDedupArtifact = d.output_path || null;
   if (currentDedupArtifact) {
-    el.dedupArtifactName.textContent = currentDedupArtifact;
+    el.dedupArtifactName.textContent = artifactFileName(currentDedupArtifact);
     el.dedupArtifact.title = d.output_path;
     el.dedupArtifact.classList.remove("hidden");
     el.btnOpenOutput.classList.remove("is-disabled");
@@ -1249,6 +1264,8 @@ async function doFission() {
   if (flip_mode) args.flip_mode = flip_mode;
   const tts = readTTS();
   if (tts) Object.assign(args, tts);
+  const fissionDir = await ensureOutputDir("fission");
+  if (!fissionDir) return; // 用户取消选择输出目录 → 中止本次裂变
   setWorkflowStep(3);
   try {
     await withBusy(el.btnFission, "开始裂变", async () => {
@@ -1364,13 +1381,13 @@ function renderFission(d) {
 
   const variants = d.variants || [];
   currentFissionArtifacts = variants
-    .map((variant) => ({ ...variant, filename: baseName(variant.output_path) }))
+    .map((variant) => ({ ...variant, filename: variant.output_path || "", displayName: artifactFileName(variant.output_path) }))
     .filter((variant) => variant.filename && variant.filename !== "?");
   selectedFissionArtifact = currentFissionArtifacts.length ? currentFissionArtifacts[0].filename : null;
   el.fissionList.innerHTML = currentFissionArtifacts.map((v, index) =>
-    '<button class="fission-item artifact-item' + (index === 0 ? " is-selected" : "") + '" type="button" data-artifact-name="' + escapeHtml(v.filename) + '" aria-pressed="' + (index === 0 ? "true" : "false") + '">' +
+    '<button class="fission-item artifact-item' + (index === 0 ? " is-selected" : "") + '" type="button" data-artifact-name="' + escapeHtml(v.filename) + '" aria-pressed="' + (index === 0 ? "true" : "false") + '" title="' + escapeHtml(v.filename) + '">' +
       '<span class="fission-idx">' + (v.index || index + 1) + "</span>" +
-      '<span class="fission-name">' + escapeHtml(v.filename) + "</span>" +
+      '<span class="fission-name">' + escapeHtml(v.displayName || v.filename) + "</span>" +
       '<span class="fission-md5">MD5 ' + escapeHtml(short(v.md5)) + "</span>" +
     "</button>"
   ).join("");
@@ -1834,9 +1851,57 @@ el.btnCancelFission.addEventListener("click", cancelFission);
 el.btnOpenOutputTop.addEventListener("click", () => {
   if (el.btnOpenOutputTop.disabled) { toast("请先生成产物", "warn"); return; }
   if (!currentDedupArtifact) { toast("请先生成产物", "warn"); return; }
-  downloadArtifact(currentDedupArtifact);
+  downloadArtifact(currentDedupArtifact, "去重");
 });
-el.btnOpenOutputFission.addEventListener("click", () => downloadArtifact(selectedFissionArtifact));
+el.btnToggleSidebars.addEventListener("click", () => {
+  const shell = document.querySelector(".workspace-shell");
+  const auditPanel = document.getElementById("audit-panel");
+  const auditToggle = document.getElementById("panel-collapse-toggle");
+  if (!shell) return;
+  const collapsed = shell.classList.toggle("sidebars-collapsed");
+  if (!collapsed && auditPanel) {
+    auditPanel.classList.remove("panel-collapsed");
+    if (auditToggle) auditToggle.setAttribute("aria-expanded", "true");
+  }
+  el.btnToggleSidebars.classList.toggle("is-active", collapsed);
+  el.btnToggleSidebars.setAttribute("aria-pressed", String(collapsed));
+  el.btnToggleSidebars.setAttribute("title", collapsed ? "展开左右侧边栏" : "一键收纳左右侧边栏");
+  el.btnToggleSidebars.setAttribute("aria-label", collapsed ? "展开左右侧边栏" : "一键收纳左右侧边栏");
+  const label = el.btnToggleSidebars.querySelector("span");
+  if (label) label.textContent = collapsed ? "展开侧栏" : "收纳侧栏";
+});
+el.btnOpenOutputFission.addEventListener("click", () => downloadArtifact(selectedFissionArtifact, "裂变"));
+
+// 打开去重产物文件夹（subdir="去重"）
+el.btnOpenDedupFolder.addEventListener("click", () => openSubdirFolder("去重"));
+el.btnConfigDedupFolder.addEventListener("click", () => configureOutputDir("dedup"));
+// 打开裂变产物文件夹（subdir="裂变"）
+el.btnOpenFissionFolder.addEventListener("click", () => openSubdirFolder("裂变"));
+el.btnConfigFissionFolder.addEventListener("click", () => configureOutputDir("fission"));
+
+// 打开指定子目录产物文件夹
+async function openSubdirFolder(subdir) {
+  const kind = subdir === "裂变" ? "fission" : "dedup";
+  const label = kind === "fission" ? "裂变产物文件夹" : "去重产物文件夹";
+  await loadOutputDirs();
+  const configured = kind === "fission" ? outputDirs.fissionConfigured : outputDirs.dedupConfigured;
+  if (!configured) {
+    toast("请先配置" + label, "warn");
+    return;
+  }
+  try {
+    const resp = await fetch(OPEN_OUTPUT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subdir }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok !== true) throw new Error(data.message || "HTTP " + resp.status);
+    toast("已打开" + subdir + "产物文件夹。", "ok");
+  } catch (e) {
+    toast("打开文件夹失败：" + (e.message || e), "warn");
+  }
+}
 
 // 下载产物（Uiverse 动画按钮）：未下载 → 点击下载并播放动画；已下载(变绿) → 点击打开产物文件夹
 el.btnOpenOutput.addEventListener("click", () => {
@@ -1845,7 +1910,7 @@ el.btnOpenOutput.addEventListener("click", () => {
   if (!check) return;
   if (!check.checked) {
     check.checked = true; // 触发 CSS 下载动画
-    if (currentDedupArtifact) downloadArtifact(currentDedupArtifact);
+    if (currentDedupArtifact) downloadArtifact(currentDedupArtifact, "去重");
     else toast("暂无可下载的产物", "warn");
   } else {
     openOutputFolderDl(currentDedupArtifact);
@@ -1863,7 +1928,7 @@ async function openOutputFolderDl(filename) {
     const resp = await fetch(OPEN_OUTPUT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(filename ? { filename } : {}),
+      body: JSON.stringify(filename ? { filename, subdir: "去重" } : { subdir: "去重" }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || data.ok !== true) throw new Error(data.message || "HTTP " + resp.status);
@@ -1888,7 +1953,7 @@ if (window.desktop && typeof window.desktop.onDownloadProgress === "function") {
 //  - 已配置（config.json 含 output_dir）→ 直接返回该目录
 //  - 未配置 → 弹系统文件夹选择，保存到配置（立即生效），返回所选目录
 // 返回目录字符串；用户取消选择则返回 null（调用方中止去重）。
-async function ensureOutputDir() {
+async function loadOutputDirs() {
   try {
     const resp = await fetch(GET_OUTPUT_DIR_URL, {
       method: "POST",
@@ -1896,33 +1961,73 @@ async function ensureOutputDir() {
       body: "{}",
     });
     const data = await resp.json().catch(() => ({}));
-    if (resp.ok && data.ok && data.configured && data.output_dir) {
-      return data.output_dir;
+    if (!resp.ok || data.ok !== true) throw new Error(data.message || "HTTP " + resp.status);
+    outputDirs = {
+      dedup: data.dedup_output_dir || data.output_dir || null,
+      fission: data.fission_output_dir || data.output_dir || null,
+      dedupConfigured: !!data.dedup_configured,
+      fissionConfigured: !!data.fission_configured,
+      configured: !!data.configured,
+    };
+    if (el.dedupOutputDirText) {
+      el.dedupOutputDirText.textContent = outputDirs.dedupConfigured ? (outputDirs.dedup || "未配置") : "未配置";
+      el.dedupOutputDirText.title = outputDirs.dedupConfigured ? (outputDirs.dedup || "") : "";
+      const item = el.dedupOutputDirText.closest(".folder-config-item");
+      if (item) item.classList.toggle("is-configured", !!outputDirs.dedupConfigured);
     }
-  } catch (e) { /* 落到下面的选择流程 */ }
+    if (el.fissionOutputDirText) {
+      el.fissionOutputDirText.textContent = outputDirs.fissionConfigured ? (outputDirs.fission || "未配置") : "未配置";
+      el.fissionOutputDirText.title = outputDirs.fissionConfigured ? (outputDirs.fission || "") : "";
+      const item = el.fissionOutputDirText.closest(".folder-config-item");
+      if (item) item.classList.toggle("is-configured", !!outputDirs.fissionConfigured);
+    }
+    if (el.folderSection) el.folderSection.classList.toggle("needs-config", !(outputDirs.dedupConfigured && outputDirs.fissionConfigured));
+    return outputDirs;
+  } catch (e) {
+    if (el.dedupOutputDirText) el.dedupOutputDirText.textContent = "读取失败";
+    if (el.fissionOutputDirText) el.fissionOutputDirText.textContent = "读取失败";
+    return outputDirs;
+  }
+}
+
+async function configureOutputDir(kind) {
+  const label = kind === "fission" ? "裂变产物文件夹" : "去重产物文件夹";
   if (!window.desktop || typeof window.desktop.chooseDirectory !== "function") {
-    toast("当前环境不支持选择目录，请在设置中配置输出目录", "warn");
+    toast("当前环境不支持选择目录", "warn");
     return null;
   }
   const r = await window.desktop.chooseDirectory().catch(() => ({ ok: false }));
   if (!r || r.canceled || !r.ok || !r.dir) {
-    toast("未选择输出目录，已取消去重", "warn");
+    toast("未选择" + label, "warn");
     return null;
   }
   try {
     const resp = await fetch(SET_OUTPUT_DIR_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dir: r.dir }),
+      body: JSON.stringify({ kind, dir: r.dir }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || data.ok !== true) throw new Error(data.message || "HTTP " + resp.status);
-    toast("输出目录已设为：" + data.output_dir, "ok");
-    return data.output_dir;
+    await loadOutputDirs();
+    const saved = kind === "fission" ? data.fission_output_dir : data.dedup_output_dir;
+    toast(label + "已设为：" + (saved || r.dir), "ok");
+    return saved || r.dir;
   } catch (e) {
-    toast("保存输出目录失败：" + (e.message || e), "err");
+    toast("保存" + label + "失败：" + (e.message || e), "err");
     return null;
   }
+}
+
+async function ensureOutputDir(kind) {
+  const label = kind === "fission" ? "裂变产物文件夹" : "去重产物文件夹";
+  await loadOutputDirs();
+  const current = kind === "fission" ? outputDirs.fission : outputDirs.dedup;
+  const configured = kind === "fission" ? outputDirs.fissionConfigured : outputDirs.dedupConfigured;
+  if (configured && current) return current;
+  const dir = await configureOutputDir(kind);
+  if (!dir) toast("未配置" + label + "，已取消任务", "warn");
+  return dir;
 }
 el.fissionList.addEventListener("click", (e) => {
   const item = e.target.closest("[data-artifact-name]");
@@ -1938,7 +2043,7 @@ el.fissionList.addEventListener("click", (e) => {
 // 双击裂变产物项直接下载
 el.fissionList.addEventListener("dblclick", (e) => {
   const item = e.target.closest("[data-artifact-name]");
-  if (item) downloadArtifact(item.getAttribute("data-artifact-name"));
+  if (item) downloadArtifact(item.getAttribute("data-artifact-name"), "裂变");
 });
 setupUpload();
 el.btnClearMemory.addEventListener("click", clearMemory);

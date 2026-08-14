@@ -84,6 +84,57 @@ _od = _cfg_startup.get("output_dir")
 if _od and isinstance(_od, str) and _od.strip() and "VU_OUTPUT" not in os.environ:
     os.environ["VU_OUTPUT"] = _od.strip()
 
+
+def _default_output_root():
+    return Path(os.environ.get("VU_OUTPUT") or (Path.home() / "Videos" / "视频去重产物")).expanduser().resolve()
+
+
+def _configured_root():
+    cfg = _load_config()
+    raw = cfg.get("output_dir")
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw).expanduser().resolve()
+    return _default_output_root()
+
+
+def _output_dir_for(kind, cfg=None):
+    """返回去重/裂变各自的输出目录；兼容旧 output_dir 作为根目录。"""
+    cfg = cfg if isinstance(cfg, dict) else _load_config()
+    key = "fission_output_dir" if kind == "裂变" else "dedup_output_dir"
+    raw = cfg.get(key)
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw).expanduser().resolve()
+    return (_configured_root() / kind).resolve()
+
+
+def _safe_component(text, fallback="素材"):
+    text = Path(str(text or fallback)).stem.strip() or fallback
+    bad = '<>:"/\\|?*\r\n\t'
+    cleaned = ''.join('_' if ch in bad or ord(ch) < 32 else ch for ch in text)
+    cleaned = ' '.join(cleaned.split()).strip(' .')
+    return (cleaned or fallback)[:60]
+
+
+def _asset_workspace_dir(src, root_dir):
+    """按原视频名+短ID生成稳定素材工作区目录，避免多素材产物混在同一层。"""
+    src_path = P._resolve_safe(src, P.VIDEO_DIR, must_exist=True)
+    stem = _safe_component(src_path.stem)
+    try:
+        digest = P.md5_of(src_path)[:8]
+    except Exception:
+        st = src_path.stat()
+        digest = hashlib.md5(f"{src_path.name}:{st.st_size}:{int(st.st_mtime)}".encode("utf-8")).hexdigest()[:8]
+    return (Path(root_dir).resolve() / f"{stem}__{digest}").resolve()
+
+
+def _validate_existing_dir(value, field_name="dir"):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} 必须是非空字符串")
+    p = Path(value).expanduser().resolve()
+    if not p.exists() or not p.is_dir():
+        raise ValueError("目录不存在或不是文件夹：" + str(p))
+    return p
+
 import pipeline as P  # noqa: E402
 
 PROTOCOL_VERSION = "2026-07-28"
@@ -417,6 +468,13 @@ def _build_copy_context(src, n_frames=5):
     }
 
 
+def _rel_to_output(path, root_dir):
+    try:
+        return str(Path(path).resolve().relative_to(Path(root_dir).resolve())).replace("\\", "/")
+    except Exception:
+        return Path(path).name
+
+
 def _exec_tool(name, args):
     if name == "list_assets":
         return {"assets": P.list_assets()}
@@ -475,32 +533,35 @@ def _exec_tool(name, args):
             except Exception:
                 pass
 
-        # 🆕 按请求指定输出目录（用户点「开始单条去重」时选的目录，立即生效）
+        # 🆕 按请求/配置指定去重输出目录（用户可单独配置「去重产物文件夹」）
         _od_arg = args.get("output_dir")
         _od_path = None
         if _od_arg:
-            _od_path = Path(_od_arg).expanduser().resolve()
-            if not _od_path.exists() or not _od_path.is_dir():
-                raise P.PipelineError("output_dir 不存在或非文件夹：" + str(_od_path))
+            _od_path = _validate_existing_dir(_od_arg, "output_dir")
+        else:
+            _od_path = _output_dir_for("去重")
+            _od_path.mkdir(parents=True, exist_ok=True)
+        _workspace_dir = _asset_workspace_dir(args["src"], _od_path)
+        _workspace_dir.mkdir(parents=True, exist_ok=True)
         with _OUTPUT_DIR_LOCK:
-            if _od_path:
-                P.OUTPUT_DIR = _od_path
-                os.environ["VU_OUTPUT"] = str(_od_path)
+            P.OUTPUT_DIR = _workspace_dir
+            os.environ["VU_OUTPUT"] = str(_workspace_dir)
             r = P.dedup_video(
                 args["src"],
-            params=args.get("params"),
-            out_name=args.get("out_name"),
-            seed=args.get("seed"),
-            level=args.get("level"),
-            dimensions=args.get("dimensions"),
-            flip_mode=args.get("flip_mode"),
-            trim_phase=args.get("trim_phase"),
-            tts_text=tts_text,
-            tts_voice=args.get("tts_voice"),
-            tts_speed=args.get("tts_speed"),
-            skip_phash=args.get("skip_phash", False),
-        )
-        # 回填改写元信息到 applied_params，供前端报告/弹窗展示（应用参数 JSON 也会带上）
+                params=args.get("params"),
+                out_name=args.get("out_name"),
+                seed=args.get("seed"),
+                level=args.get("level"),
+                dimensions=args.get("dimensions"),
+                flip_mode=args.get("flip_mode"),
+                trim_phase=args.get("trim_phase"),
+                tts_text=tts_text,
+                tts_voice=args.get("tts_voice"),
+                tts_speed=args.get("tts_speed"),
+                skip_phash=args.get("skip_phash", False),
+                subdir="",
+            )
+        r["output_path"] = _rel_to_output(r.get("output_path"), _od_path)
         r["applied_params"]["rewrite_requested"] = rewrite_meta["requested"]
         if rewrite_meta.get("error"):
             r["applied_params"]["rewrite_error"] = rewrite_meta["error"]
@@ -521,18 +582,29 @@ def _exec_tool(name, args):
                 raise P.PipelineError(f"批量任务已存在: {task_id}")
             _ACTIVE_FISSION[task_id] = token
         try:
-            r = P.batch_fission(
-                args["src"],
-                count=args.get("count"),
-                params=args.get("params"),
-                level=args.get("level"),
-                dimensions=args.get("dimensions"),
-                flip_mode=args.get("flip_mode"),
-                cancel_token=token,
-            )
+            with _OUTPUT_DIR_LOCK:
+                _fission_output_dir = _output_dir_for("裂变")
+                _fission_output_dir.mkdir(parents=True, exist_ok=True)
+                _workspace_dir = _asset_workspace_dir(args["src"], _fission_output_dir)
+                _workspace_dir.mkdir(parents=True, exist_ok=True)
+                P.OUTPUT_DIR = _workspace_dir
+                os.environ["VU_OUTPUT"] = str(_workspace_dir)
+                r = P.batch_fission(
+                    args["src"],
+                    count=args.get("count"),
+                    params=args.get("params"),
+                    level=args.get("level"),
+                    dimensions=args.get("dimensions"),
+                    flip_mode=args.get("flip_mode"),
+                    cancel_token=token,
+                    subdir="",
+                )
         finally:
             with _ACTIVE_FISSION_LOCK:
                 _ACTIVE_FISSION.pop(task_id, None)
+        for _v in r.get("variants") or []:
+            if isinstance(_v, dict) and _v.get("output_path"):
+                _v["output_path"] = _rel_to_output(_v.get("output_path"), _fission_output_dir)
         r["task_id"] = task_id
         r["job_id"] = _new_job("fission", {
             "src": r["src"], "count": r["count"],
@@ -698,19 +770,20 @@ def _cancel_fission(task_id):
     return True
 
 
-def _open_output_folder(filename=None):
-    """打开固定 output 目录；Windows 上可安全选中目录内的指定文件。"""
-    output_dir = P.OUTPUT_DIR.resolve()
+def _open_output_folder(filename=None, subdir=None):
+    """打开去重/裂变各自配置的输出目录；Windows 上可安全选中目录内的指定文件。"""
+    kind = "裂变" if subdir == "裂变" else "去重"
+    output_dir = _output_dir_for(kind).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     target = None
     if filename:
-        if not isinstance(filename, str) or Path(filename).name != filename:
+        if not isinstance(filename, str) or not filename.strip() or Path(filename).is_absolute():
             raise ValueError("产物文件名无效")
         candidate = (output_dir / filename).resolve()
         try:
             candidate.relative_to(output_dir)
         except ValueError as exc:
-            raise ValueError("产物文件必须位于 output/ 内") from exc
+            raise ValueError("产物文件必须位于产物目录内") from exc
         if not candidate.is_file():
             raise FileNotFoundError(f"产物文件不存在: {filename}")
         target = candidate
@@ -819,13 +892,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
-        # /local/download/<filename> — 从输出目录直供视频文件下载
+        # /local/download/<filename> — 从去重/裂变各自配置的输出目录直供视频文件下载
         if path.startswith("/local/download/"):
             fname = unquote(path[len("/local/download/"):])
-            fpath = (P.OUTPUT_DIR / fname).resolve()
-            # 安全检查：确保文件在 OUTPUT_DIR 内
-            safe_base = P.OUTPUT_DIR.resolve()
-            if fpath.parent != safe_base or not fpath.name:
+            query = urlsplit(self.path).query or ""
+            subdir = None
+            for part in query.split("&"):
+                if part.startswith("subdir="):
+                    subdir = unquote(part.split("=", 1)[1])
+                    break
+            kind = "裂变" if subdir == "裂变" else "去重"
+            safe_base = _output_dir_for(kind).resolve()
+            if not fname or Path(fname).is_absolute():
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            fpath = (safe_base / fname).resolve()
+            # 安全检查：允许素材工作区子目录，但必须位于对应产物根目录内
+            try:
+                fpath.relative_to(safe_base)
+            except ValueError:
                 self.send_response(400)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -940,11 +1027,16 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") == "/local/get-output-dir":
             try:
                 _cfg = _load_config()
-                _configured = bool(_cfg.get("output_dir"))
+                _dedup_configured = bool(_cfg.get("dedup_output_dir"))
+                _fission_configured = bool(_cfg.get("fission_output_dir"))
                 self._respond_http(200, {
                     "ok": True,
                     "output_dir": str(P.OUTPUT_DIR.resolve()),
-                    "configured": _configured,
+                    "dedup_output_dir": str(_output_dir_for("去重", _cfg)),
+                    "fission_output_dir": str(_output_dir_for("裂变", _cfg)),
+                    "dedup_configured": _dedup_configured,
+                    "fission_configured": _fission_configured,
+                    "configured": bool(_dedup_configured and _fission_configured),
                 })
             except Exception as exc:
                 self._respond_http(500, {"ok": False, "message": str(exc)})
@@ -957,16 +1049,31 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(payload, dict):
                     raise ValueError("请求体必须是 JSON 对象")
                 d = payload.get("dir")
-                if not isinstance(d, str) or not d.strip():
-                    raise ValueError("dir 必须是非空字符串")
-                p = Path(d).expanduser().resolve()
-                if not p.exists() or not p.is_dir():
-                    raise ValueError("目录不存在或不是文件夹：" + str(p))
+                kind = payload.get("kind")
+                p = _validate_existing_dir(d, "dir")
                 cfg = _load_config()
-                cfg["output_dir"] = str(p)
+                if kind == "dedup":
+                    cfg["dedup_output_dir"] = str(p)
+                    msg = "去重产物文件夹已保存"
+                elif kind == "fission":
+                    cfg["fission_output_dir"] = str(p)
+                    msg = "裂变产物文件夹已保存"
+                else:
+                    # 兼容旧调用：同时设置根目录与两个任务目录（子目录会自动创建）。
+                    cfg["output_dir"] = str(p)
+                    cfg["dedup_output_dir"] = str((p / "去重").resolve())
+                    cfg["fission_output_dir"] = str((p / "裂变").resolve())
+                    (p / "去重").mkdir(parents=True, exist_ok=True)
+                    (p / "裂变").mkdir(parents=True, exist_ok=True)
+                    msg = "产物根目录已保存"
                 _save_config(cfg)
-                self._respond_http(200, {"ok": True, "output_dir": str(p),
-                                         "message": "已保存，重启应用后生效"})
+                self._respond_http(200, {
+                    "ok": True,
+                    "output_dir": str(p),
+                    "dedup_output_dir": str(_output_dir_for("去重", cfg)),
+                    "fission_output_dir": str(_output_dir_for("裂变", cfg)),
+                    "message": msg,
+                })
             except (ValueError, OSError) as exc:
                 self._respond_http(400, {"ok": False, "message": str(exc)})
             except Exception as exc:
@@ -983,7 +1090,7 @@ class Handler(BaseHTTPRequestHandler):
                 if endpoint == "/local/cancel-fission":
                     found = _cancel_fission(payload.get("task_id"))
                 else:
-                    output_dir, selected = _open_output_folder(payload.get("filename"))
+                    output_dir, selected = _open_output_folder(payload.get("filename"), subdir=payload.get("subdir"))
             except (ValueError, FileNotFoundError) as exc:
                 self._respond_http(400, {"ok": False, "message": str(exc)})
                 return

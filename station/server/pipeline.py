@@ -195,9 +195,10 @@ def md5_of(path):
     return h.hexdigest()
 
 
-def _reserve_output_path(out_name):
+def _reserve_output_path(out_name, base_dir=None):
     """在 output/ 内原子预留不冲突的文件名，已有文件自动追加序号。"""
-    requested = _resolve_safe(out_name, OUTPUT_DIR, must_exist=False)
+    _base = base_dir or OUTPUT_DIR
+    requested = _resolve_safe(out_name, _base, must_exist=False)
     for index in range(1, 10001):
         candidate = requested if index == 1 else requested.with_name(
             f"{requested.stem}_{index}{requested.suffix}")
@@ -620,7 +621,7 @@ def _clamp_speed_for_floor(factor, base_dur):
 def dedup_video(src, params=None, out_name=None, seed=None,
                 level=None, dimensions=None, flip_mode=None, trim_phase=None,
                 tts_text=None, tts_voice=None, tts_speed=None,
-                skip_phash=False):
+                skip_phash=False, subdir="去重"):
     """
     对单个视频执行去重（本期增量：强度档 + 构图/时序维度 + pHash 自检升级）。
 
@@ -634,8 +635,11 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     trim_phase: ∈[0,1]，裂变专用。把去头尾配比按相位铺开而非 iid 随机取，
         使各变体在源时间轴上的错位量最大化（见 _calc_trim phase 参数说明）。
         None = 单片模式，保持原随机行为。
+    subdir: 产物子目录名（默认"去重"，输出到 OUTPUT_DIR/subdir/）；空字符串表示直接输出到 OUTPUT_DIR。
     返回处理报告字典（checks 含 phash 与 all_passed）。
     """
+    # 产物目录：默认按子目录区分；服务端传空字符串时，表示已把 OUTPUT_DIR 切到具体任务目录。
+    _task_dir = OUTPUT_DIR if not subdir else (OUTPUT_DIR / subdir)
     # 路径安全：src 必须在 assets 白名单内
     src_path = _resolve_safe(src, VIDEO_DIR, must_exist=True)
 
@@ -649,12 +653,12 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
     src_info = probe_video(str(src_path))
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _task_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(src_info["name"]).stem
     if not out_name:
         out_name = f"{stem}_去重.mp4"
     # 先做白名单校验，实际文件预留延后到 FFmpeg 执行前，避免前置计算失败留空文件。
-    _resolve_safe(out_name, OUTPUT_DIR, must_exist=False)
+    _resolve_safe(out_name, _task_dir, must_exist=False)
 
     vf, applied = build_filter(resolved, src_info)
     fps = _pick_fps(resolved)
@@ -710,7 +714,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         applied["bitrate_kbps"] = kbps
 
     # 原子预留输出名：已有或正被另一任务预留时自动递增，避免覆盖/文件占用失败。
-    out_path = _reserve_output_path(out_name)
+    out_path = _reserve_output_path(out_name, base_dir=_task_dir)
 
     # 组装 ffmpeg 命令（列表式传参，禁 shell 拼接）
     # ⚠️ -ss/-t 均放在 -i 【之前】作为输入侧选项，使去头尾在【源时间轴】上生效。
@@ -800,7 +804,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         tts_status = "文案为空，跳过"
 
     try:
-        out_info = probe_video(str(out_path), base_dir=OUTPUT_DIR)
+        out_info = probe_video(str(out_path), base_dir=_task_dir)
     except Exception:
         _cleanup_failed_output(out_path)
         raise
@@ -877,7 +881,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
 
 def batch_fission(src, count=5, params=None,
-                  level=None, dimensions=None, flip_mode=None, cancel_token=None):
+                  level=None, dimensions=None, flip_mode=None, cancel_token=None, subdir="裂变"):
     """裂变：同一素材生成 count 个不同参数的变体（本期增量：档位/维度透传 + 距离矩阵）。
 
     ⚠️ 不支持 TTS 配音：裂变刻意保持无云依赖、可并行批量，不接 copy_rewriter/tts_client。
@@ -922,7 +926,7 @@ def batch_fission(src, count=5, params=None,
                 r = dedup_video(src, params=params, out_name=out_name,
                                 seed=random.randint(1, 10 ** 9),
                                 level=level, dimensions=dimensions, flip_mode=variant_flip_mode,
-                                trim_phase=phase)
+                                trim_phase=phase, subdir=subdir)
                 results.append({
                     "index": i + 1,
                     "output_path": r["output_path"],

@@ -86,6 +86,14 @@
         <p>本地素材处理与验收</p>
       </div>
     </div>
+    <button id="btn-toggle-sidebars" class="sidebars-toggle" type="button" aria-pressed="false" title="一键收纳左右侧边栏" aria-label="一键收纳左右侧边栏">
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path d="M4.75 5h14.5A1.75 1.75 0 0 1 21 6.75v10.5A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25V6.75A1.75 1.75 0 0 1 4.75 5Z" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M10.5 9 13.5 12 10.5 15M13.5 9 10.5 12 13.5 15" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>收纳侧栏</span>
+    </button>
     <div class="topbar-actions">
       <div id="badge-status" class="service-badge" role="status">
         <span class="status-dot" aria-hidden="true"></span>
@@ -334,12 +342,14 @@
       <section id="fission-section" class="work-card" aria-labelledby="fission-title">
         <div class="card-heading card-heading-action">
           <div><span class="step-kicker">批量任务</span><h3 id="fission-title">批量裂变</h3><p>生成多个变体，并通过 MD5 唯一性与距离矩阵双重交付门。</p></div>
-          <div class="fission-controls">
-            <label for="fission-count">变体数量</label>
-            <input id="fission-count" class="wb-num" type="number" min="1" max="20" value="5" />
-            <button id="btn-fission" class="btn btn-primary" type="button">开始裂变</button>
+          <div class="fission-sidebar">
+            <div class="fission-controls">
+              <label for="fission-count">变体数量</label>
+              <input id="fission-count" class="wb-num" type="number" min="1" max="20" value="5" />
+              <button id="btn-fission" class="btn btn-primary" type="button">开始裂变</button>
+            </div>
+            <p class="fission-tts-note">批量裂变暂不支持 TTS 配音（配音仅单条去重支持）。</p>
           </div>
-          <p class="fission-tts-note">批量裂变暂不支持 TTS 配音（配音仅单条去重支持）。</p>
         </div>
         <div id="fission-progress" class="processing-progress hidden" role="status" aria-live="polite">
           <div class="progress-row"><strong id="fission-progress-label">正在准备批量裂变</strong><span id="fission-progress-time">正在估算</span></div>
@@ -364,6 +374,39 @@
           <div class="artifact-section-head"><span>产物文件</span><small>点击文件名下载</small></div>
           <div id="fission-list" class="fission-list"></div>
           <div class="result-actions"><button id="btn-open-output-fission" class="btn btn-secondary" type="button" disabled>下载选中产物</button></div>
+        </div>
+      </section>
+
+      <section id="folder-section" class="work-card folder-section needs-config" aria-labelledby="folder-title">
+        <div class="card-heading folder-heading">
+          <div><span class="step-kicker">产物目录</span><h3 id="folder-title">打开产物文件夹</h3><p>分别打开去重与裂变产出的本地文件夹。</p></div>
+          <div id="folder-config-badge" class="folder-config-badge" role="status">
+            <span class="folder-config-dot" aria-hidden="true"></span>
+            <strong>待配置输出文件夹</strong>
+            <small>请先配置去重和裂变产物目录</small>
+          </div>
+        </div>
+        <div class="folder-config-list">
+          <div class="folder-config-item">
+            <div><strong>去重产物文件夹</strong><span id="dedup-output-dir-text">未配置</span></div>
+            <div class="folder-config-actions">
+              <button id="btn-open-dedup-folder" class="btn btn-secondary btn-sm" type="button">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h4.13c.46 0 .9.18 1.23.5l1.14 1.1c.14.13.32.2.5.2h7.5A1.75 1.75 0 0 1 21 8.55v8.7A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25V6.75Z"/></svg>
+                打开
+              </button>
+              <button id="btn-config-dedup-folder" class="btn btn-secondary btn-sm" type="button">配置位置</button>
+            </div>
+          </div>
+          <div class="folder-config-item">
+            <div><strong>裂变产物文件夹</strong><span id="fission-output-dir-text">未配置</span></div>
+            <div class="folder-config-actions">
+              <button id="btn-open-fission-folder" class="btn btn-secondary btn-sm" type="button">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h4.13c.46 0 .9.18 1.23.5l1.14 1.1c.14.13.32.2.5.2h7.5A1.75 1.75 0 0 1 21 8.55v8.7A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25V6.75Z"/></svg>
+                打开
+              </button>
+              <button id="btn-config-fission-folder" class="btn btn-secondary btn-sm" type="button">配置位置</button>
+            </div>
+          </div>
         </div>
       </section>
     </main>

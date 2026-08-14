@@ -156,6 +156,9 @@ code {
   background: var(--surface-card);
   border-bottom: 1px solid var(--border-subtle);
 }
+.sidebars-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 6px 11px; border: 1px solid var(--border-subtle); border-radius: 9px; background: #fff; color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: border-color var(--ease-standard), color var(--ease-standard), background var(--ease-standard), box-shadow var(--ease-standard); }
+.sidebars-toggle svg { width: 16px; height: 16px; flex-shrink: 0; }
+.sidebars-toggle:hover, .sidebars-toggle.is-active { border-color: var(--brand-primary-light); color: var(--brand-primary-dark); background: #F5FAFF; box-shadow: 0 4px 14px rgba(61, 132, 204, .10); }
 .brand-group, .topbar-actions { display: flex; align-items: center; gap: 12px; }
 .brand-mark {
   width: 40px; height: 40px; display: grid; place-items: center;
@@ -195,6 +198,11 @@ code {
 .btn-text:hover { background: transparent; text-decoration: underline; }
 
 .workspace-shell { max-width: 1760px; margin: 0 auto; display: grid; grid-template-columns: 224px minmax(0, 1fr) 304px; min-height: calc(100vh - 76px); }
+.workspace-shell.sidebars-collapsed { grid-template-columns: 0 minmax(0, 1fr) 0; }
+.workspace-shell.sidebars-collapsed .sidebar,
+.workspace-shell.sidebars-collapsed .audit-sidebar { width: 0 !important; min-width: 0 !important; max-width: 0 !important; padding: 0 !important; border: 0 !important; overflow: hidden; opacity: 0; pointer-events: none; }
+.workspace-shell.sidebars-collapsed .panel-expand-fab { display: none !important; }
+.workspace-shell.sidebars-collapsed .main-content { padding-left: 30px; padding-right: 30px; }
 .sidebar { padding: 24px 16px; background: #FBFCFE; border-right: 1px solid var(--border-subtle); }
 .primary-nav { display: grid; gap: 4px; margin-bottom: 28px; }
 .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 11px; color: var(--text-secondary); border-radius: var(--radius-sm); text-decoration: none; transition: background var(--ease-standard), color var(--ease-standard); }
@@ -347,6 +355,22 @@ code {
 .fission-controls { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
 .fission-tts-note { margin: 8px 0 0; font-size: 12px; color: var(--text-tertiary); }
 .fission-tts-note::before { content: "\2139  "; }
+.fission-sidebar { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.folder-section.needs-config { border-color: #F0B429; box-shadow: 0 0 0 1px rgba(240, 180, 41, .24), 0 12px 32px rgba(164, 116, 0, .10); }
+.folder-heading { align-items: center; }
+.folder-config-badge { display: none; align-items: center; gap: 8px; padding: 8px 11px; border: 1px solid #F1D295; border-radius: 999px; background: #FFF7E6; color: #A96700; box-shadow: 0 6px 18px rgba(169, 103, 0, .10); }
+.folder-section.needs-config .folder-config-badge { display: inline-flex; }
+.folder-config-badge strong { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.folder-config-badge small { color: #B7791F; font-size: 11px; white-space: nowrap; }
+.folder-config-dot { width: 8px; height: 8px; border-radius: 50%; background: #F0B429; box-shadow: 0 0 0 4px rgba(240, 180, 41, .18); }
+.folder-section.needs-config .folder-config-item:not(.is-configured) { border-color: #F1D295; background: #FFFDF5; }
+.folder-config-list { display: grid; gap: 10px; padding-top: 4px; }
+.folder-config-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-muted); }
+.folder-config-item strong { display: block; margin-bottom: 4px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.folder-config-item span { display: block; max-width: 520px; color: var(--text-tertiary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-config-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.btn-sm { font-size: 12px; padding: 4px 10px; }
+.btn-sm svg { width: 14px; height: 14px; vertical-align: -2px; }
 .fission-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; color: var(--text-secondary); font-size: 12px; }
 .fission-explainer { margin-bottom: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); overflow: hidden; background: #fff; }
 .explainer-status { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border-subtle); }
@@ -414,7 +438,7 @@ code {
   transition: width .25s ease, opacity .2s ease, padding .2s ease, margin .2s ease;
   pointer-events: none;
 }
-.workspace-shell:has(.audit-sidebar.panel-collapsed) {
+.workspace-shell:not(.sidebars-collapsed):has(.audit-sidebar.panel-collapsed) {
   grid-template-columns: 224px minmax(0, 1fr) 0px;
 }
 .audit-sidebar.panel-collapsed ~ .panel-expand-fab,
