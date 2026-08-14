@@ -52,6 +52,38 @@ try:
 except Exception:
     pass
 
+# ---------------------------------------------------------------------------
+# 桌面端配置：用户自选的输出目录持久化在 ~/.video-uniqueness/config.json。
+# 必须在 import pipeline 之前读取并写入 VU_OUTPUT，让 pipeline.OUTPUT_DIR
+# 落到用户选的位置（打包成 exe 后 PROJECT_DIR/output 会权限失败或丢失）。
+# ---------------------------------------------------------------------------
+_CONFIG_PATH = Path.home() / ".video-uniqueness" / "config.json"
+
+
+def _load_config():
+    try:
+        if _CONFIG_PATH.exists():
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as _cf:
+                _c = json.load(_cf)
+            return _c if isinstance(_c, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_config(cfg):
+    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _tmp = _CONFIG_PATH.with_suffix(".json.tmp")
+    with open(_tmp, "w", encoding="utf-8") as _cf:
+        json.dump(cfg, _cf, ensure_ascii=False, indent=2)
+    _tmp.replace(_CONFIG_PATH)
+
+
+_cfg_startup = _load_config()
+_od = _cfg_startup.get("output_dir")
+if _od and isinstance(_od, str) and _od.strip() and "VU_OUTPUT" not in os.environ:
+    os.environ["VU_OUTPUT"] = _od.strip()
+
 import pipeline as P  # noqa: E402
 
 PROTOCOL_VERSION = "2026-07-28"
@@ -80,6 +112,10 @@ _REQUEST_STATE_KEY = os.urandom(32)
 # job handle 仍按既有方式持久化到 jobs.json。
 _ACTIVE_FISSION_LOCK = threading.Lock()
 _ACTIVE_FISSION = {}
+
+# 用户自选输出目录的切换锁：ThreadingHTTPServer 下保证「切换 OUTPUT_DIR → 调用管线」
+# 这一段的原子性，避免并发请求把产物写错目录。
+_OUTPUT_DIR_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +218,7 @@ TOOLS = [
                 "rewrite_template": {"type": "string", "description": "元宝改写模板；非空时走「改写→配音」自动链路（自动模式下与 tts_text 互斥，tts_text 优先）"},
                 "rewrite_topic": {"type": "string", "description": "改写主题/方向提示（可选），随模板一同发给元宝"},
                 "rewrite_frames": {"type": "integer", "description": "改写抽帧数（默认 5），用于给元宝提供画面上下文"},
+                "output_dir": {"type": "string", "description": "可选：产物输出目录（绝对路径）；不传则使用用户配置/默认目录（~/Videos/视频去重产物）。传入后立即生效，无需重启。"},
             },
             "required": ["src"],
         },
@@ -189,7 +226,9 @@ TOOLS = [
     },
     {
         "name": "batch_fission",
-        "description": "裂变：同一素材生成 count 个不同参数的变体（每个 MD5 互不相同）。",
+        # 注意：批量裂变不支持 TTS 配音。tts_text/tts_voice/tts_speed 仅 dedup_video 有，
+        # fission 的 inputSchema 未透传这些参数，调用链也不会触发配音（刻意保持简单、可并行、无云依赖）。
+        "description": "裂变：同一素材生成 count 个不同参数的变体（每个 MD5 互不相同）。注意：暂不支持 TTS 配音（配音仅单条去重支持）。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -436,8 +475,19 @@ def _exec_tool(name, args):
             except Exception:
                 pass
 
-        r = P.dedup_video(
-            args["src"],
+        # 🆕 按请求指定输出目录（用户点「开始单条去重」时选的目录，立即生效）
+        _od_arg = args.get("output_dir")
+        _od_path = None
+        if _od_arg:
+            _od_path = Path(_od_arg).expanduser().resolve()
+            if not _od_path.exists() or not _od_path.is_dir():
+                raise P.PipelineError("output_dir 不存在或非文件夹：" + str(_od_path))
+        with _OUTPUT_DIR_LOCK:
+            if _od_path:
+                P.OUTPUT_DIR = _od_path
+                os.environ["VU_OUTPUT"] = str(_od_path)
+            r = P.dedup_video(
+                args["src"],
             params=args.get("params"),
             out_name=args.get("out_name"),
             seed=args.get("seed"),
@@ -886,6 +936,41 @@ class Handler(BaseHTTPRequestHandler):
         if not self._request_allowed():
             self.send_response(403)
             self.end_headers()
+            return
+        if self.path.rstrip("/") == "/local/get-output-dir":
+            try:
+                _cfg = _load_config()
+                _configured = bool(_cfg.get("output_dir"))
+                self._respond_http(200, {
+                    "ok": True,
+                    "output_dir": str(P.OUTPUT_DIR.resolve()),
+                    "configured": _configured,
+                })
+            except Exception as exc:
+                self._respond_http(500, {"ok": False, "message": str(exc)})
+            return
+        if self.path.rstrip("/") == "/local/set-output-dir":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("请求体必须是 JSON 对象")
+                d = payload.get("dir")
+                if not isinstance(d, str) or not d.strip():
+                    raise ValueError("dir 必须是非空字符串")
+                p = Path(d).expanduser().resolve()
+                if not p.exists() or not p.is_dir():
+                    raise ValueError("目录不存在或不是文件夹：" + str(p))
+                cfg = _load_config()
+                cfg["output_dir"] = str(p)
+                _save_config(cfg)
+                self._respond_http(200, {"ok": True, "output_dir": str(p),
+                                         "message": "已保存，重启应用后生效"})
+            except (ValueError, OSError) as exc:
+                self._respond_http(400, {"ok": False, "message": str(exc)})
+            except Exception as exc:
+                self._respond_http(500, {"ok": False, "message": "无法保存配置：" + str(exc)})
             return
         if self.path.rstrip("/") in ("/local/open-output", "/local/cancel-fission"):
             endpoint = self.path.rstrip("/")

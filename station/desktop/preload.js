@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld('desktop', {
     catch (e) { return { ok: false, reason: e.message || String(e) }; }
   },
 
+  // 选择输出目录（系统文件夹选择对话框，用于「输出目录」设置项）
+  async chooseDirectory() {
+    try { return await ipcRenderer.invoke('app:choose-directory'); }
+    catch (e) { return { ok: false, reason: e.message || String(e) }; }
+  },
+
   // 元宝 BrowserWindow — 无 modal，无 confirm
   async openYuanbao() {
     try { return await ipcRenderer.invoke('yuanbao:show'); }

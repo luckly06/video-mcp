@@ -339,6 +339,7 @@
             <input id="fission-count" class="wb-num" type="number" min="1" max="20" value="5" />
             <button id="btn-fission" class="btn btn-primary" type="button">开始裂变</button>
           </div>
+          <p class="fission-tts-note">批量裂变暂不支持 TTS 配音（配音仅单条去重支持）。</p>
         </div>
         <div id="fission-progress" class="processing-progress hidden" role="status" aria-live="polite">
           <div class="progress-row"><strong id="fission-progress-label">正在准备批量裂变</strong><span id="fission-progress-time">正在估算</span></div>
@@ -368,6 +369,10 @@
     </main>
 
     <aside id="audit-panel" class="audit-sidebar">
+      <button type="button" id="panel-collapse-toggle" class="panel-collapse-toggle" aria-expanded="true" title="收纳/展开右侧边栏" aria-label="收纳或展开右侧边栏">
+        <svg class="panel-collapse-icon" aria-hidden="true" viewBox="0 0 16 16" width="14" height="14"><path d="M10 3l4 5-4 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="panel-collapse-hint">收纳</span>
+      </button>
       <section class="audit-card audit-log-card">
         <div class="audit-heading">
           <div><div class="section-eyebrow">验收记录</div><h2>最近操作</h2></div>
@@ -423,6 +428,10 @@
         </div>
       </section>
     </aside>
+    <button type="button" id="panel-expand-fab" class="panel-expand-fab" aria-label="展开右侧边栏">
+      <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14"><path d="M6 3l-4 5 4 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>验收</span>
+    </button>
   </div>
 
   <div id="modal-overlay" class="modal-overlay hidden" role="presentation">

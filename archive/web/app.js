@@ -27,6 +27,8 @@ const API_BASE = (() => {
 })();
 const MCP_URL = API_BASE + "/mcp";
 const OPEN_OUTPUT_URL = API_BASE + "/local/open-output";
+const GET_OUTPUT_DIR_URL = API_BASE + "/local/get-output-dir";
+const SET_OUTPUT_DIR_URL = API_BASE + "/local/set-output-dir";
 const CANCEL_FISSION_URL = API_BASE + "/local/cancel-fission";
 const UPLOAD_URL = API_BASE + "/local/upload";
 const DOWNLOAD_BASE = API_BASE + "/local/download/";
@@ -152,7 +154,6 @@ let lastProbedAsset = null;
 let lastProbeInfo = null;
 let dedupDeliveryReady = false;
 let currentDedupArtifact = null;
-let lastDownloadDir = null; // 用户通过「另存为」选中的下载目录（打包后用于「打开文件夹」）
 let currentFissionArtifacts = [];
 let selectedFissionArtifact = null;
 let currentWorkflowStep = 1;
@@ -374,13 +375,13 @@ function resetResultsForAssetChange() {
   lastProbeInfo = null;
   dedupDeliveryReady = false;
   currentDedupArtifact = null;
-  lastDownloadDir = null;
   currentFissionArtifacts = [];
   selectedFissionArtifact = null;
   el.btnDeliver.disabled = true;
   el.btnOpenOutput.classList.add("is-disabled");
   el.btnOpenOutput.setAttribute("aria-disabled", "true");
   { const _c = el.btnOpenOutput.querySelector(".dl-toggle-input"); if (_c) _c.checked = false; }
+  el.btnOpenOutputTop.disabled = true;
   el.btnOpenOutputFission.disabled = true;
   el.probeCard.classList.add("hidden");
   el.dedupCard.classList.add("hidden");
@@ -1053,6 +1054,10 @@ async function doDedup() {
   // 🆕 TTS
   const tts = readTTS();
   if (tts) Object.assign(args, tts);
+  // 🆕 确保已配置输出目录：未配置则弹系统文件夹选择并持久化；已配置直接返回
+  const od = await ensureOutputDir();
+  if (!od) return; // 用户取消选择输出目录 → 中止本次去重
+  args.output_dir = od;
   setWorkflowStep(3);
   try {
     await withBusy(el.btnDedup, "开始单条去重", async () => {
@@ -1154,18 +1159,19 @@ function renderDedup(d) {
   }
 
   currentDedupArtifact = d.output_path ? baseName(d.output_path) : null;
-  lastDownloadDir = null; // 新产物：清除上一次下载目录，避免打开到旧文件的下载位置
   if (currentDedupArtifact) {
     el.dedupArtifactName.textContent = currentDedupArtifact;
     el.dedupArtifact.title = d.output_path;
     el.dedupArtifact.classList.remove("hidden");
     el.btnOpenOutput.classList.remove("is-disabled");
     el.btnOpenOutput.setAttribute("aria-disabled", "false");
+    el.btnOpenOutputTop.disabled = false;
   } else {
     el.dedupArtifact.classList.add("hidden");
     el.btnOpenOutput.classList.add("is-disabled");
     el.btnOpenOutput.setAttribute("aria-disabled", "true");
     { const _c = el.btnOpenOutput.querySelector(".dl-toggle-input"); if (_c) _c.checked = false; }
+    el.btnOpenOutputTop.disabled = true;
   }
 
   const src = d.src || {};
@@ -1825,7 +1831,11 @@ el.btnProbe.addEventListener("click", doProbe);
 el.btnDedup.addEventListener("click", doDedup);
 el.btnFission.addEventListener("click", doFission);
 el.btnCancelFission.addEventListener("click", cancelFission);
-el.btnOpenOutputTop.addEventListener("click", () => downloadArtifact(currentDedupArtifact));
+el.btnOpenOutputTop.addEventListener("click", () => {
+  if (el.btnOpenOutputTop.disabled) { toast("请先生成产物", "warn"); return; }
+  if (!currentDedupArtifact) { toast("请先生成产物", "warn"); return; }
+  downloadArtifact(currentDedupArtifact);
+});
 el.btnOpenOutputFission.addEventListener("click", () => downloadArtifact(selectedFissionArtifact));
 
 // 下载产物（Uiverse 动画按钮）：未下载 → 点击下载并播放动画；已下载(变绿) → 点击打开产物文件夹
@@ -1845,13 +1855,10 @@ el.btnOpenOutput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.btnOpenOutput.click(); }
 });
 
-// 打开产物文件夹（优先打开用户自己选的下载目录；无下载记录时退回服务端 output 目录）
+// 打开产物文件夹：打开固定产物输出目录 OUTPUT_DIR（/local/open-output）。
+// 不再绑定「另存为」目录 —— 产物统一落在用户设置的输出目录，
+// 「下载产物」仅作为把文件复制一份到别处的可选动作。
 async function openOutputFolderDl(filename) {
-  if (lastDownloadDir) {
-    const r = await window.desktop?.openFolder(lastDownloadDir).catch(() => ({ ok: false }));
-    if (r && r.ok) { toast("已打开下载文件夹：" + lastDownloadDir, "ok"); return; }
-    // 失败则继续走服务端兜底
-  }
   try {
     const resp = await fetch(OPEN_OUTPUT_URL, {
       method: "POST",
@@ -1866,22 +1873,56 @@ async function openOutputFolderDl(filename) {
   }
 }
 
-// 记录「另存为」选中的目录：桌面端在 download-progress 事件里回传 savePath
-function dirOf(p) {
-  if (!p) return null;
-  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
-  return i > 0 ? p.slice(0, i) : p;
-}
+// 用户取消「另存为」→ 退回蓝色「下载产物」，避免停留在误导的绿色态
 if (window.desktop && typeof window.desktop.onDownloadProgress === "function") {
   window.desktop.onDownloadProgress((p) => {
-    if (p && p.savePath) lastDownloadDir = dirOf(p.savePath);
-    // 用户取消「另存为」→ 退回蓝色「下载产物」，避免停留在误导的绿色态
     if (p && p.phase === "canceled") {
       const t = el.btnOpenOutput;
       const c = t && t.querySelector(".dl-toggle-input");
       if (c) c.checked = false;
     }
   });
+}
+
+// 点击「开始单条去重」时确保已配置输出目录：
+//  - 已配置（config.json 含 output_dir）→ 直接返回该目录
+//  - 未配置 → 弹系统文件夹选择，保存到配置（立即生效），返回所选目录
+// 返回目录字符串；用户取消选择则返回 null（调用方中止去重）。
+async function ensureOutputDir() {
+  try {
+    const resp = await fetch(GET_OUTPUT_DIR_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok && data.ok && data.configured && data.output_dir) {
+      return data.output_dir;
+    }
+  } catch (e) { /* 落到下面的选择流程 */ }
+  if (!window.desktop || typeof window.desktop.chooseDirectory !== "function") {
+    toast("当前环境不支持选择目录，请在设置中配置输出目录", "warn");
+    return null;
+  }
+  const r = await window.desktop.chooseDirectory().catch(() => ({ ok: false }));
+  if (!r || r.canceled || !r.ok || !r.dir) {
+    toast("未选择输出目录，已取消去重", "warn");
+    return null;
+  }
+  try {
+    const resp = await fetch(SET_OUTPUT_DIR_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dir: r.dir }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok !== true) throw new Error(data.message || "HTTP " + resp.status);
+    toast("输出目录已设为：" + data.output_dir, "ok");
+    return data.output_dir;
+  } catch (e) {
+    toast("保存输出目录失败：" + (e.message || e), "err");
+    return null;
+  }
 }
 el.fissionList.addEventListener("click", (e) => {
   const item = e.target.closest("[data-artifact-name]");
@@ -2230,4 +2271,24 @@ connectAndBootstrap();
       btn.setAttribute("aria-expanded", String(!collapsed));
     });
   });
+})();
+
+// 右侧边栏面板级收纳/展开
+(function initPanelCollapse() {
+  var panel = document.getElementById("audit-panel");
+  var toggleBtn = document.getElementById("panel-collapse-toggle");
+  var expandFab = document.getElementById("panel-expand-fab");
+  if (!panel || !toggleBtn || !expandFab) return;
+
+  function collapsePanel() {
+    panel.classList.add("panel-collapsed");
+    toggleBtn.setAttribute("aria-expanded", "false");
+  }
+  function expandPanel() {
+    panel.classList.remove("panel-collapsed");
+    toggleBtn.setAttribute("aria-expanded", "true");
+  }
+
+  toggleBtn.addEventListener("click", collapsePanel);
+  expandFab.addEventListener("click", expandPanel);
 })();

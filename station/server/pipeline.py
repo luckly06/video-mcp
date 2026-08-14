@@ -49,8 +49,11 @@ FFPROBE = Path(os.environ.get("VU_FFPROBE", _VENDOR / "ffmpeg" / "ffprobe.exe"))
 WATERMARKS_DIR = Path(os.environ.get("VU_WATERMARKS", _VENDOR / "watermarks"))
 
 VIDEO_DIR = Path(os.environ.get("VU_ASSETS", PROJECT_DIR / "input"))   # 用户素材只读目录
-# 输出目录：提到工程根 video-uniqueness/output（相对锚定 = PROJECT_DIR/output）
-OUTPUT_DIR = Path(os.environ.get("VU_OUTPUT", PROJECT_DIR / "output"))
+# 输出目录：优先 VU_OUTPUT 环境变量（含 mcp_server 启动时从 config.json 注入）；
+# 否则落到用户 Videos 目录下的固定位置 —— 打包成 exe 后 PROJECT_DIR/output 会
+# 权限失败或随临时解压目录丢失，故默认改用用户可写目录。
+_OUTPUT_DEFAULT = Path.home() / "Videos" / "视频去重产物"
+OUTPUT_DIR = Path(os.environ.get("VU_OUTPUT", _OUTPUT_DEFAULT))
 
 
 class PipelineError(Exception):
@@ -876,6 +879,9 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 def batch_fission(src, count=5, params=None,
                   level=None, dimensions=None, flip_mode=None, cancel_token=None):
     """裂变：同一素材生成 count 个不同参数的变体（本期增量：档位/维度透传 + 距离矩阵）。
+
+    ⚠️ 不支持 TTS 配音：裂变刻意保持无云依赖、可并行批量，不接 copy_rewriter/tts_client。
+       需要配音请走单条 dedup_video（含「改写→配音」链路）。
 
     每变体用不同 seed 保证互异；开启 flip 后自动轮换 h/v/90；产出后调
     metrics.distance_matrix 计算两两感知哈希距离，并入顶层 matrix。

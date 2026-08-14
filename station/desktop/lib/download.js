@@ -55,6 +55,22 @@ function attachDownloadHandlers({ session, getMainWindow, log }) {
     }
   });
 
+  // 选择输出目录（系统文件夹选择对话框，供「输出目录」设置项使用）
+  ipcMain.handle('app:choose-directory', async () => {
+    try {
+      const result = await dialog.showOpenDialog({
+        title: '选择产物输出目录',
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      if (result.canceled || !result.filePaths || !result.filePaths.length) {
+        return { ok: false, canceled: true };
+      }
+      return { ok: true, dir: result.filePaths[0] };
+    } catch (e) {
+      return { ok: false, reason: e && e.message ? e.message : String(e) };
+    }
+  });
+
   log?.info?.('[download] handlers attached');
 }
 
