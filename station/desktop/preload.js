@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('desktop', {
     catch (e) { return { ok: false, reason: e.message || String(e) }; }
   },
 
+  // 打开指定文件夹（打包后用于打开「用户自己选的下载目录」）
+  async openFolder(dirPath) {
+    if (typeof dirPath !== 'string') return { ok: false, reason: 'dirPath must be a string' };
+    try { return await ipcRenderer.invoke('app:open-folder', dirPath); }
+    catch (e) { return { ok: false, reason: e.message || String(e) }; }
+  },
+
   // 元宝 BrowserWindow — 无 modal，无 confirm
   async openYuanbao() {
     try { return await ipcRenderer.invoke('yuanbao:show'); }

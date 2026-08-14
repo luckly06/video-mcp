@@ -152,6 +152,7 @@ let lastProbedAsset = null;
 let lastProbeInfo = null;
 let dedupDeliveryReady = false;
 let currentDedupArtifact = null;
+let lastDownloadDir = null; // 用户通过「另存为」选中的下载目录（打包后用于「打开文件夹」）
 let currentFissionArtifacts = [];
 let selectedFissionArtifact = null;
 let currentWorkflowStep = 1;
@@ -373,6 +374,7 @@ function resetResultsForAssetChange() {
   lastProbeInfo = null;
   dedupDeliveryReady = false;
   currentDedupArtifact = null;
+  lastDownloadDir = null;
   currentFissionArtifacts = [];
   selectedFissionArtifact = null;
   el.btnDeliver.disabled = true;
@@ -1152,6 +1154,7 @@ function renderDedup(d) {
   }
 
   currentDedupArtifact = d.output_path ? baseName(d.output_path) : null;
+  lastDownloadDir = null; // 新产物：清除上一次下载目录，避免打开到旧文件的下载位置
   if (currentDedupArtifact) {
     el.dedupArtifactName.textContent = currentDedupArtifact;
     el.dedupArtifact.title = d.output_path;
@@ -1842,8 +1845,13 @@ el.btnOpenOutput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.btnOpenOutput.click(); }
 });
 
-// 打开产物文件夹（复用本地后端 /local/open-output，Windows 下 os.startfile 定位文件）
+// 打开产物文件夹（优先打开用户自己选的下载目录；无下载记录时退回服务端 output 目录）
 async function openOutputFolderDl(filename) {
+  if (lastDownloadDir) {
+    const r = await window.desktop?.openFolder(lastDownloadDir).catch(() => ({ ok: false }));
+    if (r && r.ok) { toast("已打开下载文件夹：" + lastDownloadDir, "ok"); return; }
+    // 失败则继续走服务端兜底
+  }
   try {
     const resp = await fetch(OPEN_OUTPUT_URL, {
       method: "POST",
@@ -1856,6 +1864,24 @@ async function openOutputFolderDl(filename) {
   } catch (e) {
     toast("打开输出文件夹失败：" + (e.message || e), "warn");
   }
+}
+
+// 记录「另存为」选中的目录：桌面端在 download-progress 事件里回传 savePath
+function dirOf(p) {
+  if (!p) return null;
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i > 0 ? p.slice(0, i) : p;
+}
+if (window.desktop && typeof window.desktop.onDownloadProgress === "function") {
+  window.desktop.onDownloadProgress((p) => {
+    if (p && p.savePath) lastDownloadDir = dirOf(p.savePath);
+    // 用户取消「另存为」→ 退回蓝色「下载产物」，避免停留在误导的绿色态
+    if (p && p.phase === "canceled") {
+      const t = el.btnOpenOutput;
+      const c = t && t.querySelector(".dl-toggle-input");
+      if (c) c.checked = false;
+    }
+  });
 }
 el.fissionList.addEventListener("click", (e) => {
   const item = e.target.closest("[data-artifact-name]");

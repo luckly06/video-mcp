@@ -44,6 +44,17 @@ function attachDownloadHandlers({ session, getMainWindow, log }) {
     }
   });
 
+  // 打开指定文件夹（打包后用于打开「用户自己选的下载目录」）
+  ipcMain.handle('app:open-folder', async (_evt, dirPath) => {
+    if (typeof dirPath !== 'string' || !dirPath) return { ok: false, reason: 'dirPath required' };
+    try {
+      await shell.openPath(dirPath);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: e && e.message ? e.message : String(e) };
+    }
+  });
+
   log?.info?.('[download] handlers attached');
 }
 
