@@ -1102,26 +1102,27 @@ function renderDedup(d) {
   setCheck(el.chkMd5, c.md5_changed);
   setCheck(el.chkRes, c.resolution_kept);
 
-  // 时长合规：动态标签（根据通过/失败 + TTS 状态显示有意义的说明）
+  // 时长合规：动态标签（TTS 生效时成片=配音时长，比原视频短是预期，按中性说明而非报错）
   const srcDur = (d.src && d.src.duration) || 0;
   const outDur = (d.output && d.output.duration) || 0;
   const ap = d.applied_params || {};
-  const ttsOn = !!(ap.tts_applied && ap.tts_duration);
-  if (c.duration_close === true) {
-    if (ttsOn) {
-      setCheck(el.chkDur, true, "配音时长匹配（" + outDur.toFixed(1) + "s ≈ TTS " + ap.tts_duration.toFixed(1) + "s）");
+  const ttsOn = !!(ap.tts_applied && (ap.tts_duration || outDur));
+  // 原视频 - 成片 = 缩短量；TTS 场景下为正且属正常（混音 -shortest 把视频截到配音长度）
+  const shorten = srcDur - outDur;
+  if (ttsOn) {
+    if (shorten > 0.5) {
+      setCheck(el.chkDur, true,
+        "TTS 输出全部文案，但视频时长缩短了 " + shorten.toFixed(2) + "s（配音 " + outDur.toFixed(1) + "s）");
     } else {
-      var delta = Math.abs(outDur - srcDur);
-      setCheck(el.chkDur, true, "变化处于允许范围（" + delta.toFixed(2) + "s）");
+      setCheck(el.chkDur, true,
+        "配音时长匹配（" + outDur.toFixed(1) + "s ≈ TTS " + (ap.tts_duration || outDur).toFixed(1) + "s）");
     }
+  } else if (c.duration_close === true) {
+    var delta = Math.abs(outDur - srcDur);
+    setCheck(el.chkDur, true, "变化处于允许范围（" + delta.toFixed(2) + "s）");
   } else {
-    if (ttsOn) {
-      var diff = Math.abs(outDur - ap.tts_duration);
-      setCheck(el.chkDur, false, "配音时长偏差 " + diff.toFixed(2) + "s（超出 ±5%）");
-    } else {
-      var delta2 = Math.abs(outDur - srcDur);
-      setCheck(el.chkDur, false, "变化超出允许范围（Δ" + delta2.toFixed(2) + "s）");
-    }
+    var delta2 = Math.abs(outDur - srcDur);
+    setCheck(el.chkDur, false, "变化超出允许范围（Δ" + delta2.toFixed(2) + "s）");
   }
 
   setCheck(el.chkMinDur, c.min_duration_ok);
