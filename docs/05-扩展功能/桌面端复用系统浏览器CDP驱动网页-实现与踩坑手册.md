@@ -284,6 +284,7 @@ async def _wait_reply(page, timeout):
 | 8 | `subprocess.Popen(stdout=str(路径))` 抓日志 | 字符串被当文件对象调 `.fileno()` → `'str' object has no attribute 'fileno'`，浏览器根本没起 | `stdout=open(路径, 'w')` 真正的文件对象 |
 | 9 | `taskkill` 杀掉所有 Edge 后**不重开**用户浏览器 | 用户标签页全丢、体验崩 | 复制完登录态后重开用户浏览器；收尾只按 PID 树回收调试实例 |
 | 10 | 复制登录态时用 `copy2` 直接拷 **Cookies**（运行中被锁） | 文件级独占锁，读都读不到 | 先关浏览器；用 `sqlite3 backup` 拿一致快照 |
+| 11 | 用 `str.format()` 给**含 JS/代码**的模板注入参数（模板里有 `{ }` 花括号：`{type:'image/png'}`、`if{}`、箭头函数体、`new Event({bubbles:true})`） | `.format()` 把所有 `{` 当占位符解析 → `ValueError: unexpected '{' in field name`，脚本生成直接崩（表象：改写子进程报「未获得改写结果」） | 模板里所有**字面花括号必须转义为 `{{` `}}`**；或彻底别用 `.format()`，改用 `.replace()` + 唯一哨兵令牌（如 `<<<FRAMES>>>`）避免整类坑 |
 
 ---
 
