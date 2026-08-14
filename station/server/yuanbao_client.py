@@ -683,32 +683,55 @@ async def main():
                     _src = _src.split(',', 1)[1]
                 _b64_frames.append(_src)
 
-            # 在页面 DOM 内用 DataTransfer 灌文件（对齐 content-yuanbao.js:79-85）
-            # 不点任何 Playwright 按钮，直接操作隐藏的 input[type=file]；
-            # 若找不到 input，再用 evaluate 在页面内点上传按钮（避免 Playwright 事件链触发原生对话框）
-            uploaded = await page.evaluate("""([frames_b64]) => {{
-                var fi = document.querySelector('input[type="file"]');
-                // 如果找不到隐藏的 file input，尝试在页面内点上传按钮让它出现
-                if (!fi) {{
-                    var ub = document.querySelector('[class*="UploadFileSelector_iconContainer"]');
-                    if (ub) ub.click();
-                    fi = document.querySelector('input[type="file"]');
+            # 严格对齐已验证的扩展版 content-yuanbao.js uploadImages（合成事件，不触发原生对话框）：
+            # 聚焦编辑器 → 点上传按钮容器(ub) → 点「图片」菜单 → 轮询 input[type=file] → DataTransfer 灌文件。
+            # 关键：必须点「图片」进入图片模式，否则页面会把文件输入框 .click() → 弹出系统文件选择器。
+            # 全程绝不调用文件输入框自身的 .click()，所以不会弹原生对话框。
+            uploaded = await page.evaluate("""async ([frames_b64]) => {{
+                const sleep = ms => new Promise(r => setTimeout(r, ms));
+                function findElByText(t) {{
+                    const els = [...document.querySelectorAll('*')];
+                    return els.find(e => (e.textContent || '').trim() === t && e.children.length === 0) || null;
                 }}
-                if (!fi) return 'NO_INPUT';
-                try {{
-                    const dt = new DataTransfer();
-                    frames_b64.forEach((b64, i) => {{
-                        const arr = b64.split(','), bstr = atob(arr.length > 1 ? arr[1] : arr[0]);
-                        const u8 = new Uint8Array(bstr.length);
-                        for (let j = 0; j < bstr.length; j++) u8[j] = bstr.charCodeAt(j);
-                        const f = new File([u8], '_yb_frame_' + i + '.png', {{ type: 'image/png' }});
-                        dt.items.add(f);
-                    }});
-                    fi.files = dt.files;
-                    fi.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    fi.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    return 'OK:' + frames_b64.length;
-                }} catch(e) {{ return 'ERR:' + e.message; }}
+                // 1) 聚焦编辑器（元宝上传按钮依赖编辑器聚焦才会出现）
+                for (const sel of ['div[contenteditable=\"true\"]', 'textarea[placeholder*=\"输入\"]', 'textarea[placeholder*=\"描述\"]']) {{
+                    const e = document.querySelector(sel);
+                    if (e) {{ e.focus(); try {{ e.click(); }} catch(_) {{ }} break; }}
+                }}
+                await sleep(400);
+                // 2) 点上传按钮容器
+                const ub = document.querySelector('[class*=\"UploadFileSelector_iconContainer\"]');
+                if (ub) ub.click();
+                await sleep(600);
+                // 3) 点「图片」菜单（进入图片上传模式）
+                const pic = findElByText('图片');
+                if (pic) pic.click();
+                await sleep(800);
+                // 4) 轮询 input[type=file]，用 DataTransfer 直接灌文件（绝不 .click() 文件输入框）
+                return await new Promise(resolve => {{
+                    let tries = 0;
+                    const iv = setInterval(() => {{
+                        tries++;
+                        const fi = document.querySelector('input[type=\"file\"]');
+                        if (fi) {{
+                            try {{
+                                const dt = new DataTransfer();
+                                frames_b64.forEach((b64, i) => {{
+                                    const arr = b64.split(','), bstr = atob(arr.length > 1 ? arr[1] : arr[0]);
+                                    const u8 = new Uint8Array(bstr.length);
+                                    for (let j = 0; j < bstr.length; j++) u8[j] = bstr.charCodeAt(j);
+                                    const f = new File([u8], '_yb_frame_' + i + '.png', {{ type: 'image/png' }});
+                                    dt.items.add(f);
+                                }});
+                                fi.files = dt.files;
+                                fi.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                fi.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                clearInterval(iv);
+                                resolve('OK:' + frames_b64.length);
+                            }} catch(e) {{ clearInterval(iv); resolve('ERR:' + e.message); }}
+                        }} else if (tries > 25) {{ clearInterval(iv); resolve('NO_INPUT'); }}
+                    }}, 200);
+                }});
             }}""", _b64_frames)
             log("图片上传结果: " + str(uploaded))
             if str(uploaded).startswith("OK"):
