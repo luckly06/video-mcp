@@ -273,7 +273,7 @@ code {
 .dim-chk small { color: var(--text-tertiary); font-size: 10px; }
 .dim-chk:has(input:checked) { border-color: #A9CDED; background: #F1F8FE; color: var(--brand-primary-dark); }
 .dim-chk.dim-flip:has(input:checked) { border-color: #F1C87A; background: var(--warned-bg); color: var(--warned); }
-.dimension-faq { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 12px; align-items: start; margin: -2px 0 14px 92px; padding: 12px; border: 1px solid #F4D59B; border-radius: var(--radius-md); background: linear-gradient(180deg, #FFFBF3 0%, #FFFFFF 100%); }
+.dimension-faq { position: relative; display: inline-flex; align-items: center; gap: 10px; margin: -2px 0 14px 92px; padding: 6px 10px 6px 6px; border: 1px solid #F4D59B; border-radius: 999px; background: #FFFBF3; }
 .faq-button { width: 50px; height: 50px; border-radius: 50%; border: none; background-color: #ffe53b; background-image: linear-gradient(147deg, #ffe53b 0%, #ff2525 74%); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0px 10px 10px rgba(0, 0, 0, 0.151); position: relative; flex: none; }
 .faq-button svg { height: 1.5em; fill: white; }
 .faq-button:hover svg, .faq-button:focus-visible svg { animation: jello-vertical 0.7s both; }
@@ -281,6 +281,10 @@ code {
 .faq-button .tooltip { position: absolute; top: -20px; opacity: 0; background-color: #ffe53b; background-image: linear-gradient(147deg, #ffe53b 0%, #ff2525 74%); color: white; padding: 5px 10px; border-radius: 5px; display: flex; align-items: center; justify-content: center; transition-duration: 0.2s; pointer-events: none; letter-spacing: 0.5px; font-size: 11px; font-weight: 600; }
 .faq-button .tooltip::before { position: absolute; content: ""; width: 10px; height: 10px; background-color: #ff2525; background-size: 1000%; background-position: center; transform: rotate(45deg); bottom: -15%; transition-duration: 0.3s; }
 .faq-button:hover .tooltip, .faq-button:focus-visible .tooltip { top: -40px; opacity: 1; transition-duration: 0.3s; }
+.dimension-faq-hint { color: var(--warned); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.dimension-faq-body { position: absolute; z-index: 80; left: 0; top: calc(100% + 10px); width: min(760px, calc(100vw - 72px)); padding: 14px; border: 1px solid #F4D59B; border-radius: var(--radius-md); background: linear-gradient(180deg, #FFFBF3 0%, #FFFFFF 100%); box-shadow: var(--shadow-float); opacity: 0; visibility: hidden; transform: translateY(-6px); pointer-events: none; transition: opacity var(--ease-standard), visibility var(--ease-standard), transform var(--ease-standard); }
+.dimension-faq-body::before { content: ""; position: absolute; left: 22px; top: -6px; width: 12px; height: 12px; border-left: 1px solid #F4D59B; border-top: 1px solid #F4D59B; background: #FFFBF3; transform: rotate(45deg); }
+.dimension-faq:hover .dimension-faq-body, .dimension-faq:focus-within .dimension-faq-body { opacity: 1; visibility: visible; transform: translateY(0); pointer-events: auto; }
 .dimension-faq-title h4 { margin: 3px 0 2px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .dimension-faq-title p { margin: 0 0 10px; color: var(--text-secondary); font-size: 12px; }
 .dimension-faq-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; margin: 0; }
@@ -621,8 +625,8 @@ code {
   .card-heading > .btn, .fission-controls { margin-top: 14px; }
 }
 @media (max-width: 620px) {
-  .dimension-faq { grid-template-columns: 1fr; }
-  .faq-button { justify-self: start; }
+  .dimension-faq { display: flex; width: fit-content; }
+  .dimension-faq-body { width: calc(100vw - 36px); }
   .dimension-faq-list { grid-template-columns: 1fr; }
   .artifact-highlight { grid-template-columns: 1fr; gap: 3px; }
   .artifact-highlight > :last-child { white-space: normal; }
