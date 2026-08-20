@@ -16,13 +16,31 @@ _HERE = Path(__file__).resolve().parent
 PROFILE_DIR = os.environ.get("VU_YUANBAO_PROFILE",
                              str(_HERE / "logs" / ".yuanbao-profile"))
 
+def _default_app_data_dir():
+    base = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+    if base:
+        return Path(base) / "video-dedup-desktop"
+    return _HERE / "logs"
+
+
+APP_DATA_DIR = Path(os.environ.get("VU_DESKTOP_USER_DATA", str(_default_app_data_dir())))
+
 # 持久诊断日志：改写全过程都写这里，出问题直接看这个文件
-LOG_PATH = _HERE / "logs" / "yuanbao_debug.log"
+LOG_PATH = Path(os.environ.get(
+    "VU_YUANBAO_LOG",
+    str(APP_DATA_DIR / "logs" / "yuanbao_debug.log"),
+))
 # 调试 Edge 实例状态（端口 / profile / pid），供下次改写复用，避免反复重启用户 Edge
-STATE_PATH = _HERE / "logs" / "edge_debug_state.json"
+STATE_PATH = Path(os.environ.get(
+    "VU_YUANBAO_STATE",
+    str(APP_DATA_DIR / "logs" / "edge_debug_state.json"),
+))
 # 调试专用 Edge profile：持久化（不是临时目录），这样万一登录态复制不生效，
 # 用户在该窗口手动登录一次即可长期有效，不会每次都要重新登录
-DEBUG_PROFILE = _HERE / "logs" / ".edge-debug-profile"
+DEBUG_PROFILE = Path(os.environ.get(
+    "VU_YUANBAO_DEBUG_PROFILE",
+    str(APP_DATA_DIR / "yuanbao-edge-profile"),
+))
 
 EDGE_CANDIDATES = (
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -191,18 +209,17 @@ def _edge_running():
 
 
 def ensure_edge_debug_port():
-    """准备一个「带调试端口 + 复用用户元宝登录态」的 Edge 实例。
+    """准备一个「带调试端口 + 独立持久登录态」的 Edge 实例。
 
     Edge 136+ 起明确禁止在默认 profile 上开远程调试
     （二进制内字符串：DevTools remote debugging requires a non-default data directory），
-    因此只能：关闭 Edge → 复制登录态到独立临时 profile → 用它启动调试版 Edge。
+    因此使用独立持久 profile 启动调试版 Edge。
+    重要：绝不关闭用户自己的 Edge；首次使用请在调试 Edge 窗口扫码登录一次。
 
     返回 dict：
       ok / msg / profile / port / pid / reused(是否复用上次实例) / relaunch_user_edge(是否需在收尾重开用户 Edge)
     """
     import socket
-    import tempfile as _tempfile
-    import shutil as _shutil
 
     def _free_port():
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -211,7 +228,7 @@ def ensure_edge_debug_port():
         s.close()
         return p
 
-    def fail(msg, relaunch):
+    def fail(msg, relaunch=False):
         _dlog("FAIL: " + msg.replace("\n", " | "))
         return {"ok": False, "msg": msg, "profile": None, "port": None,
                 "pid": None, "reused": False, "relaunch_user_edge": relaunch}
@@ -238,43 +255,10 @@ def ensure_edge_debug_port():
 
     _sweep_stale_profiles()
 
-    # 1) 只有「调试 profile 还没播种过登录态」时才需要关一次用户 Edge
-    #    （Cookies 库在 Edge 运行时被文件级独占锁死，open/copy/sqlite/esentutl 全部读不到）
-    ck = DEBUG_PROFILE / "Default" / "Network" / "Cookies"
-    need_seed = not (ck.exists() and ck.stat().st_size > 0)
+    # 1) 不再复制/抢占用户默认 Edge 登录态，也绝不 taskkill 用户 Edge。
+    #    调试 profile 持久放在用户目录，首次扫码后长期复用；更新/重装应用不丢登录态。
+    _dlog(f"使用独立调试 profile={DEBUG_PROFILE}；不会关闭用户 Edge")
     was_running = False
-    _dlog(f"调试 profile 需要播种登录态={need_seed} ({DEBUG_PROFILE})")
-
-    if need_seed:
-        was_running = _edge_running()
-        _dlog(f"用户 Edge 运行中={was_running}")
-        if was_running:
-            try:
-                subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"],
-                               capture_output=True, timeout=60)
-            except Exception as e:
-                _dlog(f"taskkill 异常: {e}")
-            gone = False
-            for _ in range(40):
-                time.sleep(0.5)
-                if not _edge_running():
-                    gone = True
-                    break
-            _dlog(f"Edge 已完全退出={gone}")
-            if not gone:
-                return fail("关闭 Edge 超时（20s 后仍有 msedge.exe 存活，可能是启动加速在自动重启）。"
-                            "请手动退出 Edge 后重试。", True)
-            time.sleep(1.0)  # 等文件句柄真正释放
-
-        t0 = time.time()
-        copied = copy_edge_login_state(DEBUG_PROFILE)
-        ck_size = ck.stat().st_size if ck.exists() else 0
-        _dlog(f"播种登录态 ok={copied} 耗时={time.time()-t0:.1f}s Cookies={ck_size}B")
-        if not copied or ck_size == 0:
-            if not (DEBUG_PROFILE / "Local State").exists():
-                return fail("复制 Edge 登录态失败：Cookies 库不可读"
-                            "（Edge 未完全退出或被安全软件锁定）", was_running)
-            _dlog("播种失败但 profile 已存在，继续用现有 profile 启动")
 
     # 2) 清掉可能残留的单例锁（上次调试 Edge 被强杀会留下，导致新进程直接移交并退出→端口永不就绪）
     for lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
@@ -293,7 +277,7 @@ def ensure_edge_debug_port():
         DEBUG_PROFILE.mkdir(parents=True, exist_ok=True)
         logf = open(str(log_path), "w", encoding="utf-8", errors="replace")
     except Exception as e:
-        return fail(f"无法创建 Edge 日志文件: {e}", was_running)
+        return fail(f"无法创建 Edge 日志文件: {e}")
 
     args = [edge,
             f"--remote-debugging-port={port}",
@@ -309,7 +293,7 @@ def ensure_edge_debug_port():
     except Exception as e:
         try: logf.close()
         except Exception: pass
-        return fail(f"启动调试版 Edge 失败: {e}", was_running)
+        return fail(f"启动调试版 Edge 失败: {e}")
 
     # 4) 等 CDP 真正可用（不只是端口能连上）
     t1 = time.time()
@@ -333,13 +317,73 @@ def ensure_edge_debug_port():
         _dlog(f"调试端口未就绪，Edge 日志: {diag}")
         try: proc.kill()
         except Exception: pass
-        return fail(f"调试版 Edge 30s 未就绪。Edge 日志:\n{diag}", was_running)
+        return fail(f"调试版 Edge 30s 未就绪。Edge 日志:\n{diag}")
 
     _dlog(f"调试 Edge 就绪 {time.time()-t1:.1f}s browser={ver} pid={proc.pid} port={port}")
     _write_state({"port": port, "profile": str(DEBUG_PROFILE), "pid": proc.pid})
     return {"ok": True, "msg": f"已启动调试 Edge（端口 {port}，{ver}）",
             "profile": str(DEBUG_PROFILE), "port": port, "pid": proc.pid,
-            "reused": False, "relaunch_user_edge": was_running}
+            "reused": False, "relaunch_user_edge": False}
+
+
+def _open_debug_yuanbao(port):
+    """把元宝登录页打开到调试 Edge 中，确保扫码态与改写态使用同一 profile。"""
+    if not port:
+        return False, "缺少调试端口"
+    try:
+        import urllib.parse
+        import urllib.request
+        url = f"http://127.0.0.1:{int(port)}/json/new?{urllib.parse.quote(YUANBAO_URL, safe='')}"
+        req = urllib.request.Request(url, method="PUT")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+        _dlog(f"已通过 CDP 打开元宝登录页 port={port}")
+        return True, "已通过调试端口打开元宝登录页"
+    except Exception as e:
+        _dlog(f"CDP 打开元宝失败，改用 Edge 命令唤起: {e}")
+        edge = _edge_exe()
+        if not edge:
+            return False, "未找到 Edge 可执行文件"
+        try:
+            subprocess.Popen([edge, f"--user-data-dir={DEBUG_PROFILE}", "--new-window", YUANBAO_URL],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, "已通过 Edge 命令打开元宝登录页"
+        except Exception as ee:
+            return False, f"打开元宝登录页失败: {ee}"
+
+
+def login_debug():
+    """桌面端首次扫码登录入口：复用 AI 改写使用的调试 Edge/Profile。"""
+    info = ensure_edge_debug_port()
+    if not info.get("ok"):
+        if info.get("relaunch_user_edge"):
+            _relaunch_user_edge()
+        return {
+            "ok": False,
+            "error": info.get("msg") or "调试 Edge 启动失败",
+            "profile": info.get("profile"),
+            "port": info.get("port"),
+        }
+
+    opened, open_msg = _open_debug_yuanbao(info.get("port"))
+    if info.get("relaunch_user_edge"):
+        _relaunch_user_edge()
+    if not opened:
+        return {
+            "ok": False,
+            "error": open_msg,
+            "profile": info.get("profile") or str(DEBUG_PROFILE),
+            "port": info.get("port"),
+        }
+    return {
+        "ok": True,
+        "msg": "已打开元宝调试登录窗口；请在该窗口扫码登录，AI 改写预览会复用同一登录态。",
+        "profile": info.get("profile") or str(DEBUG_PROFILE),
+        "port": info.get("port"),
+        "pid": info.get("pid"),
+        "reused": bool(info.get("reused")),
+        "open_msg": open_msg,
+    }
 
 
 def _pick_channel():
@@ -601,6 +645,39 @@ async def read_last_reply(page, bl):
             return t
     return ""
 
+
+async def start_fresh_chat(page):
+    """每次改写尽量从新对话开始，避免旧聊天上下文污染新视频。"""
+    try:
+        await page.goto("https://yuanbao.tencent.com/", wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(1.5)
+    except Exception as e:
+        log("fresh goto 元宝失败: " + str(e)[:120])
+
+    selectors = [
+        'button:has-text("新建对话")',
+        'button:has-text("新对话")',
+        'button:has-text("开启新对话")',
+        '[aria-label*="新建对话"]',
+        '[aria-label*="新对话"]',
+        '[title*="新建对话"]',
+        '[title*="新对话"]',
+        'button:has-text("New chat")',
+    ]
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() > 0 and await loc.is_visible():
+                await loc.click()
+                await asyncio.sleep(1.0)
+                log("已尝试新建元宝对话 selector=" + sel)
+                return True
+        except Exception:
+            pass
+    log("未找到新建对话按钮，继续使用当前元宝输入区")
+    return False
+
+
 async def main():
     profile = Path(r"{profile}")
     profile.mkdir(parents=True, exist_ok=True)
@@ -633,15 +710,9 @@ async def main():
         ctx = browser_ctx.contexts[0] if browser_ctx.contexts else await browser_ctx.new_context()
         urls = [(pg.url or "") for pg in ctx.pages]
         log("已有页面: " + repr(urls))
-        # 精确挑选元宝页；没有就新开一个（避免误驱动用户其它标签页）
-        page = None
-        for pg in ctx.pages:
-            if "yuanbao.tencent.com" in (pg.url or ""):
-                page = pg
-                break
-        if page is None:
-            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            log("未找到元宝页，将用 " + (page.url or "about:blank"))
+        # 每次改写都新开元宝页，避免复用旧聊天页导致旧视频上下文污染。
+        page = await ctx.new_page()
+        log("为本次改写新建元宝页")
         try:
             await page.bring_to_front()
         except Exception:
@@ -665,8 +736,10 @@ async def main():
         need_login = False
     if need_login:
         log("检测到登录弹窗 → 复制的登录态未生效")
-        print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝显示未登录：复制到调试 Edge 的登录态未生效（Cookie 加密绑定所致）。请在弹出的调试 Edge 窗口里扫码登录一次，之后会一直复用该实例。"}}, ensure_ascii=False))
+        print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝显示未登录：请在弹出的调试 Edge 窗口里扫码登录一次，之后会一直复用该实例。"}}, ensure_ascii=False))
         return
+
+    await start_fresh_chat(page)
 
     # === 图片上传：Playwright set_input_files 直接灌真实文件路径（受信注入）===
     # 关键结论：元宝是 React 应用。直接 input.files=DataTransfer + dispatchEvent 在 React 受控组件下
@@ -920,6 +993,10 @@ def _cli_arg(name, default=""):
 if __name__ == "__main__":
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if "--login-debug" in sys.argv:
+        r = login_debug()
+        print(json.dumps(r, ensure_ascii=False))
+        raise SystemExit(0 if r.get("ok") else 1)
     if "--login" in sys.argv:
         raise SystemExit(0 if login() else 1)
     if "--rewrite" in sys.argv:

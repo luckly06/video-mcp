@@ -1004,8 +1004,10 @@ function syncFlipModeState() {
 /* ---------------------------------------------------------------------------
    去重（dedup_video）—— 走人工决策流 + 自检报告
    --------------------------------------------------------------------------- */
-/** 🆕 读取 TTS 参数（自动模式=提取+改写，手动模式=用户文案） */
+/** 🆕 读取 TTS 参数（必须显式勾选“启用 AI 配音”；自动模式=提取+改写，手动模式=用户文案） */
 function readTTS() {
+  const enableTts = !!(document.getElementById("chk-tts-enable") || {}).checked;
+  if (!enableTts) return null;
   const modeBtn = document.querySelector("#tts-mode-switch .tts-mode-btn.active");
   const isAuto = modeBtn && modeBtn.getAttribute("data-mode") === "auto";
   const elVoice = document.getElementById("tts-voice");
@@ -1021,6 +1023,7 @@ function readTTS() {
       template = elTemplate ? elTemplate.value.trim() : "";
     }
     return {
+      enable_tts: true,
       tts_text: null,
       rewrite_template: template,  // 空 = 不改写，非空 =元宝改写
       rewrite_topic: (document.getElementById("tts-topic") || {}).value || "",
@@ -1033,6 +1036,7 @@ function readTTS() {
     const text = (elText && elText.value || "").trim();
     if (!text) return null;
     return {
+      enable_tts: true,
       tts_text: text,
       tts_voice: elVoice ? elVoice.value : "冰糖",
       tts_speed: elSpeed ? parseFloat(elSpeed.value) || 1.0 : 1.0,
@@ -1043,7 +1047,7 @@ function readTTS() {
 /**
  * TTS 配音未生效时，弹出原生对话框提示用户（桌面端）；
  * 非桌面端（纯网页）降级为页内 toast。
- * 触发条件：仅单条去重中，用户「启用了 TTS」但产物没有成功配音。两种意图都算“启用”：
+ * 触发条件：仅单条去重中，用户显式勾选「启用 AI 配音」但产物没有成功配音。两种意图都算“启用”：
  *   - 手动填文案：args.tts_text 有值，但产物 applied.tts_applied 为 false → 展示失败原因。
  *   - 改写+配音：args.rewrite_template 有值，但产物无 tts_applied →
  *     改写失败（元宝未登录/超时）或改写成功但 TTS 混音失败。
@@ -1142,7 +1146,7 @@ async function doDedup() {
       const _ap = res.data.applied_params || {};
       // 单条去重：用户启用了 TTS（手动文案或改写模式）但产物未成功配音 → 原生弹窗提示。
       // 批量裂变当前设计为不支持 TTS 配音，因此不应复用此提醒。
-      const _ttsRequested = !!(args.tts_text) || !!(args.rewrite_template);
+      const _ttsRequested = !!args.enable_tts && (!!(args.tts_text) || !!(args.rewrite_template));
       if (_ttsRequested && !_ap.tts_applied) {
         notifyTtsFailure(args, _ap, "去重");
       }
@@ -1305,8 +1309,7 @@ async function doFission() {
 
   const args = { src, count, level, dimensions, task_id: newFissionTaskId() };
   if (flip_mode) args.flip_mode = flip_mode;
-  const tts = readTTS();
-  if (tts) Object.assign(args, tts);
+  // 批量裂变当前不支持 TTS 配音，不读取也不透传 TTS/改写参数。
   const fissionDir = await ensureOutputDir("fission");
   if (!fissionDir) return; // 用户取消选择输出目录 → 中止本次裂变
   setWorkflowStep(3);
@@ -1910,16 +1913,20 @@ if (el.btnFontReset) el.btnFontReset.addEventListener("click", () => applyFontSc
 el.btnOpenOutputFission.addEventListener("click", () => downloadArtifact(selectedFissionArtifact, "裂变"));
 
 // 打开去重产物文件夹（subdir="去重"）
-el.btnOpenDedupFolder.addEventListener("click", () => openSubdirFolder("去重"));
+el.btnOpenDedupFolder.addEventListener("click", () => openSubdirFolder("去重", currentDedupArtifact));
 el.btnConfigDedupFolder.addEventListener("click", () => configureOutputDir("dedup"));
 // 打开裂变产物文件夹（subdir="裂变"）
-el.btnOpenFissionFolder.addEventListener("click", () => openSubdirFolder("裂变"));
+el.btnOpenFissionFolder.addEventListener("click", () => openSubdirFolder("裂变", selectedFissionArtifact));
 el.btnConfigFissionFolder.addEventListener("click", () => configureOutputDir("fission"));
 
 // 打开指定子目录产物文件夹
-async function openSubdirFolder(subdir) {
+async function openSubdirFolder(subdir, filename) {
   const kind = subdir === "裂变" ? "fission" : "dedup";
   const label = kind === "fission" ? "裂变产物文件夹" : "去重产物文件夹";
+  if (!filename) {
+    toast("当前暂无" + subdir + "产物，请先完成一次处理。", "warn");
+    return;
+  }
   await loadOutputDirs();
   const configured = kind === "fission" ? outputDirs.fissionConfigured : outputDirs.dedupConfigured;
   if (!configured) {
@@ -1930,11 +1937,11 @@ async function openSubdirFolder(subdir) {
     const resp = await fetch(OPEN_OUTPUT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subdir }),
+      body: JSON.stringify({ subdir, filename, open_parent: true }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || data.ok !== true) throw new Error(data.message || "HTTP " + resp.status);
-    toast("已打开" + subdir + "产物文件夹。", "ok");
+    toast("已打开本次" + subdir + "产物文件夹。", "ok");
   } catch (e) {
     toast("打开文件夹失败：" + (e.message || e), "warn");
   }
@@ -2147,6 +2154,10 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
   var autoGroup = document.getElementById("tts-auto-group");
   var manualGroup = document.getElementById("tts-manual-group");
   var modeBtns = document.querySelectorAll("#tts-mode-switch .tts-mode-btn");
+  var chkTtsEnable = document.getElementById("chk-tts-enable");
+  var ttsStatus = document.getElementById("tts-status");
+  var ttsVoice = document.getElementById("tts-voice");
+  var ttsSpeed = document.getElementById("tts-speed");
 
   modeBtns.forEach(function (btn) {
     btn.addEventListener("click", function () {
@@ -2165,17 +2176,42 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
   var rewriteHint = document.getElementById("tts-rewrite-hint");
   function syncRewriteUI() {
     var on = chkRewrite && chkRewrite.checked;
+    var ttsOn = chkTtsEnable && chkTtsEnable.checked;
     if (templateWrap) templateWrap.style.display = on ? "" : "none";
     //元宝登录按钮和预览按钮：勾上就显示，不做假登录检测
     var elActions = document.getElementById("tts-rewrite-actions");
     if (elActions) elActions.style.display = on ? "" : "none";
-    if (rewriteHint) rewriteHint.textContent = on
-      ? "已启用改写。改写复用你 Edge 里已登录的元宝（免扫码，自动切换调试模式）。"
-      : "未启用改写。系统会用字幕/ASR 原文直接生成配音。";
+    if (rewriteHint) {
+      if (!ttsOn) {
+        rewriteHint.textContent = on
+          ? "已启用改写预览，但未启用 AI 配音；开始去重时不会调用 TTS，也不会替换音轨。"
+          : "未启用配音。这里可先预览文案；只有勾选「启用 AI 配音」后才会替换音轨。";
+      } else {
+        rewriteHint.textContent = on
+          ? "已启用改写 + 配音。首次请点元宝登录，在弹出的调试 Edge 扫码；不会关闭你正在使用的 Edge。"
+          : "已启用配音。系统会用字幕/ASR 原文生成配音；如需元宝润色，请勾选「启用 元宝 改写」。";
+      }
+    }
+  }
+  function syncTtsEnableUI() {
+    var on = chkTtsEnable && chkTtsEnable.checked;
+    if (ttsVoice) ttsVoice.disabled = !on;
+    if (ttsSpeed) ttsSpeed.disabled = !on;
+    modeBtns.forEach(function (btn) { btn.disabled = !on; });
+    if (ttsStatus) {
+      ttsStatus.textContent = on
+        ? "MiMo TTS · 音色 4 种 · 支持自然语调"
+        : "未启用 AI 配音：本次只做画面去重，不替换声音";
+    }
+    syncRewriteUI();
   }
   if (chkRewrite) {
     chkRewrite.addEventListener("change", syncRewriteUI);
     syncRewriteUI();  // 初始状态
+  }
+  if (chkTtsEnable) {
+    chkTtsEnable.addEventListener("change", syncTtsEnableUI);
+    syncTtsEnableUI();
   }
 
   // 🆕 改写模板：预设按钮把示例文本填入 textarea（用户可自由编辑）
@@ -2203,16 +2239,26 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
       if (elTemplate) { elTemplate.value = ""; elTemplate.focus(); }
     });
   }
-  // 🆕元宝登录按钮 — 用系统 Edge 打开元宝网页（复用 Edge 已登录态，无需内置窗口扫码）
+  // 🆕元宝登录按钮 — 打开与 AI 改写共用的调试 Edge/Profile，避免扫码态与改写态分裂
   var ybBtn = document.getElementById("btn-yuanbao-login");
   if (ybBtn) {
     ybBtn.addEventListener("click", async function () {
-      if (!window.desktop || !window.desktop.openExternal) {
+      if (!window.desktop || !window.desktop.loginYuanbao) {
         toast("桌面端 IPC 未启用", "err"); return;
       }
-      var r = await window.desktop.openExternal("https://yuanbao.tencent.com/");
-      if (!r || !r.ok) { toast("打开元宝失败：" + (r && r.reason || "未知"), "err"); return; }
-      toast("已用系统 Edge 打开元宝；请确认已登录，改写时会自动复用该登录态", "ok");
+      var oldHtml = this.innerHTML;
+      this.disabled = true;
+      this.textContent = "打开元宝登录...";
+      try {
+        var r = await window.desktop.loginYuanbao();
+        if (!r || !r.ok) {
+          toast("打开元宝失败：" + (r && (r.reason || r.error || r.msg) || "未知"), "err"); return;
+        }
+        toast("已打开元宝调试窗口；请在该窗口扫码登录，AI 改写预览会复用同一登录态", "ok");
+      } finally {
+        this.disabled = false;
+        this.innerHTML = oldHtml;
+      }
     });
   }
 
@@ -2258,37 +2304,36 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
 
         this.textContent = "等待元宝改写...";
 
-        // 一次性监听 done 事件（content-yuanbao.js:48 chrome.runtime.sendMessage → 主世界 shim → __desktopYuanbao → IPC yuanbao-done）
+        // 一次性监听 done 事件：本次 request_id 由前端预生成，空 ID/旧 ID 一律丢弃，避免旧视频回包串台。
+        var rewriteRequestId = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
         var donePayload = await new Promise(function (resolve) {
           var resolved = false;
-          var reqId = null;
           var unsub = window.desktop.onYuanbaoDone(function (payload) {
             if (resolved) return;
-            // 只接受本次请求的回包；上一次/并发请求的旧回包会被忽略，杜绝加载旧文案
             var rid = payload && payload.data && payload.data.request_id;
-            if (reqId && rid && rid !== reqId) return;
+            if (rid !== rewriteRequestId) return;
             resolved = true; try { unsub && unsub(); } catch (_) {}
             resolve(payload);
           });
           window.desktop.runYuanbaoRewrite({
+            request_id: rewriteRequestId,
             frames_b64: ctx.frames_b64 || [],
             raw_text: ctx.raw_text || "",
             template: template,
             topic: topic,
             max_chars: ctx.max_chars || 30,
           }).then(function (r) {
-            if (r && r.request_id) reqId = r.request_id;
             if (!r || !r.ok) {
               if (resolved) return;
               resolved = true; try { unsub && unsub(); } catch (_) {}
-              resolve({ action: "yb-done", data: { error: (r && r.error) || "元宝窗口未就绪" } });
+              resolve({ action: "yb-done", data: { error: (r && r.error) || "元宝窗口未就绪", request_id: rewriteRequestId } });
             }
           });
           // 安全兜底：长时间无回包时释放监听（避免监听器泄漏），按改写超时上限放宽
           setTimeout(function () {
             if (resolved) return;
             resolved = true; try { unsub && unsub(); } catch (_) {}
-            resolve({ action: "yb-done", data: { error: "改写等待超时（无回包），请重试" } });
+            resolve({ action: "yb-done", data: { error: "改写等待超时（无回包），请重试", request_id: rewriteRequestId } });
           }, 180000);
         });
 
@@ -2346,12 +2391,17 @@ document.querySelectorAll(".tts-preset-btn").forEach(function (btn) {
     var previewBox = document.getElementById("rewrite-preview");
     var content = (previewBox.dataset.rewritten || "").trim();
     if (!content) { toast("未找到改写文案", "warn"); return; }
+    var chkTtsEnable = document.getElementById("chk-tts-enable");
+    if (chkTtsEnable) {
+      chkTtsEnable.checked = true;
+      chkTtsEnable.dispatchEvent(new Event("change"));
+    }
     // 切到手动模式
     document.querySelector('.tts-mode-btn[data-mode="manual"]').click();
     var elText = document.getElementById("tts-text");
     if (elText) { elText.value = content; elText.focus(); }
     previewBox.style.display = "none";
-    toast("文案已填入，请点击「开始单条去重」", "ok");
+    toast("文案已填入，并已启用 AI 配音；请点击「开始单条去重」", "ok");
   };
   window.cancelRewritePreview = function () {
     document.getElementById("rewrite-preview").style.display = "none";

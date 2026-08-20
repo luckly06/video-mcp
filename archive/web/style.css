@@ -736,6 +736,10 @@ code {
   transition: border-color .2s, box-shadow .2s, background .2s, color .2s;
 }
 .tts-mode-btn:hover { color: var(--brand-primary-dark); }
+.tts-mode-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
 .tts-mode-btn.active {
   color: var(--brand-primary-dark);
   font-weight: 600;

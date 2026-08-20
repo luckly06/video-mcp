@@ -256,8 +256,13 @@
         </div>
         <div class="parameter-group" id="tts-param-group">
           <div class="field-label">🆕 AI 配音（TTS · 可选）</div>
-          <p class="field-help" style="margin:4px 0 8px">自动提取视频字幕 → 元宝 AI 改写 → MiMo 生成语音替换音轨。也可手动输入文案。</p>
+          <p class="field-help" style="margin:4px 0 8px">默认不配音；勾选后才会用 MiMo 生成语音替换原音轨。AI 改写预览只负责生成文案，不会自动触发配音。</p>
           <div class="tts-rows">
+            <label class="tts-enable-toggle" style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer;margin-bottom:10px;user-select:none;">
+              <input type="checkbox" id="chk-tts-enable" />
+              <span>启用 AI 配音（替换原视频声音）</span>
+              <span style="font-size:12px;color:var(--gray-400);font-weight:400;">（不勾选只做画面去重/裂变）</span>
+            </label>
             <!-- 模式切换 -->
             <div id="tts-mode-switch" style="display:flex;gap:0;margin-bottom:10px;border-radius:8px;background:var(--gray-100);padding:3px;width:fit-content;">
               <button type="button" class="tts-mode-btn active" data-mode="auto">自动提取 + AI 改写</button>
@@ -269,7 +274,7 @@
               <label class="tts-rewrite-toggle" style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer;margin-bottom:8px;user-select:none;">
                 <input type="checkbox" id="chk-rewrite" />
                 <span>启用 元宝 改写</span>
-                <span style="font-size:12px;color:var(--gray-400);font-weight:400;">（手动开关，勾上才会把字幕/ASR 原文发给 元宝 改写）</span>
+                <span style="font-size:12px;color:var(--gray-400);font-weight:400;">（显示模板和预览；配音需单独勾选「启用 AI 配音」）</span>
               </label>
               <div id="tts-template-wrap" style="display:none;">
                 <label for="tts-topic" style="font-size:13px;color:var(--gray-700);font-weight:500;display:block;margin-bottom:4px;">
@@ -288,13 +293,13 @@
                   <button type="button" class="btn btn-mini" id="btn-template-clear" style="margin-left:auto;">清空</button>
                 </div>
               </div>
-              <p class="field-help" style="margin:6px 0 0;" id="tts-rewrite-hint">未启用改写。系统会用字幕/ASR 原文直接生成配音。</p>
+              <p class="field-help" style="margin:6px 0 0;" id="tts-rewrite-hint">未启用配音。这里可先预览文案；只有勾选「启用 AI 配音」后才会替换音轨。</p>
 
               <!-- 🆕 元宝 改写预览 -->
                 <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;" id="tts-rewrite-actions">
                 <button type="button" id="btn-yuanbao-login" class="btn btn-mini" style="background:var(--brand);color:#fff;"><svg class="ico-16" style="color:#F59E0B" aria-hidden="true"><use href="#ico-login"/></svg> 元宝登录</button>
-                <span style="font-size:11px;color:var(--warned);">← 首次使用先扫码登录</span>
-                <button type="button" id="btn-rewrite-preview" class="btn btn-primary"><svg class="ico-16" style="color:#A855F7" aria-hidden="true"><use href="#ico-sparkle"/></svg> AI 改写预览<span style="font-size:10px;opacity:.6;margin-left:4px;">元宝识图+改写</span></button>
+                <span style="font-size:11px;color:var(--warned);">← 首次使用请在弹出的元宝调试窗口扫码</span>
+                <button type="button" id="btn-rewrite-preview" class="btn btn-primary"><svg class="ico-16" style="color:#A855F7" aria-hidden="true"><use href="#ico-sparkle"/></svg> AI 改写预览<span style="font-size:10px;opacity:.6;margin-left:4px;">只预览文案</span></button>
               </div>
               <div id="rewrite-preview" style="display:none;margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);">
                 <!-- JS 动态填充结果或错误 -->

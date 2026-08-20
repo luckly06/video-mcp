@@ -1,7 +1,7 @@
 // lib/menu.js — 应用菜单（File / Edit / View / Help 最小集）
 'use strict';
 
-const { Menu, shell } = require('electron');
+const { app, Menu, shell } = require('electron');
 
 /**
  * 构建并安装应用菜单。
@@ -12,6 +12,16 @@ const { Menu, shell } = require('electron');
  */
 function buildMenu({ mainWindow, log }) {
   const isMac = process.platform === 'darwin';
+  const devMenuItems = app.isPackaged
+    ? []
+    : [
+        { type: 'separator' },
+        {
+          label: '开发者工具',
+          accelerator: isMac ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',
+          click: () => mainWindow?.webContents?.toggleDevTools(),
+        },
+      ];
 
   /** @type {Electron.MenuItemConstructorOptions[]} */
   const template = [
@@ -62,12 +72,7 @@ function buildMenu({ mainWindow, log }) {
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => mainWindow?.webContents?.reloadIgnoringCache(),
         },
-        { type: 'separator' },
-        {
-          label: '开发者工具',
-          accelerator: isMac ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',
-          click: () => mainWindow?.webContents?.toggleDevTools(),
-        },
+        ...devMenuItems,
         { type: 'separator' },
         { role: 'resetZoom', label: '实际大小' },
         { role: 'zoomIn', label: '放大' },

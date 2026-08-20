@@ -9,7 +9,7 @@ function repoRoot() {
 }
 
 function resourceRoot() {
-  return app.isPackaged ? process.resourcesPath : repoRoot();
+  return app && app.isPackaged ? process.resourcesPath : repoRoot();
 }
 
 function resolveResource(...segments) {
@@ -29,7 +29,7 @@ function resolveExtensionFilePath(filename) {
 }
 
 function resolveAppIconPath() {
-  return app.isPackaged
+  return app && app.isPackaged
     ? path.join(process.resourcesPath, 'build', 'icon.ico')
     : path.join(__dirname, '..', 'build', 'icon.ico');
 }

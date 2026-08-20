@@ -2,7 +2,7 @@
 'use strict';
 
 const path = require('node:path');
-const { BrowserWindow } = require('electron');
+const { app, BrowserWindow } = require('electron');
 
 /**
  * 创建主窗口并加载 archive/web/ 或测试目标。
@@ -55,8 +55,16 @@ function createMainWindow({ apiBase, loadTarget, iconPath, log }) {
     log?.error?.('[window] loadURL failed:', e && e.message ? e.message : e);
   });
 
-  // DevTools：dev 模式开启（通过 process.argv 包含 --remote-debugging-port 隐含 dev 启动）
-  if (process.argv.includes('--enable-logging') || !!process.env.VIDEODEDUP_DEV) {
+  if (app.isPackaged) {
+    win.webContents.on('before-input-event', (event, input) => {
+      const key = String(input.key || '').toLowerCase();
+      const opensDevTools = key === 'f12' || (input.control && input.shift && key === 'i');
+      if (opensDevTools) event.preventDefault();
+    });
+  }
+
+  // DevTools：仅开发态开启；生产包不响应 VIDEODEDUP_DEV，避免分发包暴露调试入口。
+  if (!app.isPackaged && (process.argv.includes('--enable-logging') || !!process.env.VIDEODEDUP_DEV)) {
     win.webContents.openDevTools({ mode: 'detach' });
   }
 

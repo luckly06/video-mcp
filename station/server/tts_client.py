@@ -5,14 +5,17 @@ tts_client.py — MiMo TTS v2.5 语音合成客户端
 封装小米 MiMo 平台语音合成 API（OpenAI 兼容协议），用于视频去重工位的
 音频轨道替换功能。
 
-依赖：openai>=1.0（pip install openai）
+依赖：仅 Python 标准库
 环境变量：MIMO_API_KEY — MiMo 平台 API Key
 """
 
 import os
 import base64
+import json
 import logging
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 _MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
 
@@ -59,26 +62,19 @@ logger = logging.getLogger("tts_client")
 
 
 def _client():
-    """惰性加载 OpenAI 客户端（避免 import 失败阻塞模块加载）。"""
-    if not _api_key():
-        return None
-    try:
-        from openai import OpenAI  # noqa: E402
-    except ImportError:
-        logger.warning("openai 未安装，TTS 不可用。pip install openai")
-        return None
-    return OpenAI(api_key=_api_key(), base_url=_MIMO_BASE_URL, timeout=15.0)
+    """兼容旧调用方：有 Key 时返回轻量配置，没有时返回 None。"""
+    key = _api_key()
+    return {"api_key": key, "base_url": _MIMO_BASE_URL} if key else None
 
 
 def is_available():
-    """检查 TTS 客户端是否可用（API Key 已设置且 openai 已安装）。"""
-    if not _api_key():
-        return False
-    try:
-        from openai import OpenAI  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    """检查 TTS 客户端是否可用（发布态只要求 API Key 已注入）。"""
+    return bool(_api_key())
+
+
+def unavailable_reason():
+    """返回明确的不可用原因，避免继续误报 openai 未安装。"""
+    return "" if _api_key() else "未配置 MIMO_API_KEY"
 
 
 def list_voices():
@@ -102,14 +98,11 @@ def tts(text, voice="冰糖", speed=1.0, output_format="wav"):
         bytes: 音频数据
 
     Raises:
-        RuntimeError: API Key 未设置或 openai 未安装
+        RuntimeError: API Key 未设置
         Exception: API 调用失败
     """
-    client = _client()
-    if client is None:
-        raise RuntimeError(
-            "MiMo TTS 不可用：请设置环境变量 MIMO_API_KEY 并 pip install openai"
-        )
+    if not _api_key():
+        raise RuntimeError("MiMo TTS 不可用：未配置 MIMO_API_KEY")
 
     voice_info = VOICES.get(voice, VOICES["冰糖"])
     voice_id = voice_info["id"]
@@ -123,10 +116,9 @@ def tts(text, voice="冰糖", speed=1.0, output_format="wav"):
             speed_hint = f"，语速放慢约{int((1-speed)*100)}%"
 
     try:
-        completion = client.chat.completions.create(
-            model="mimo-v2.5-tts",
-            timeout=15,
-            messages=[
+        payload = {
+            "model": "mimo-v2.5-tts",
+            "messages": [
                 {
                     "role": "user",
                     "content": f"用自然、清晰的普通话朗读以下文本{speed_hint}。"
@@ -136,16 +128,31 @@ def tts(text, voice="冰糖", speed=1.0, output_format="wav"):
                     "content": text,
                 },
             ],
-            audio={
+            "audio": {
                 "format": output_format,
                 "voice": voice_id,
             },
+        }
+        req = urllib_request.Request(
+            f"{_MIMO_BASE_URL}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {_api_key()}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
         )
+        with urllib_request.urlopen(req, timeout=20) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        audio_data = result["choices"][0]["message"]["audio"]["data"]
+        return base64.b64decode(audio_data)
 
-        message = completion.choices[0].message
-        audio_bytes = base64.b64decode(message.audio.data)
-        return audio_bytes
-
+    except urllib_error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", "replace")[:500]
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"MiMo TTS 调用失败: HTTP {e.code} {detail}".strip()) from e
     except Exception as e:
         raise RuntimeError(f"MiMo TTS 调用失败: {e}") from e
 

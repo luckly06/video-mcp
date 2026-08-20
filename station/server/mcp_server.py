@@ -263,10 +263,11 @@ TOOLS = [
                 "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
                 "seed": {"type": "integer", "description": "随机种子；缺省随机回填"},
                 "skip_phash": {"type": "boolean", "description": "跳过 pHash 自检（省 3-5 分钟 CPU 时间，仅保留 MD5+分辨率+时长校验）。默认 false"},
-                "tts_text": {"type": "string", "description": "TTS 配音文案；不为空时启用 MiMo TTS 替换原音轨（手动模式）"},
+                "enable_tts": {"type": "boolean", "description": "是否显式启用 AI 配音；false/缺省时忽略 tts_text/rewrite_template，不触发 MiMo TTS"},
+                "tts_text": {"type": "string", "description": "TTS 配音文案；enable_tts=true 且不为空时启用 MiMo TTS 替换原音轨（手动模式）"},
                 "tts_voice": {"type": "string", "description": "TTS 配音人声，默认冰糖"},
                 "tts_speed": {"type": "number", "description": "TTS 语速，默认 1.0"},
-                "rewrite_template": {"type": "string", "description": "元宝改写模板；非空时走「改写→配音」自动链路（自动模式下与 tts_text 互斥，tts_text 优先）"},
+                "rewrite_template": {"type": "string", "description": "元宝改写模板；enable_tts=true 且非空时走「改写→配音」自动链路（自动模式下与 tts_text 互斥，tts_text 优先）"},
                 "rewrite_topic": {"type": "string", "description": "改写主题/方向提示（可选），随模板一同发给元宝"},
                 "rewrite_frames": {"type": "integer", "description": "改写抽帧数（默认 5），用于给元宝提供画面上下文"},
                 "output_dir": {"type": "string", "description": "可选：产物输出目录（绝对路径）；不传则使用用户配置/默认目录（~/Videos/视频去重产物）。传入后立即生效，无需重启。"},
@@ -494,11 +495,13 @@ def _exec_tool(name, args):
             "frames_b64": ctx["frames_b64"],
         }
     if name == "dedup_video":
-        # 🆕 改写→配音：用户选「元宝改写」模式（rewrite_template 非空、且未手动填文案）时，
+        # 🆕 改写→配音：仅当用户显式启用 AI 配音（enable_tts=true）且选择「元宝改写」
+        # （rewrite_template 非空、且未手动填文案）时，
         # 先用 ASR+抽帧构造上下文，调 vision_and_rewrite 生成旁白文案，再喂给 TTS 混音。
         # 手动填了文案（tts_text）时优先用手动文案，跳过改写。
-        tts_text = args.get("tts_text")
-        rewrite_template = args.get("rewrite_template")
+        tts_enabled = bool(args.get("enable_tts"))
+        tts_text = args.get("tts_text") if tts_enabled else None
+        rewrite_template = args.get("rewrite_template") if tts_enabled else None
         rewrite_meta = {"requested": False}
         if rewrite_template and not tts_text:
             rewrite_meta["requested"] = True
@@ -770,8 +773,8 @@ def _cancel_fission(task_id):
     return True
 
 
-def _open_output_folder(filename=None, subdir=None):
-    """打开去重/裂变各自配置的输出目录；Windows 上可安全选中目录内的指定文件。"""
+def _resolve_output_location(filename=None, subdir=None, open_parent=False):
+    """解析允许打开的位置，并确保目标始终位于对应产物根目录内。"""
     kind = "裂变" if subdir == "裂变" else "去重"
     output_dir = _output_dir_for(kind).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -788,16 +791,30 @@ def _open_output_folder(filename=None, subdir=None):
             raise FileNotFoundError(f"产物文件不存在: {filename}")
         target = candidate
 
-    if os.name == "nt" and target is not None:
+    opened_dir = target.parent if target is not None and open_parent else output_dir
+    return output_dir, target, opened_dir
+
+
+def _open_output_folder(filename=None, subdir=None, open_parent=False):
+    """打开产物目录；可打开当前产物的任务子目录，或在根目录中选中文件。"""
+    output_dir, target, opened_dir = _resolve_output_location(
+        filename=filename,
+        subdir=subdir,
+        open_parent=bool(open_parent),
+    )
+
+    if os.name == "nt" and target is not None and not open_parent:
         subprocess.Popen(["explorer.exe", "/select,", str(target)])
     elif os.name == "nt":
-        os.startfile(str(output_dir))
+        os.startfile(str(opened_dir))
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", str(target)] if target else ["open", str(output_dir)])
+        if target is not None and not open_parent:
+            subprocess.Popen(["open", "-R", str(target)])
+        else:
+            subprocess.Popen(["open", str(opened_dir)])
     else:
-        subprocess.Popen(["xdg-open", str(output_dir)])
-    return output_dir, target
-
+        subprocess.Popen(["xdg-open", str(opened_dir)])
+    return opened_dir, target
 
 def _summary(name, result):
     if name == "dedup_video":
@@ -1092,7 +1109,11 @@ class Handler(BaseHTTPRequestHandler):
                 if endpoint == "/local/cancel-fission":
                     found = _cancel_fission(payload.get("task_id"))
                 else:
-                    output_dir, selected = _open_output_folder(payload.get("filename"), subdir=payload.get("subdir"))
+                    output_dir, selected = _open_output_folder(
+                        payload.get("filename"),
+                        subdir=payload.get("subdir"),
+                        open_parent=payload.get("open_parent") is True,
+                    )
             except (ValueError, FileNotFoundError) as exc:
                 self._respond_http(400, {"ok": False, "message": str(exc)})
                 return

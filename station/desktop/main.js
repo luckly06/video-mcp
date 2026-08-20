@@ -24,6 +24,7 @@ const { resolveAppIconPath, resolveDesktopAssetsDir, resolveWebIndexPath } = req
 // 避免与机器上其他 Electron 应用共享缓存目录
 const USER_DATA = path.join(app.getPath('appData'), 'video-dedup-desktop');
 app.setPath('userData', USER_DATA);
+const YUANBAO_PROFILE_DIR = path.join(USER_DATA, 'yuanbao-edge-profile');
 
 // ---------- 2. 单实例锁 ----------
 const gotLock = app.requestSingleInstanceLock();
@@ -84,6 +85,7 @@ async function bootstrap() {
     const local = await startLocalServer({
       log,
       assetsDir: app.isPackaged ? resolveDesktopAssetsDir() : undefined,
+      yuanbaoProfileDir: YUANBAO_PROFILE_DIR,
       preferFresh: app.isPackaged,
     });
     localServerChild = local.child;
@@ -106,7 +108,12 @@ async function bootstrap() {
   });
 
   // 元宝独立浮动 BrowserWindow（与 Chrome 扩展 content-yuanbao.js 复用同一份 DOM driver）
-  const yuanbao = createYuanbaoWindow({ mainWindow, iconPath: resolveAppIconPath(), log });
+  const yuanbao = createYuanbaoWindow({
+    mainWindow,
+    iconPath: resolveAppIconPath(),
+    yuanbaoProfileDir: YUANBAO_PROFILE_DIR,
+    log,
+  });
   log.info('[main] yuanbao window attached (independent floating)');
 
   buildMenu({ mainWindow, log });

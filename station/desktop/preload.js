@@ -45,6 +45,10 @@ contextBridge.exposeInMainWorld('desktop', {
     try { return await ipcRenderer.invoke('yuanbao:is-ready'); }
     catch (e) { return { ready: false, reason: e.message || String(e) }; }
   },
+  async loginYuanbao() {
+    try { return await ipcRenderer.invoke('yuanbao:login-debug'); }
+    catch (e) { return { ok: false, reason: e.message || String(e) }; }
+  },
   async runYuanbaoRewrite(args) {
     try { return await ipcRenderer.invoke('yuanbao:run-rewrite', args); }
     catch (e) { return { ok: false, error: e.message || String(e) }; }

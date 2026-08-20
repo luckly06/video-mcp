@@ -16,6 +16,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { resolveServerScriptPath } = require('./paths');
+const { loadRuntimeConfig } = require('./runtime-config');
 
 const SERVER_HOST = '127.0.0.1';
 const SERVER_PORT = 8765;
@@ -23,6 +24,20 @@ const PACKAGED_FRESH_PORT_TRIES = 10;
 
 // station/server/mcp_server.py（开发态走仓库；打包态走 process.resourcesPath）
 const SERVER_PY = resolveServerScriptPath('mcp_server.py');
+const RUNTIME_CONFIG = path.join(__dirname, '..', 'build', 'runtime-config.bin');
+
+function injectRuntimeConfig(env, log) {
+  if (env.MIMO_API_KEY) return;
+  try {
+    const config = loadRuntimeConfig(RUNTIME_CONFIG);
+    if (config.MIMO_API_KEY) {
+      env.MIMO_API_KEY = config.MIMO_API_KEY;
+      log?.info?.('[local-server] MiMo TTS 运行配置已加载');
+    }
+  } catch (e) {
+    log?.error?.(`[local-server] TTS 运行配置读取失败: ${e.message}`);
+  }
+}
 
 /**
  * 解析本机 Python 解释器（顺序即优先级）：
@@ -68,6 +83,17 @@ function resolveAssetsDir(env, assetsDir, log) {
   return resolved;
 }
 
+function resolveYuanbaoProfileDir(env, yuanbaoProfileDir, log) {
+  const configured = (env.VU_YUANBAO_DEBUG_PROFILE || yuanbaoProfileDir || '').trim();
+  if (!configured) return null;
+
+  const resolved = path.resolve(configured);
+  fs.mkdirSync(resolved, { recursive: true });
+  env.VU_YUANBAO_DEBUG_PROFILE = resolved;
+  log?.info?.(`[local-server] VU_YUANBAO_DEBUG_PROFILE=${resolved}`);
+  return resolved;
+}
+
 /** 探测后端是否已就绪（POST /mcp server/discover 返回 200）。 */
 function probe(baseUrl) {
   return new Promise((resolve) => {
@@ -94,18 +120,97 @@ function probe(baseUrl) {
  * @param {object} [opts]
  * @param {object} [opts.log] logger 实例（可选）
  * @param {string} [opts.assetsDir] 打包态用户可写素材目录
+ * @param {string} [opts.yuanbaoProfileDir] 元宝调试 Edge 持久登录态目录
  * @param {boolean} [opts.preferFresh] 是否避开已存在端口服务，强制拉起新后端
  * @returns {Promise<{baseUrl:string, child:object|null, reused:boolean, error?:string}>}
  */
-async function startLocalServer({ log, assetsDir, preferFresh = false } = {}) {
-  const ports = preferFresh
+function launchServerOnPort({
+  py,
+  serverPy = SERVER_PY,
+  baseUrl,
+  env,
+  log,
+  probeFn = probe,
+  spawnFn = spawn,
+  readyTimeoutMs = 30000,
+  pollIntervalMs = 400,
+}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let pollTimer = null;
+    let child = null;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+      resolve(result);
+    };
+
+    try {
+      child = spawnFn(py, [serverPy], {
+        cwd: path.dirname(serverPy),
+        env,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      const error = e && e.message ? e.message : String(e);
+      log?.error?.('[local-server] spawn 失败:', error);
+      finish({ ready: false, child: null, error });
+      return;
+    }
+
+    child.on('error', (e) => {
+      const error = e && e.message ? e.message : String(e);
+      log?.error?.('[local-server] spawn 失败:', error);
+      finish({ ready: false, child: null, error });
+    });
+    child.stdout?.on('data', (d) => log?.info?.('[mcp]', String(d).trimEnd()));
+    child.stderr?.on('data', (d) => log?.info?.('[mcp]', String(d).trimEnd()));
+    child.on('exit', (code, sig) => {
+      log?.info?.(`[local-server] mcp 退出 code=${code} sig=${sig}`);
+      if (!settled) {
+        finish({ ready: false, child: null, error: `exit code=${code} sig=${sig}` });
+      }
+    });
+
+    const deadline = Date.now() + readyTimeoutMs;
+    (function poll() {
+      if (settled) return;
+      Promise.resolve(probeFn(baseUrl)).catch(() => false).then((ready) => {
+        if (settled) return;
+        if (ready) {
+          log?.info?.(`[local-server] MCP 就绪: ${baseUrl}`);
+          finish({ ready: true, child, error: null });
+        } else if (Date.now() > deadline) {
+          try { child.kill(); } catch (_) { /* noop */ }
+          finish({ ready: false, child: null, error: 'timeout' });
+        } else {
+          pollTimer = setTimeout(poll, pollIntervalMs);
+        }
+      });
+    })();
+  });
+}
+
+async function startLocalServer({
+  log,
+  assetsDir,
+  yuanbaoProfileDir,
+  preferFresh = false,
+  candidatePorts,
+  probeFn = probe,
+  launchFn = launchServerOnPort,
+} = {}) {
+  const ports = candidatePorts || (preferFresh
     ? Array.from({ length: PACKAGED_FRESH_PORT_TRIES }, (_, i) => SERVER_PORT + i)
-    : [SERVER_PORT];
+    : [SERVER_PORT]);
   let firstReusableBaseUrl = null;
 
   for (const port of ports) {
     const baseUrl = baseUrlFor(port);
-    const alreadyUp = await probe(baseUrl);
+    const alreadyUp = await probeFn(baseUrl);
     if (alreadyUp) {
       if (preferFresh) {
         firstReusableBaseUrl = firstReusableBaseUrl || baseUrl;
@@ -118,10 +223,12 @@ async function startLocalServer({ log, assetsDir, preferFresh = false } = {}) {
 
     const py = resolvePython();
     const env = { ...process.env, VU_HOST: SERVER_HOST, VU_PORT: String(port) };
+    injectRuntimeConfig(env, log);
     const asr = resolveAsrModels(env);
     if (asr) env.VU_ASR_MODELS = asr;
     try {
       resolveAssetsDir(env, assetsDir, log);
+      resolveYuanbaoProfileDir(env, yuanbaoProfileDir, log);
     } catch (e) {
       const error = `assets dir unavailable: ${e && e.message ? e.message : String(e)}`;
       log?.error?.(`[local-server] ${error}`);
@@ -138,46 +245,11 @@ async function startLocalServer({ log, assetsDir, preferFresh = false } = {}) {
     if (asr) log?.info?.(`[local-server] VU_ASR_MODELS=${asr}`);
     else log?.info?.('[local-server] 未找到 ASR 模型目录，ASR 将降级（去重/探测不受影响）');
 
-    return new Promise((resolve) => {
-      let settled = false;
-      const child = spawn(py, [SERVER_PY], {
-        cwd: path.dirname(SERVER_PY),
-        env,
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      child.on('error', (e) => {
-        if (settled) return;
-        settled = true;
-        log?.error?.('[local-server] spawn 失败:', e.message);
-        resolve({ baseUrl, child: null, error: e.message });
-      });
-      child.stdout?.on('data', (d) => log?.info?.('[mcp]', String(d).trimEnd()));
-      child.stderr?.on('data', (d) => log?.info?.('[mcp]', String(d).trimEnd()));
-      child.on('exit', (code, sig) =>
-        log?.info?.(`[local-server] mcp 退出 code=${code} sig=${sig}`));
-
-      // 轮询就绪（最多 30s；ASR 模型惰性加载，不影响 server 起端口）
-      const deadline = Date.now() + 30000;
-      (function poll() {
-        if (settled) return;
-        probe(baseUrl).then((ready) => {
-          if (settled) return;
-          if (ready) {
-            settled = true;
-            log?.info?.(`[local-server] MCP 就绪: ${baseUrl}`);
-            resolve({ baseUrl, child, reused: false });
-          } else if (Date.now() > deadline) {
-            settled = true;
-            log?.error?.('[local-server] 30s 内未就绪');
-            resolve({ baseUrl, child, error: 'timeout' });
-          } else {
-            setTimeout(poll, 400);
-          }
-        });
-      })();
-    });
+    const launched = await launchFn({ py, serverPy: SERVER_PY, baseUrl, env, log, probeFn });
+    if (launched.ready) {
+      return { baseUrl, child: launched.child, reused: false };
+    }
+    log?.warn?.(`[local-server] ${baseUrl} 启动失败（${launched.error || 'unknown'}），尝试下一端口`);
   }
 
   if (firstReusableBaseUrl) {
@@ -186,11 +258,10 @@ async function startLocalServer({ log, assetsDir, preferFresh = false } = {}) {
   }
 
   const baseUrl = baseUrlFor(SERVER_PORT);
-  const error = `no free port in ${SERVER_PORT}-${SERVER_PORT + PACKAGED_FRESH_PORT_TRIES - 1}`;
+  const error = `no usable port in ${ports.join(',')}`;
   log?.error?.(`[local-server] ${error}`);
   return { baseUrl, child: null, error };
 }
-
 /** 停止本地后端子进程。 */
 function stopLocalServer(child) {
   if (child && !child.killed) {
@@ -198,4 +269,4 @@ function stopLocalServer(child) {
   }
 }
 
-module.exports = { startLocalServer, stopLocalServer, SERVER_HOST, SERVER_PORT };
+module.exports = { startLocalServer, stopLocalServer, launchServerOnPort, SERVER_HOST, SERVER_PORT };

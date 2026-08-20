@@ -35,3 +35,4 @@ station/desktop/node_modules/
 station/desktop/dist/
 station/desktop/out/
 station/desktop/logs/
+station/desktop/build/runtime-config.bin

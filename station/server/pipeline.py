@@ -793,8 +793,9 @@ def dedup_video(src, params=None, out_name=None, seed=None,
                     except Exception: pass
             else:
                 applied["tts_applied"] = False
-                applied["tts_warning"] = "TTS 不可用（未配 MIMO_API_KEY 或 openai 未安装）"
-                tts_status = "TTS 不可用（未配 Key 或 openai 未安装）"
+                reason = TTS.unavailable_reason() or "未知原因"
+                applied["tts_warning"] = f"TTS 不可用（{reason}）"
+                tts_status = f"TTS 不可用（{reason}）"
         except Exception as e:
             applied["tts_applied"] = False
             applied["tts_warning"] = str(e)[:200]

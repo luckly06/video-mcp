@@ -50,7 +50,17 @@ function cleanupDir(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* noop */ }
 }
 
-function createYuanbaoWindow({ mainWindow, iconPath, log }) {
+function parseLastJsonLine(raw) {
+  const lines = String(raw || '').trim().split(/\r?\n/).filter(Boolean).reverse();
+  for (const line of lines) {
+    const s = line.trim();
+    if (!s.startsWith('{') || !s.endsWith('}')) continue;
+    try { return JSON.parse(s); } catch (_) { /* try previous */ }
+  }
+  return null;
+}
+
+function createYuanbaoWindow({ mainWindow, iconPath, yuanbaoProfileDir, log }) {
   const preloadYuanbao = path.join(__dirname, 'preload-yuanbao.js');
   let contentYuanbaoSource = '';
   try { contentYuanbaoSource = fs.readFileSync(CONTENT_YUANBAO_JS_PATH, 'utf8'); }
@@ -60,6 +70,12 @@ function createYuanbaoWindow({ mainWindow, iconPath, log }) {
   let injectedContentYuanbao = false;
   let lastInjectedAt = 0;
   let urlLoaded = false;
+
+  function childEnv(extra = {}) {
+    const env = { ...process.env, ...extra };
+    if (yuanbaoProfileDir) env.VU_YUANBAO_DEBUG_PROFILE = yuanbaoProfileDir;
+    return env;
+  }
 
   function buildWindow() {
     if (win && !win.isDestroyed()) return win;
@@ -111,7 +127,7 @@ function createYuanbaoWindow({ mainWindow, iconPath, log }) {
     catch (_) { /* swallow */ }
   });
 
-  // show/hide/run-rewrite IPC handlers
+  // show/hide/login/run-rewrite IPC handlers
   ipcMain.handle('yuanbao:show', async () => {
     try {
       if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, reason: 'main window gone' };
@@ -140,10 +156,58 @@ function createYuanbaoWindow({ mainWindow, iconPath, log }) {
 
   ipcMain.handle('yuanbao:is-ready', () => ({ ready: injectedContentYuanbao }));
 
+  ipcMain.handle('yuanbao:login-debug', async () => {
+    const py = resolvePython();
+    const cmdArgs = [YUANBAO_CLI, '--login-debug'];
+    log?.info?.(`[yuanbao] spawn debug login: ${py} ${cmdArgs.join(' ')}`);
+    return await new Promise((resolve) => {
+      let settled = false;
+      let child = null;
+      let timer = null;
+      const finish = (payload) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve(payload);
+      };
+
+      try {
+        child = spawn(py, cmdArgs, { env: childEnv(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) {
+        finish({ ok: false, reason: '启动元宝登录进程失败: ' + (e.message || String(e)) });
+        return;
+      }
+
+      let out = '', err = '';
+      child.stdout?.on('data', (d) => { out += d.toString('utf8'); });
+      child.stderr?.on('data', (d) => { err += d.toString('utf8'); });
+      child.on('error', (e) => {
+        finish({ ok: false, reason: '元宝登录进程异常: ' + (e.message || String(e)) });
+      });
+      child.on('close', (code) => {
+        const parsed = parseLastJsonLine(out);
+        if (parsed && parsed.ok) {
+          finish(parsed);
+          return;
+        }
+        const reason = (parsed && (parsed.reason || parsed.error || parsed.msg))
+          || err.trim()
+          || out.trim()
+          || `元宝登录进程退出，code=${code}`;
+        finish({ ok: false, reason: String(reason).slice(0, 500) });
+      });
+
+      timer = setTimeout(() => {
+        try { child?.kill?.(); } catch (_) { /* noop */ }
+        finish({ ok: false, reason: '打开元宝登录窗口超时，请重试' });
+      }, 45000);
+    });
+  });
+
   ipcMain.handle('yuanbao:run-rewrite', async (_evt, args) => {
     if (!args || typeof args !== 'object') return { ok: false, error: 'args must be an object' };
-    // 每次改写一个唯一 id，回包打标后原样带回；前端据此丢弃上一次/并发的旧回包（避免加载旧文案）
-    const requestId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    // 前端预生成 request_id；主进程原样贯穿回包。缺省时兜底生成。
+    const requestId = String(args.request_id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8)));
     try {
       // 1) 帧图 base64 → 临时 jpg 文件（供 yuanbao_client 上传）
       let tmpDir = null;
@@ -160,7 +224,7 @@ function createYuanbaoWindow({ mainWindow, iconPath, log }) {
           } catch (_) { /* skip */ }
         });
       }
-      log?.info?.(`[yuanbao] rewrite frames_b64=${frames.length} frame_files=${frameFiles.length}`);
+      log?.info?.(`[yuanbao] rewrite request_id=${requestId} frames_b64=${frames.length} frame_files=${frameFiles.length}`);
 
       // 2) spawn 本机 venv python 跑 yuanbao_client --rewrite（用系统 msedge.exe + 复用 Edge 登录态）
       const py = resolvePython();
@@ -175,7 +239,7 @@ function createYuanbaoWindow({ mainWindow, iconPath, log }) {
 
       log?.info?.(`[yuanbao] spawn msedge 改写: ${py} ${cmdArgs.join(' ')}`);
 
-      const child = spawn(py, cmdArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(py, cmdArgs, { env: childEnv(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '', err = '';
       child.stdout?.on('data', (d) => { out += d; });
       child.stderr?.on('data', (d) => { err += d; });

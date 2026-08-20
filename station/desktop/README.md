@@ -105,7 +105,7 @@ station/desktop/
 ## 安全策略
 
 - `contextIsolation: true` + `nodeIntegration: false` + `sandbox: true`：renderer 完全沙箱
-- preload 只暴露两条 API（`onDownloadProgress` / `openExternal`），不泄漏 Node 能力
+- preload 只暴露桌面端必要 API（下载进度、目录选择、元宝调试登录/改写、TTS 提醒），不泄漏 Node 能力
 - CSP 在 `archive/web/index.html` 内 `<meta>` 设置；`script-src 'unsafe-inline'` 仅为放行 inline `onclick`（元宝 QR modal），后续单独变更清理
 - `connect-src` 白名单：本地 MCP（`127.0.0.1:8765` / `localhost:8765`）+ yuanbao.tencent.com
 
@@ -114,7 +114,9 @@ station/desktop/
 ## 已知边界
 
 - **下载带宽瓶颈未优化**：服务端 `/local/download` 仍 100 MB ≈ 3-4 分钟。本轮只在体验层加原生进度条；带宽问题须 OSS 迁移（独立决策 `docs/05-扩展功能/decisions/2026-08-12-下载瓶颈冻结与对象存储迁移.md`）。
-- **批量裂变不支持 TTS 配音**：TTS 未生效弹窗只用于单条去重中用户主动启用 AI 配音但配音失败的场景；裂变流程不提示配置 `MIMO_API_KEY` / `openai`。
+- **批量裂变不支持 TTS 配音**：TTS 未生效弹窗只用于单条去重中用户主动启用 AI 配音但配音失败的场景；裂变流程不提示 TTS 配置问题。
+- **发布态 TTS 配置**：构建钩子从 `station/server/.env` 读取 `MIMO_API_KEY`，生成不含明文 Key 的 `build/runtime-config.bin` 并装入 `app.asar`；主进程启动本地后端时解密并通过环境变量注入。TTS 客户端使用 Python 标准库直连 MiMo，不再要求用户安装 `openai`。
+- **元宝登录态只认调试窗口**：首次使用【元宝登录】会打开与 AI 改写共用的调试 Edge/Profile；请在这个窗口扫码，避免登录到系统 Edge 后改写仍要求重新登录。
 - **HMAC requestState 进程本地**：服务端重启会作废进行中的确认流。renderer 需在收到 401/State 错误时引导用户重试。
 - **未签名**：当前产物为 Windows portable exe，未做代码签名，首次运行可能触发系统安全提示。
 

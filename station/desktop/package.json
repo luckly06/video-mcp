@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging --remote-debugging-port=9222",
-    "test": "node --test lib/__tests__/",
+    "test": "node --test lib/__tests__/*.test.js",
     "pack": "electron-builder --dir --win --x64",
     "dist": "electron-builder --win portable --x64"
   },
@@ -26,8 +26,11 @@
       "main.js",
       "preload.js",
       "lib/**/*",
+      "!lib/__tests__/**",
+      "build/runtime-config.bin",
       "package.json"
     ],
+    "beforePack": "scripts/before-pack.js",
     "extraResources": [
       {
         "from": "build",
@@ -39,25 +42,58 @@
       },
       {
         "from": "../../archive/web",
-        "to": "archive/web"
+        "to": "archive/web",
+        "filter": [
+          "index.html",
+          "app.js",
+          "style.css",
+          "!README*",
+          "!*.map"
+        ]
       },
       {
         "from": "../server",
         "to": "station/server",
         "filter": [
           "**/*",
+          "!.env",
+          "!.env.*",
+          "!**/.env",
+          "!**/.env.*",
           "!logs/**",
           "!__pycache__/**",
-          "!*.pyc"
+          "!*.pyc",
+          "!*.pyo",
+          "!*.spec",
+          "!calibrate_tts_rate.py",
+          "!yb_*.png",
+          "!yuanbao_page_*.html",
+          "!**/*debug*",
+          "!**/*test*",
+          "!**/*.log"
         ]
       },
       {
         "from": "../shared",
-        "to": "station/shared"
+        "to": "station/shared",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyo",
+          "!**/*.log"
+        ]
       },
       {
         "from": "../hooks",
-        "to": "station/hooks"
+        "to": "station/hooks",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyo",
+          "!**/*.log"
+        ]
       },
       {
         "from": "../extension",
@@ -74,7 +110,11 @@
         "filter": [
           "**/*",
           "!**/__pycache__/**",
-          "!**/*.pyc"
+          "!**/*.pyc",
+          "!**/*.pyo",
+          "!**/*.log",
+          "!**/*debug*",
+          "!**/*test*"
         ]
       }
     ],
