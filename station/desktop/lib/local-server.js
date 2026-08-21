@@ -215,7 +215,12 @@ async function startLocalServer({
     }
 
     const py = resolvePython();
-    const env = { ...process.env, VU_HOST: SERVER_HOST, VU_PORT: String(port) };
+    const env = {
+      ...process.env,
+      VU_HOST: SERVER_HOST,
+      VU_PORT: String(port),
+      PYTHONDONTWRITEBYTECODE: '1',
+    };
     injectRuntimeConfig(env, log);
     const asr = resolveAsrModels(env);
     if (asr) env.VU_ASR_MODELS = asr;

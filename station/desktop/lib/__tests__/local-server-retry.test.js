@@ -56,3 +56,18 @@ test('打包态端口启动失败后继续尝试下一候选端口', async () =>
   assert.equal(result.child, expectedChild);
   assert.equal(result.reused, false);
 });
+
+test('启动 Python 后端时禁止在发布目录生成 pyc 缓存', async () => {
+  let capturedEnv = null;
+  const result = await startLocalServer({
+    candidatePorts: [8765],
+    probeFn: async () => false,
+    launchFn: async ({ env }) => {
+      capturedEnv = env;
+      return { ready: true, child: { kill() {} }, error: null };
+    },
+  });
+
+  assert.equal(result.reused, false);
+  assert.equal(capturedEnv.PYTHONDONTWRITEBYTECODE, '1');
+});

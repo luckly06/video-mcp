@@ -7,7 +7,7 @@ const path = require('node:path');
 const { resolveResource } = require('./paths');
 
 function bundledPythonPath() {
-  return resolveResource('station', 'vendor', 'python', 'python.exe');
+  return resolveResource('py', 'python.exe');
 }
 
 function resolvePython({ env = process.env, platform = process.platform, homedir = os.homedir() } = {}) {

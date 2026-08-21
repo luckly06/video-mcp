@@ -110,10 +110,21 @@
         "to": "station/vendor",
         "filter": [
           "**/*",
+          "!python/**",
           "!**/__pycache__/**",
           "!**/*.pyc",
           "!**/*.pyo",
           "!**/*.log"
+        ]
+      },
+      {
+        "from": "../vendor/python",
+        "to": "py",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyo"
         ]
       }
     ],

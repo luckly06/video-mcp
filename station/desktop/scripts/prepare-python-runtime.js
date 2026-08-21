@@ -23,6 +23,19 @@ function copyEntry(source, destination) {
   fs.cpSync(source, destination, { recursive: true, force: true });
 }
 
+function removePythonCaches(root) {
+  if (!fs.existsSync(root)) return;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === '__pycache__') fs.rmSync(full, { recursive: true, force: true });
+      else removePythonCaches(full);
+    } else if (/\.py[co]$/i.test(entry.name)) {
+      fs.rmSync(full, { force: true });
+    }
+  }
+}
+
 const info = pythonJson(`
 import json, pathlib, site, sys
 import playwright, pyee, greenlet, typing_extensions
@@ -74,14 +87,28 @@ for (const prefix of ['playwright-', 'pyee-', 'greenlet-', 'typing_extensions-']
 }
 
 fs.rmSync(path.join(sitePackages, 'greenlet', 'tests'), { recursive: true, force: true });
+fs.rmSync(path.join(sitePackages, 'playwright', 'sync_api'), { recursive: true, force: true });
+fs.rmSync(path.join(sitePackages, 'playwright', 'driver', 'package', 'types'), { recursive: true, force: true });
+fs.rmSync(path.join(sitePackages, 'playwright', 'driver', 'package', 'lib', 'tools'), { recursive: true, force: true });
+fs.rmSync(path.join(sitePackages, 'playwright', 'driver', 'package', 'lib', 'vite'), { recursive: true, force: true });
 for (const entry of fs.readdirSync(path.join(targetResolved, 'DLLs'))) {
   if (/^_?test/i.test(entry)) fs.rmSync(path.join(targetResolved, 'DLLs', entry), { force: true });
 }
+removePythonCaches(targetResolved);
 
 execFileSync(path.join(targetResolved, 'python.exe'), [
   '-c',
-  'import sys, playwright.async_api; print(sys.version); print("playwright=ok")',
-], { stdio: 'inherit' });
+  [
+    'import asyncio, sys',
+    'from playwright.async_api import async_playwright',
+    'async def verify():',
+    '    driver = await async_playwright().start()',
+    '    print("playwright_driver=ok")',
+    '    await driver.stop()',
+    'asyncio.run(verify())',
+    'print(sys.version)',
+  ].join('\n'),
+], { stdio: 'inherit', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
 
 fs.writeFileSync(path.join(targetResolved, 'RUNTIME-INFO.txt'),
   `Built from ${python}\r\n${info.version}\r\n`, 'utf8');

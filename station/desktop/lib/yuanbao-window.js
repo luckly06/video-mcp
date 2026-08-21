@@ -65,7 +65,7 @@ function createYuanbaoWindow({ mainWindow, iconPath, yuanbaoProfileDir, log }) {
   let urlLoaded = false;
 
   function childEnv(extra = {}) {
-    const env = { ...process.env, ...extra };
+    const env = { ...process.env, PYTHONDONTWRITEBYTECODE: '1', ...extra };
     if (yuanbaoProfileDir) env.VU_YUANBAO_DEBUG_PROFILE = yuanbaoProfileDir;
     return env;
   }
