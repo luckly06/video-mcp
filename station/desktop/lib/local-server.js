@@ -14,9 +14,9 @@ const { spawn } = require('node:child_process');
 const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
-const os = require('node:os');
 const { resolveServerScriptPath } = require('./paths');
 const { loadRuntimeConfig } = require('./runtime-config');
+const { resolvePython } = require('./python-runtime');
 
 const SERVER_HOST = '127.0.0.1';
 const SERVER_PORT = 8765;
@@ -44,14 +44,6 @@ function injectRuntimeConfig(env, log) {
  *   1) WorkBuddy 托管 venv（start_server.bat 同款）
  *   2) 系统 PATH 中的 python / python3
  */
-function resolvePython() {
-  const venv = path.join(
-    os.homedir(), '.workbuddy', 'binaries', 'python', 'envs', 'default', 'Scripts', 'python.exe'
-  );
-  if (fs.existsSync(venv)) return venv;
-  return process.platform === 'win32' ? 'python' : 'python3';
-}
-
 /**
  * 探测 ASR 模型目录（sherpa-onnx）：
  *   1) 环境变量 VU_ASR_MODELS（用户显式指定）
@@ -207,6 +199,7 @@ async function startLocalServer({
     ? Array.from({ length: PACKAGED_FRESH_PORT_TRIES }, (_, i) => SERVER_PORT + i)
     : [SERVER_PORT]);
   let firstReusableBaseUrl = null;
+  const launchErrors = [];
 
   for (const port of ports) {
     const baseUrl = baseUrlFor(port);
@@ -249,6 +242,7 @@ async function startLocalServer({
     if (launched.ready) {
       return { baseUrl, child: launched.child, reused: false };
     }
+    launchErrors.push(`${baseUrl}: ${launched.error || 'unknown'}`);
     log?.warn?.(`[local-server] ${baseUrl} 启动失败（${launched.error || 'unknown'}），尝试下一端口`);
   }
 
@@ -258,7 +252,9 @@ async function startLocalServer({
   }
 
   const baseUrl = baseUrlFor(SERVER_PORT);
-  const error = `no usable port in ${ports.join(',')}`;
+  const error = launchErrors.length
+    ? `后端启动失败；${launchErrors.join('；')}`
+    : `no usable port in ${ports.join(',')}`;
   log?.error?.(`[local-server] ${error}`);
   return { baseUrl, child: null, error };
 }

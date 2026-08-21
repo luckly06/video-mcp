@@ -51,6 +51,7 @@ const log = createLogger({
 // ---------- 4. 主窗口工厂 + 下载接管 ----------
 let mainWindow = null;
 let localServerChild = null;
+let localServerError = null;
 
 // ---------- 4.5 IPC：TTS 失败原生弹窗 ----------
 // 渲染进程在「用户启用了 TTS 但产物未成功配音」时调用，弹出系统级对话框提示用户。
@@ -90,6 +91,7 @@ async function bootstrap() {
     });
     localServerChild = local.child;
     apiBase = local.baseUrl;
+    localServerError = local.error || null;
   }
   log.info(`[main] API_BASE = ${apiBase}`);
 
@@ -100,6 +102,20 @@ async function bootstrap() {
     iconPath: resolveAppIconPath(),
     log,
   });
+
+  if (localServerError) {
+    const logFile = path.join(USER_DATA, 'logs', 'desktop.log');
+    log.error(`[main] 本地处理服务不可用: ${localServerError}`);
+    dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: '本地处理服务启动失败',
+      message: '无法启动随包 MCP Server，视频处理暂不可用。',
+      detail: `请确认 ZIP 已完整解压，并检查 Windows 安全中心是否隔离了程序文件。\n\n错误：${localServerError}\n\n诊断日志：${logFile}`,
+      buttons: ['知道了'],
+      defaultId: 0,
+      noLink: true,
+    }).catch(() => {});
+  }
 
   attachDownloadHandlers({
     session: mainWindow.webContents.session,

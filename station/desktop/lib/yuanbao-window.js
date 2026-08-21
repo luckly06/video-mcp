@@ -7,6 +7,7 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { BrowserWindow, ipcMain } = require('electron');
 const { resolveExtensionFilePath, resolveServerScriptPath } = require('./paths');
+const { resolvePython } = require('./python-runtime');
 
 const YUANBAO_URL = 'https://yuanbao.tencent.com/';
 const CONTENT_YUANBAO_JS_PATH = resolveExtensionFilePath('content-yuanbao.js');
@@ -28,14 +29,6 @@ const MAIN_WORLD_SHIM = `(function () {
 
 // 元宝改写 CLI（复用用户 Edge 登录态驱动 msedge.exe + CDP）
 const YUANBAO_CLI = resolveServerScriptPath('yuanbao_client.py');
-
-function resolvePython() {
-  const venv = path.join(
-    os.homedir(), '.workbuddy', 'binaries', 'python', 'envs', 'default', 'Scripts', 'python.exe'
-  );
-  if (fs.existsSync(venv)) return venv;
-  return process.platform === 'win32' ? 'python' : 'python3';
-}
 
 function sendYuanbaoDone(target, data) {
   try {
