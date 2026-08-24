@@ -19,13 +19,11 @@ Hooks 由外层框架（pre_tool_guard / post_tool_audit）在调用链路注入
 
 import os
 import sys
-import re
 import json
 import uuid
 import base64
 import hashlib
 import hmac
-import mimetypes
 import socket
 import threading
 import subprocess
@@ -865,40 +863,6 @@ def _err(rpc_id, code, message):
     return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}}
 
 
-def _parse_multipart(body, content_type):
-    """简易 multipart/form-data 解析。返回 {field_name: (filename, data_bytes)}。"""
-    if "boundary=" not in content_type:
-        raise ValueError("缺少 boundary")
-    boundary = content_type.split("boundary=", 1)[1].strip()
-    boundary = boundary.strip('"')
-    boundary_bytes = boundary.encode()
-    result = {}
-    for part in body.split(b"--" + boundary_bytes):
-        part = part.strip(b"\r\n")
-        if not part or part == b"--":
-            continue
-        header_end = part.find(b"\r\n\r\n")
-        if header_end == -1:
-            continue
-        headers_raw = part[:header_end].decode("utf-8", errors="ignore")
-        data = part[header_end + 4:]
-        if data.endswith(b"\r\n"):
-            data = data[:-2]
-        name = filename = None
-        for line in headers_raw.split("\r\n"):
-            low = line.strip().lower()
-            if low.startswith("content-disposition:"):
-                for piece in line.split(";"):
-                    piece = piece.strip()
-                    if piece.startswith("name="):
-                        name = piece[5:].strip().strip('"')
-                    elif piece.startswith("filename="):
-                        filename = piece[9:].strip().strip('"')
-        if name:
-            result[name] = (filename, data)
-    return result
-
-
 # ---------------------------------------------------------------------------
 # HTTP 传输：POST /mcp
 # ---------------------------------------------------------------------------
@@ -940,24 +904,6 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         path = urlsplit(self.path).path
-        # ── 文件下载 ──
-        if path.startswith("/local/download/"):
-            rel = unquote(path[len("/local/download/"):])
-            try:
-                safe = P._resolve_safe(rel, P.OUTPUT_DIR, must_exist=True)
-            except Exception:
-                self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
-            body = safe.read_bytes()
-            ct, _ = mimetypes.guess_type(str(safe))
-            self.send_response(200)
-            self.send_header("Content-Type", ct or "application/octet-stream")
-            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(safe.name)}")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            if not head_only:
-                self.wfile.write(body)
-            return
         if path == "/favicon.ico":
             self.send_response(204)
             self.send_header("Cache-Control", "no-store")
@@ -1244,34 +1190,12 @@ def serve(host="127.0.0.1", port=8765):
         )
         sys.exit(3)
 
-    # 清理超过 1 小时的旧上传/临时文件，避免磁盘堆积
-    _cleanup_old_temp_files()
-
     class _Server(ThreadingHTTPServer):
         allow_reuse_address = True   # Linux 安全：_port_in_use 已防脑裂，仅解决重启 TIME_WAIT
 
     srv = _Server((host, port), Handler)
     print(f"[MCP 2026-07-28] video-dedup-station 无状态服务已启动: http://{host}:{port}/mcp")
-    print(f"[MCP] 临时文件目录: {P.VIDEO_DIR} (超过1h自动清理)")
     srv.serve_forever()
-
-
-def _cleanup_old_temp_files():
-    """删除 VIDEO_DIR 和 OUTPUT_DIR 中超过 1 小时的文件。"""
-    import time
-    threshold = time.time() - 3600
-    for d in (P.VIDEO_DIR, P.OUTPUT_DIR):
-        if not d.exists():
-            continue
-        for f in d.iterdir():
-            if not f.is_file():
-                continue
-            try:
-                if f.stat().st_mtime < threshold:
-                    f.unlink()
-                    print(f"[cleanup] 已删除过期文件: {f}")
-            except OSError:
-                pass
 
 
 if __name__ == "__main__":
