@@ -29,11 +29,114 @@ import mimetypes
 import socket
 import threading
 import subprocess
+import time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit, unquote, quote
+from urllib.parse import urlsplit, quote, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# 启动早期加载同目录 .env（MIMO_API_KEY 等），确保读取环境变量的模块
+# （tts_client / asr_client）在导入前就能拿到配置。桌面端 local-server.js
+# 拉起后端时只透传 process.env，不会注入 .env，故此处兜底加载。
+try:
+    _env_path = Path(__file__).resolve().parent / ".env"
+    if _env_path.exists():
+        with open(_env_path, "r", encoding="utf-8") as _fh:
+            for _line in _fh:
+                _line = _line.strip()
+                if not _line or _line.startswith("#") or "=" not in _line:
+                    continue
+                _k, _v = _line.split("=", 1)
+                _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
+                if _k and _k not in os.environ:
+                    os.environ[_k] = _v
+except Exception:
+    pass
+
+# ---------------------------------------------------------------------------
+# 桌面端配置：用户自选的输出目录持久化在 ~/.video-uniqueness/config.json。
+# 必须在 import pipeline 之前读取并写入 VU_OUTPUT，让 pipeline.OUTPUT_DIR
+# 落到用户选的位置（打包成 exe 后 PROJECT_DIR/output 会权限失败或丢失）。
+# ---------------------------------------------------------------------------
+_CONFIG_PATH = Path.home() / ".video-uniqueness" / "config.json"
+
+
+def _load_config():
+    try:
+        if _CONFIG_PATH.exists():
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as _cf:
+                _c = json.load(_cf)
+            return _c if isinstance(_c, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_config(cfg):
+    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _tmp = _CONFIG_PATH.with_suffix(".json.tmp")
+    with open(_tmp, "w", encoding="utf-8") as _cf:
+        json.dump(cfg, _cf, ensure_ascii=False, indent=2)
+    _tmp.replace(_CONFIG_PATH)
+
+
+_cfg_startup = _load_config()
+_od = _cfg_startup.get("output_dir")
+if _od and isinstance(_od, str) and _od.strip() and "VU_OUTPUT" not in os.environ:
+    os.environ["VU_OUTPUT"] = _od.strip()
+
+
+def _default_output_root():
+    return Path(os.environ.get("VU_OUTPUT") or (Path.home() / "Videos" / "视频去重产物")).expanduser().resolve()
+
+
+def _configured_root():
+    cfg = _load_config()
+    raw = cfg.get("output_dir")
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw).expanduser().resolve()
+    return _default_output_root()
+
+
+def _output_dir_for(kind, cfg=None):
+    """返回去重/裂变各自的输出目录；兼容旧 output_dir 作为根目录。"""
+    cfg = cfg if isinstance(cfg, dict) else _load_config()
+    key = "fission_output_dir" if kind == "裂变" else "dedup_output_dir"
+    raw = cfg.get(key)
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw).expanduser().resolve()
+    return (_configured_root() / kind).resolve()
+
+
+def _safe_component(text, fallback="素材"):
+    text = Path(str(text or fallback)).stem.strip() or fallback
+    bad = '<>:"/\\|?*\r\n\t'
+    cleaned = ''.join('_' if ch in bad or ord(ch) < 32 else ch for ch in text)
+    cleaned = ' '.join(cleaned.split()).strip(' .')
+    return (cleaned or fallback)[:60]
+
+
+def _asset_workspace_dir(src, root_dir):
+    """按原视频名+短ID生成稳定素材工作区目录，避免多素材产物混在同一层。"""
+    src_path = P._resolve_safe(src, P.VIDEO_DIR, must_exist=True)
+    stem = _safe_component(src_path.stem)
+    try:
+        digest = P.md5_of(src_path)[:8]
+    except Exception:
+        st = src_path.stat()
+        digest = hashlib.md5(f"{src_path.name}:{st.st_size}:{int(st.st_mtime)}".encode("utf-8")).hexdigest()[:8]
+    return (Path(root_dir).resolve() / f"{stem}__{digest}").resolve()
+
+
+def _validate_existing_dir(value, field_name="dir"):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} 必须是非空字符串")
+    p = Path(value).expanduser().resolve()
+    if not p.exists() or not p.is_dir():
+        raise ValueError("目录不存在或不是文件夹：" + str(p))
+    return p
+
 import pipeline as P  # noqa: E402
 
 PROTOCOL_VERSION = "2026-07-28"
@@ -62,6 +165,10 @@ _REQUEST_STATE_KEY = os.urandom(32)
 # job handle 仍按既有方式持久化到 jobs.json。
 _ACTIVE_FISSION_LOCK = threading.Lock()
 _ACTIVE_FISSION = {}
+
+# 用户自选输出目录的切换锁：ThreadingHTTPServer 下保证「切换 OUTPUT_DIR → 调用管线」
+# 这一段的原子性，避免并发请求把产物写错目录。
+_OUTPUT_DIR_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +236,12 @@ TOOLS = [
         "_tier": "audit",
     },
     {
+        "name": "list_outputs",
+        "description": "列出 output/ 目录下已生成的去重产物（名称/大小/时间），用于恢复丢失的下载链接。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "_tier": "audit",
+    },
+    {
         "name": "probe_video",
         "description": "读取视频关键信息（分辨率/帧率/编码/时长/MD5）。去重前【必须】先探测。",
         "inputSchema": {
@@ -151,14 +264,25 @@ TOOLS = [
                 "dimensions": {"type": "object", "description": "维度开关：picture/rotate/crop/flip/speed/trim 六个布尔；flip 默认 false，开了必传 flip_mode"},
                 "flip_mode": {"type": "string", "enum": ["h", "v", "90"], "description": "翻转方向：h=水平、v=垂直、90=转置；仅 flip=true 时用"},
                 "seed": {"type": "integer", "description": "随机种子；缺省随机回填"},
+                "skip_phash": {"type": "boolean", "description": "跳过 pHash 自检（省 3-5 分钟 CPU 时间，仅保留 MD5+分辨率+时长校验）。默认 false"},
+                "enable_tts": {"type": "boolean", "description": "是否显式启用 AI 配音；false/缺省时忽略 tts_text/rewrite_template，不触发 MiMo TTS"},
+                "tts_text": {"type": "string", "description": "TTS 配音文案；enable_tts=true 且不为空时启用 MiMo TTS 替换原音轨（手动模式）"},
+                "tts_voice": {"type": "string", "description": "TTS 配音人声，默认冰糖"},
+                "tts_speed": {"type": "number", "description": "TTS 语速，默认 1.0"},
+                "rewrite_template": {"type": "string", "description": "元宝改写模板；enable_tts=true 且非空时走「改写→配音」自动链路（自动模式下与 tts_text 互斥，tts_text 优先）"},
+                "rewrite_topic": {"type": "string", "description": "改写主题/方向提示（可选），随模板一同发给元宝"},
+                "rewrite_frames": {"type": "integer", "description": "改写抽帧数（默认 5），用于给元宝提供画面上下文"},
+                "output_dir": {"type": "string", "description": "可选：产物输出目录（绝对路径）；不传则使用用户配置/默认目录（~/Videos/视频去重产物）。传入后立即生效，无需重启。"},
             },
             "required": ["src"],
         },
-        "_tier": "warned",
+        "_tier": "audit",
     },
     {
         "name": "batch_fission",
-        "description": "裂变：同一素材生成 count 个不同参数的变体（每个 MD5 互不相同）。",
+        # 注意：批量裂变不支持 TTS 配音。tts_text/tts_voice/tts_speed 仅 dedup_video 有，
+        # fission 的 inputSchema 未透传这些参数，调用链也不会触发配音（刻意保持简单、可并行、无云依赖）。
+        "description": "裂变：同一素材生成 count 个不同参数的变体（每个 MD5 互不相同）。注意：暂不支持 TTS 配音（配音仅单条去重支持）。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -193,6 +317,19 @@ TOOLS = [
             "required": ["src", "platform"],
         },
         "_tier": "warned",
+    },
+    {
+        "name": "extract_copy_context",
+        "description": "提取视频改写上下文：ASR 音频识别 + 关键帧 JPEG(base64)。返回 {raw_text, source, duration, max_chars, frames_b64}，供元宝/DeepSeek 改写文案使用。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "文件名或绝对路径"},
+                "n_frames": {"type": "integer", "description": "抽帧数（默认 5）"},
+            },
+            "required": ["src"],
+        },
+        "_tier": "audit",
     },
     {
         "name": "get_job",
@@ -260,22 +397,182 @@ def _run_hook(script, payload):
 # ---------------------------------------------------------------------------
 # 工具执行
 # ---------------------------------------------------------------------------
+def _build_copy_context(src, n_frames=5):
+    """抽取视频改写上下文：ASR 文字 + 关键帧（文件路径 + base64）。供元宝改写使用。
+
+    与 extract_copy_context 工具共用同一套抽取逻辑，避免重复代码。
+    frames_paths 为磁盘上的帧图路径，可直接传给 yuanbao_client.vision_and_rewrite。
+    """
+    import base64 as _b64
+    import json as _json
+    import logging
+    from pathlib import Path as _Path
+    import copy_rewriter as CR
+    import asr_client as AC
+    from pipeline import VIDEO_DIR, FFMPEG, FFPROBE, _resolve_safe
+
+    # src 走白名单校验（与 dedup_video / probe_video 一致）
+    try:
+        video_path = str(_resolve_safe(src, VIDEO_DIR, must_exist=True))
+    except Exception as e:
+        raise P.PipelineError(f"src 不在 VIDEO_DIR 内或不存在: {e}")
+
+    # 1) 时长（用 ffprobe 单独走一次）
+    try:
+        probe = subprocess.run(
+            [str(FFPROBE), "-v", "error", "-show_entries", "format=duration",
+             "-of", "json", video_path],
+            capture_output=True, text=True, timeout=15,
+        )
+        duration = float(_json.loads(probe.stdout or "{}").get("format", {}).get("duration", 0) or 0)
+    except Exception:
+        duration = 0.0
+
+    # 2) ASR（失败返回空字符串，不阻塞帧图）
+    raw_text = ""
+    source = ""
+    try:
+        raw_text = AC.transcribe_video(video_path, str(FFMPEG)) or ""
+        source = "asr" if raw_text else ""
+    except Exception as e:
+        logging.getLogger("vu").warning(f"ASR 失败: {e}")
+
+    # 3) 抽帧 → 文件路径 + base64
+    frames_paths = []
+    frames_b64 = []
+    try:
+        frame_paths = CR._extract_frames(_Path(video_path), FFMPEG, n=int(n_frames))
+        for fp in frame_paths:
+            frames_paths.append(str(fp))
+            try:
+                with open(fp, "rb") as fh:
+                    frames_b64.append(_b64.b64encode(fh.read()).decode("ascii"))
+            except Exception:
+                continue
+    except Exception as e:
+        logging.getLogger("vu").warning(f"抽帧失败: {e}")
+
+    # 4) 最大字数上限：让元宝改写时按视频时长控制篇幅。
+    #    max_chars = ceil(duration × R × 安全余量)。R = MiMo TTS 实际语速（字/秒），
+    #    产物时长 = 配音时长（基于文案长度，混音用 -shortest 把视频截到配音长度），
+    #    故要让「配音时长 ≈ 视频时长」：向「略短」偏置（×0.95）只裁尾部画面、旁白完整。
+    #    ← 校准后改 TTS_CHARS_PER_SEC（建议 4~6，用 calibrate_tts_rate.py 实测）
+    TTS_CHARS_PER_SEC = 4.5      # ← 校准后改这里（建议 4~6）
+    TTS_SAFE_MARGIN = 0.95
+    max_chars = max(30, int(duration * TTS_CHARS_PER_SEC * TTS_SAFE_MARGIN)) if duration > 0 else 30
+
+    return {
+        "raw_text": raw_text,
+        "source": source,
+        "duration": duration,
+        "max_chars": max_chars,
+        "frames_paths": frames_paths,
+        "frames_b64": frames_b64,
+    }
+
+
+def _rel_to_output(path, root_dir):
+    try:
+        return str(Path(path).resolve().relative_to(Path(root_dir).resolve())).replace("\\", "/")
+    except Exception:
+        return Path(path).name
+
+
 def _exec_tool(name, args):
     if name == "list_assets":
         return {"assets": P.list_assets()}
+    if name == "list_outputs":
+        return {"outputs": P.list_outputs()}
     if name == "probe_video":
         return P.probe_video(args["src"])
+    if name == "extract_copy_context":
+        # 给改写流程用的上下文：ASR 文字 + 帧图 base64（与 dedup_video 改写路径共用）
+        n_frames = int(args.get("n_frames") or 5)
+        ctx = _build_copy_context(args["src"], n_frames)
+        return {
+            "raw_text": ctx["raw_text"],
+            "source": ctx["source"],
+            "duration": ctx["duration"],
+            "max_chars": ctx["max_chars"],
+            "frames_b64": ctx["frames_b64"],
+        }
     if name == "dedup_video":
-        r = P.dedup_video(
-            args["src"],
-            params=args.get("params"),
-            out_name=args.get("out_name"),
-            seed=args.get("seed"),
-            level=args.get("level"),
-            dimensions=args.get("dimensions"),
-            flip_mode=args.get("flip_mode"),
-            trim_phase=args.get("trim_phase"),
-        )
+        # 🆕 改写→配音：仅当用户显式启用 AI 配音（enable_tts=true）且选择「元宝改写」
+        # （rewrite_template 非空、且未手动填文案）时，
+        # 先用 ASR+抽帧构造上下文，调 vision_and_rewrite 生成旁白文案，再喂给 TTS 混音。
+        # 手动填了文案（tts_text）时优先用手动文案，跳过改写。
+        tts_enabled = bool(args.get("enable_tts"))
+        tts_text = args.get("tts_text") if tts_enabled else None
+        rewrite_template = args.get("rewrite_template") if tts_enabled else None
+        rewrite_meta = {"requested": False}
+        if rewrite_template and not tts_text:
+            rewrite_meta["requested"] = True
+            try:
+                import yuanbao_client as YB
+                n_frames = int(args.get("rewrite_frames") or 5)
+                ctx = _build_copy_context(args["src"], n_frames)
+                rw = YB.vision_and_rewrite(
+                    frames=ctx["frames_paths"],
+                    raw_text=ctx["raw_text"],
+                    rewrite_template=rewrite_template,
+                    max_chars=ctx["max_chars"],
+                    topic=args.get("rewrite_topic"),
+                    reuse_edge=True,
+                )
+                if rw.get("rewritten"):
+                    tts_text = rw["rewritten"]
+                    rewrite_meta["source"] = ctx["source"] or "vision"
+                    rewrite_meta["rewritten_len"] = len(tts_text)
+                else:
+                    rewrite_meta["error"] = rw.get("error") or "元宝未在超时内返回改写结果"
+                    logging.getLogger("vu").warning("改写未返回文案: %s", rewrite_meta["error"])
+            except Exception as e:
+                rewrite_meta["error"] = str(e)[:300]
+                logging.getLogger("vu").warning(f"改写异常: {e}")
+
+        # 🆕 兜底清洗：无论手动文案还是元宝改写，都剔除「注：文案共N字…」等会被 TTS 念出来的元信息
+        if tts_text:
+            try:
+                import copy_rewriter as CR
+                tts_text = CR._strip_tts_meta(tts_text)
+            except Exception:
+                pass
+
+        # 🆕 按请求/配置指定去重输出目录（用户可单独配置「去重产物文件夹」）
+        _od_arg = args.get("output_dir")
+        _od_path = None
+        if _od_arg:
+            _od_path = _validate_existing_dir(_od_arg, "output_dir")
+        else:
+            _od_path = _output_dir_for("去重")
+            _od_path.mkdir(parents=True, exist_ok=True)
+        _workspace_dir = _asset_workspace_dir(args["src"], _od_path)
+        _workspace_dir.mkdir(parents=True, exist_ok=True)
+        with _OUTPUT_DIR_LOCK:
+            P.OUTPUT_DIR = _workspace_dir
+            os.environ["VU_OUTPUT"] = str(_workspace_dir)
+            r = P.dedup_video(
+                args["src"],
+                params=args.get("params"),
+                out_name=args.get("out_name"),
+                seed=args.get("seed"),
+                level=args.get("level"),
+                dimensions=args.get("dimensions"),
+                flip_mode=args.get("flip_mode"),
+                trim_phase=args.get("trim_phase"),
+                tts_text=tts_text,
+                tts_voice=args.get("tts_voice"),
+                tts_speed=args.get("tts_speed"),
+                skip_phash=args.get("skip_phash", False),
+                subdir="",
+            )
+        r["output_path"] = _rel_to_output(r.get("output_path"), _od_path)
+        r["applied_params"]["rewrite_requested"] = rewrite_meta["requested"]
+        if rewrite_meta.get("error"):
+            r["applied_params"]["rewrite_error"] = rewrite_meta["error"]
+        if rewrite_meta.get("source"):
+            r["applied_params"]["rewrite_source"] = rewrite_meta["source"]
+        r["rewrite_meta"] = rewrite_meta
         r["job_id"] = _new_job("dedup", {"src": r["src"]["name"], "output": r["output_path"]})
         return r
     if name == "batch_fission":
@@ -290,18 +587,29 @@ def _exec_tool(name, args):
                 raise P.PipelineError(f"批量任务已存在: {task_id}")
             _ACTIVE_FISSION[task_id] = token
         try:
-            r = P.batch_fission(
-                args["src"],
-                count=args.get("count"),
-                params=args.get("params"),
-                level=args.get("level"),
-                dimensions=args.get("dimensions"),
-                flip_mode=args.get("flip_mode"),
-                cancel_token=token,
-            )
+            with _OUTPUT_DIR_LOCK:
+                _fission_output_dir = _output_dir_for("裂变")
+                _fission_output_dir.mkdir(parents=True, exist_ok=True)
+                _workspace_dir = _asset_workspace_dir(args["src"], _fission_output_dir)
+                _workspace_dir.mkdir(parents=True, exist_ok=True)
+                P.OUTPUT_DIR = _workspace_dir
+                os.environ["VU_OUTPUT"] = str(_workspace_dir)
+                r = P.batch_fission(
+                    args["src"],
+                    count=args.get("count"),
+                    params=args.get("params"),
+                    level=args.get("level"),
+                    dimensions=args.get("dimensions"),
+                    flip_mode=args.get("flip_mode"),
+                    cancel_token=token,
+                    subdir="",
+                )
         finally:
             with _ACTIVE_FISSION_LOCK:
                 _ACTIVE_FISSION.pop(task_id, None)
+        for _v in r.get("variants") or []:
+            if isinstance(_v, dict) and _v.get("output_path"):
+                _v["output_path"] = _rel_to_output(_v.get("output_path"), _fission_output_dir)
         r["task_id"] = task_id
         r["job_id"] = _new_job("fission", {
             "src": r["src"], "count": r["count"],
@@ -430,52 +738,29 @@ def handle_rpc(req, headers):
 
 
 def _allowed_host(host):
-    """仅允许浏览器或客户端访问已配置的监听地址。
-
-    默认白名单: 127.0.0.1 / localhost。
-    可通过环境变量 VU_ALLOWED_HOSTS（逗号分隔）追加域名/IP，
-    例如: VU_ALLOWED_HOSTS=vu.evenblue.top,124.71.209.36
-    """
+    """允许白名单内的 Host 访问（含本地 IP 与外网服务器 IP）。"""
     if not isinstance(host, str) or not host:
         return False
     value = host.strip().lower()
-    # IPv6
-    if value.startswith("["):
-        closing = value.find("]")
-        if closing < 0 or value[:closing + 1] != "[::1]":
-            return False
-        suffix = value[closing + 1:]
-        return suffix == "" or (suffix.startswith(":") and suffix[1:].isdigit())
-    # 分离 hostname 与端口
-    if ":" in value:
-        hostname, port = value.rsplit(":", 1)
-        if not port.isdigit():
-            return False
-    else:
-        hostname = value
-    # 白名单：默认 + 环境变量
-    allowed = {"127.0.0.1", "localhost"}
-    extra = os.environ.get("VU_ALLOWED_HOSTS", "")
-    if extra:
-        allowed.update(h.strip().lower() for h in extra.split(",") if h.strip())
+    # 去掉端口
+    hostname = value.split(":")[0] if ":" in value else value
+    allowed = os.environ.get("VU_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
+    allowed = [h.strip().lower() for h in allowed if h.strip()]
     return hostname in allowed
 
 
 def _allowed_origin(origin):
-    """允许非浏览器请求、file:// 的 null Origin 与已配置的域名/IP。"""
+    """允许非浏览器请求、file:// 的 null Origin、本机网页与浏览器扩展。"""
     if origin in (None, "", "null"):
         return True
     try:
         parsed = urlsplit(origin)
     except Exception:
         return False
-    if parsed.scheme not in ("http", "https"):
-        return False
-    allowed = {"127.0.0.1", "localhost"}
-    extra = os.environ.get("VU_ALLOWED_HOSTS", "")
-    if extra:
-        allowed.update(h.strip().lower() for h in extra.split(",") if h.strip())
-    return parsed.hostname in allowed
+    # 允许浏览器扩展 chrome-extension:// / moz-extension://（不查 hostname）
+    if parsed.scheme in ("chrome-extension", "moz-extension"):
+        return True
+    return parsed.scheme in ("http", "https") and parsed.hostname in ("127.0.0.1", "localhost")
 
 
 def _cancel_fission(task_id):
@@ -490,33 +775,48 @@ def _cancel_fission(task_id):
     return True
 
 
-def _open_output_folder(filename=None):
-    """打开固定 output 目录；Windows 上可安全选中目录内的指定文件。"""
-    output_dir = P.OUTPUT_DIR.resolve()
+def _resolve_output_location(filename=None, subdir=None, open_parent=False):
+    """解析允许打开的位置，并确保目标始终位于对应产物根目录内。"""
+    kind = "裂变" if subdir == "裂变" else "去重"
+    output_dir = _output_dir_for(kind).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     target = None
     if filename:
-        if not isinstance(filename, str) or Path(filename).name != filename:
+        if not isinstance(filename, str) or not filename.strip() or Path(filename).is_absolute():
             raise ValueError("产物文件名无效")
         candidate = (output_dir / filename).resolve()
         try:
             candidate.relative_to(output_dir)
         except ValueError as exc:
-            raise ValueError("产物文件必须位于 output/ 内") from exc
+            raise ValueError("产物文件必须位于产物目录内") from exc
         if not candidate.is_file():
             raise FileNotFoundError(f"产物文件不存在: {filename}")
         target = candidate
 
-    if os.name == "nt" and target is not None:
+    opened_dir = target.parent if target is not None and open_parent else output_dir
+    return output_dir, target, opened_dir
+
+
+def _open_output_folder(filename=None, subdir=None, open_parent=False):
+    """打开产物目录；可打开当前产物的任务子目录，或在根目录中选中文件。"""
+    output_dir, target, opened_dir = _resolve_output_location(
+        filename=filename,
+        subdir=subdir,
+        open_parent=bool(open_parent),
+    )
+
+    if os.name == "nt" and target is not None and not open_parent:
         subprocess.Popen(["explorer.exe", "/select,", str(target)])
     elif os.name == "nt":
-        os.startfile(str(output_dir))
+        os.startfile(str(opened_dir))
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", str(target)] if target else ["open", str(output_dir)])
+        if target is not None and not open_parent:
+            subprocess.Popen(["open", "-R", str(target)])
+        else:
+            subprocess.Popen(["open", str(opened_dir)])
     else:
-        subprocess.Popen(["xdg-open", str(output_dir)])
-    return output_dir, target
-
+        subprocess.Popen(["xdg-open", str(opened_dir)])
+    return opened_dir, target
 
 def _summary(name, result):
     if name == "dedup_video":
@@ -663,6 +963,64 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
+        # /local/download/<filename> — 从去重/裂变各自配置的输出目录直供视频文件下载
+        if path.startswith("/local/download/"):
+            fname = unquote(path[len("/local/download/"):])
+            query = urlsplit(self.path).query or ""
+            subdir = None
+            for part in query.split("&"):
+                if part.startswith("subdir="):
+                    subdir = unquote(part.split("=", 1)[1])
+                    break
+            kind = "裂变" if subdir == "裂变" else "去重"
+            safe_base = _output_dir_for(kind).resolve()
+            if not fname or Path(fname).is_absolute():
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            fpath = (safe_base / fname).resolve()
+            # 安全检查：允许素材工作区子目录，但必须位于对应产物根目录内
+            try:
+                fpath.relative_to(safe_base)
+            except ValueError:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if not fpath.is_file():
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            content_type = "video/mp4" if fname.endswith(".mp4") else "application/octet-stream"
+            try:
+                file_size = fpath.stat().st_size
+                fp = open(fpath, "rb")
+            except OSError:
+                self.send_response(500)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(fname, safe='')}")
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if not head_only:
+                # 流式分块发送：64KB/片，避免 100MB 一次性读进内存导致 RST + 慢
+                try:
+                    while True:
+                        chunk = fp.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # 客户端断连属正常，资源已在 finally 释放
+                finally:
+                    fp.close()
+            return
         web_file = _WEB_FILES.get(path)
         if web_file is None:
             self.send_response(404)
@@ -679,43 +1037,120 @@ class Handler(BaseHTTPRequestHandler):
         if not head_only:
             self.wfile.write(body)
 
+    def _handle_upload(self):
+        """处理 /local/upload —— 直传视频文件到 input/ 目录（手动解析 multipart）。"""
+        ct = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in ct:
+            self._respond_http(400, {"ok": False, "message": "需要 multipart/form-data"})
+            return
+        # 取 boundary
+        boundary = None
+        for part in ct.split(";"):
+            part = part.strip()
+            if part.lower().startswith("boundary="):
+                boundary = part.split("=", 1)[1].strip().strip('"')
+        if not boundary:
+            self._respond_http(400, {"ok": False, "message": "缺少 boundary"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            # 手动解析 multipart
+            b = boundary.encode("utf-8")
+            parts = raw.split(b"--" + b)
+            for part in parts:
+                if not part.strip():
+                    continue
+                # 分离头/体
+                header_end = part.find(b"\r\n\r\n")
+                if header_end < 0:
+                    continue
+                headers_section = part[:header_end].decode("utf-8", errors="replace")
+                body = part[header_end + 4:]
+                # 去掉尾部 \r\n-- (最后一个 part 的结束标记)
+                body = body.rstrip(b"\r\n--\r\n").rstrip(b"\r\n--")
+                if b'filename="' in part[:header_end]:
+                    # 取原始文件名
+                    import re
+                    m = re.search(r'filename="([^"]*)"', headers_section)
+                    if not m:
+                        raise ValueError("未找到文件名")
+                    filename = Path(m.group(1)).name
+                    upload_dir = P.VIDEO_DIR
+                    upload_dir.mkdir(parents=True, exist_ok=True)
+                    dest = upload_dir / filename
+                    # 清理旧上传（超过 1 小时）
+                    now = time.time()
+                    for f in upload_dir.glob("*"):
+                        if f.is_file() and f.name != ".gitkeep" and now - f.stat().st_mtime > 3600:
+                            try: f.unlink()
+                            except Exception: pass
+                    dest.write_bytes(body)
+                    self._respond_http(200, {"ok": True, "name": filename, "size": dest.stat().st_size})
+                    return
+            raise ValueError("未找到上传文件")
+        except Exception as e:
+            self._respond_http(500, {"ok": False, "message": str(e)})
+
     def do_POST(self):
         if not self._request_allowed():
             self.send_response(403)
             self.end_headers()
             return
-        # ── 文件上传 ──
-        if self.path.rstrip("/") == "/local/upload":
-            ct = self.headers.get("Content-Type", "")
-            if "multipart/form-data" not in ct:
-                self._respond_http(400, {"ok": False, "message": "需要 multipart/form-data"})
-                return
-            length = int(self.headers.get("Content-Length", 0))
-            raw = self.rfile.read(length)
+        if self.path.rstrip("/") == "/local/get-output-dir":
             try:
-                parts = _parse_multipart(raw, ct)
-                file_item = parts.get("file")
-                if not file_item or not file_item[0]:
-                    self._respond_http(400, {"ok": False, "message": "未收到文件"})
-                    return
-                filename, data = file_item
-                # 只允许常见视频/音频扩展名
-                safe_exts = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts", ".webm", ".m4v"}
-                ext = Path(filename).suffix.lower()
-                if ext not in safe_exts:
-                    self._respond_http(400, {"ok": False, "message": f"不支持的文件类型: {ext}"})
-                    return
-                P.VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-                dest = P.VIDEO_DIR / filename
-                dest.write_bytes(data)
+                _cfg = _load_config()
+                _dedup_configured = bool(_cfg.get("dedup_output_dir"))
+                _fission_configured = bool(_cfg.get("fission_output_dir"))
                 self._respond_http(200, {
                     "ok": True,
-                    "filename": filename,
-                    "path": str(dest),
-                    "size": len(data),
+                    "output_dir": str(P.OUTPUT_DIR.resolve()),
+                    "dedup_output_dir": str(_output_dir_for("去重", _cfg)),
+                    "fission_output_dir": str(_output_dir_for("裂变", _cfg)),
+                    "dedup_configured": _dedup_configured,
+                    "fission_configured": _fission_configured,
+                    "configured": bool(_dedup_configured and _fission_configured),
                 })
             except Exception as exc:
-                self._respond_http(500, {"ok": False, "message": f"上传失败: {exc}"})
+                self._respond_http(500, {"ok": False, "message": str(exc)})
+            return
+        if self.path.rstrip("/") == "/local/set-output-dir":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("请求体必须是 JSON 对象")
+                d = payload.get("dir")
+                kind = payload.get("kind")
+                p = _validate_existing_dir(d, "dir")
+                cfg = _load_config()
+                if kind == "dedup":
+                    cfg["dedup_output_dir"] = str(p)
+                    msg = "去重产物文件夹已保存"
+                elif kind == "fission":
+                    cfg["fission_output_dir"] = str(p)
+                    msg = "裂变产物文件夹已保存"
+                else:
+                    # 兼容旧调用：同时设置根目录与两个任务目录（子目录会自动创建）。
+                    cfg["output_dir"] = str(p)
+                    cfg["dedup_output_dir"] = str((p / "去重").resolve())
+                    cfg["fission_output_dir"] = str((p / "裂变").resolve())
+                    (p / "去重").mkdir(parents=True, exist_ok=True)
+                    (p / "裂变").mkdir(parents=True, exist_ok=True)
+                    msg = "产物根目录已保存"
+                _save_config(cfg)
+                self._respond_http(200, {
+                    "ok": True,
+                    "output_dir": str(p),
+                    "dedup_output_dir": str(_output_dir_for("去重", cfg)),
+                    "fission_output_dir": str(_output_dir_for("裂变", cfg)),
+                    "message": msg,
+                })
+            except (ValueError, OSError) as exc:
+                self._respond_http(400, {"ok": False, "message": str(exc)})
+            except Exception as exc:
+                self._respond_http(500, {"ok": False, "message": "无法保存配置：" + str(exc)})
             return
         if self.path.rstrip("/") in ("/local/open-output", "/local/cancel-fission"):
             endpoint = self.path.rstrip("/")
@@ -728,7 +1163,11 @@ class Handler(BaseHTTPRequestHandler):
                 if endpoint == "/local/cancel-fission":
                     found = _cancel_fission(payload.get("task_id"))
                 else:
-                    output_dir, selected = _open_output_folder(payload.get("filename"))
+                    output_dir, selected = _open_output_folder(
+                        payload.get("filename"),
+                        subdir=payload.get("subdir"),
+                        open_parent=payload.get("open_parent") is True,
+                    )
             except (ValueError, FileNotFoundError) as exc:
                 self._respond_http(400, {"ok": False, "message": str(exc)})
                 return
@@ -748,6 +1187,9 @@ class Handler(BaseHTTPRequestHandler):
                     "path": str(output_dir),
                     "selected": str(selected) if selected else None,
                 })
+            return
+        if self.path.rstrip("/") == "/local/upload":
+            self._handle_upload()
             return
         if self.path.rstrip("/") not in ("/mcp", ""):
             self.send_response(404)
@@ -806,8 +1248,7 @@ def serve(host="127.0.0.1", port=8765):
     _cleanup_old_temp_files()
 
     class _Server(ThreadingHTTPServer):
-        # 关闭地址重用：Windows 下 SO_REUSEADDR 会允许多进程绑同端口 → 脑裂根因
-        allow_reuse_address = False
+        allow_reuse_address = True   # Linux 安全：_port_in_use 已防脑裂，仅解决重启 TIME_WAIT
 
     srv = _Server((host, port), Handler)
     print(f"[MCP 2026-07-28] video-dedup-station 无状态服务已启动: http://{host}:{port}/mcp")

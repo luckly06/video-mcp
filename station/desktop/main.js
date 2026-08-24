@@ -1,0 +1,154 @@
+// main.js — Electron 主进程入口
+//
+// 职责：
+//   1) 应用生命周期（single-instance / window-all-closed / activate）
+//   2) userData 隔离（不污染机器上其他 Electron app 缓存）
+//   3) 创建主窗口（默认加载 archive/web/index.html；M1 阶段先 about:blank 验骨架）
+//   4) 接入菜单 + 下载接管（lib/* 模块化）
+//
+// 关联文档：docs/05-扩展功能/changes/add-desktop-electron/{proposal,delta,design,tasks}.md
+'use strict';
+
+const path = require('node:path');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+
+const { createMainWindow } = require('./lib/window');
+const { buildMenu } = require('./lib/menu');
+const { attachDownloadHandlers } = require('./lib/download');
+const { createLogger } = require('./lib/logger');
+const { createYuanbaoWindow } = require('./lib/yuanbao-window');
+const { startLocalServer, stopLocalServer } = require('./lib/local-server');
+const { resolveAppIconPath, resolveDesktopAssetsDir, resolveWebIndexPath } = require('./lib/paths');
+
+// ---------- 1. userData 隔离 ----------
+// 避免与机器上其他 Electron 应用共享缓存目录
+const USER_DATA = path.join(app.getPath('appData'), 'video-dedup-desktop');
+app.setPath('userData', USER_DATA);
+const YUANBAO_PROFILE_DIR = path.join(USER_DATA, 'yuanbao-edge-profile');
+
+// ---------- 2. 单实例锁 ----------
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  // 第二个实例直接退出；用户重启时聚焦已有窗口
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const wins = BrowserWindow.getAllWindows();
+    if (wins.length > 0) {
+      const w = wins[0];
+      if (w.isMinimized()) w.restore();
+      w.focus();
+    }
+  });
+}
+
+// ---------- 3. 日志 ----------
+const log = createLogger({
+  logDir: path.join(USER_DATA, 'logs'),
+  filename: 'desktop.log',
+});
+
+// ---------- 4. 主窗口工厂 + 下载接管 ----------
+let mainWindow = null;
+let localServerChild = null;
+let localServerError = null;
+
+// ---------- 4.5 IPC：TTS 失败原生弹窗 ----------
+// 渲染进程在「用户启用了 TTS 但产物未成功配音」时调用，弹出系统级对话框提示用户。
+ipcMain.handle('app:show-tts-warning', async (evt, payload) => {
+  try {
+    const win = BrowserWindow.fromWebContents(evt.sender) || mainWindow;
+    if (!win) return { ok: false, reason: 'no-window' };
+    await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: (payload && payload.title) || '提示',
+      message: (payload && payload.message) || '',
+      detail: (payload && payload.detail) || '',
+      buttons: ['知道了'],
+      defaultId: 0,
+      noLink: true,
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e && e.message ? e.message : String(e) };
+  }
+});
+
+async function bootstrap() {
+  // 本地 MCP 后端：优先复用已有服务；否则 spawn 本机 venv 的 mcp_server.py（127.0.0.1:8765）。
+  // 显式设置 VIDEODEDUP_API_BASE 时尊重外部后端，不拉起本地进程。
+  let apiBase;
+  const override = (process.env.VIDEODEDUP_API_BASE || '').trim();
+  if (override && /^https?:\/\//i.test(override)) {
+    apiBase = override.replace(/\/+$/, '');
+    log.info(`[main] 使用外部 API_BASE = ${apiBase}（不拉起本地后端）`);
+  } else {
+    const local = await startLocalServer({
+      log,
+      assetsDir: app.isPackaged ? resolveDesktopAssetsDir() : undefined,
+      yuanbaoProfileDir: YUANBAO_PROFILE_DIR,
+      preferFresh: app.isPackaged,
+    });
+    localServerChild = local.child;
+    apiBase = local.baseUrl;
+    localServerError = local.error || null;
+  }
+  log.info(`[main] API_BASE = ${apiBase}`);
+
+  mainWindow = createMainWindow({
+    apiBase,
+    loadTarget: process.env.VIDEODEDUP_LOAD_TARGET
+      || resolveWebIndexPath(),
+    iconPath: resolveAppIconPath(),
+    log,
+  });
+
+  if (localServerError) {
+    const logFile = path.join(USER_DATA, 'logs', 'desktop.log');
+    log.error(`[main] 本地处理服务不可用: ${localServerError}`);
+    dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: '本地处理服务启动失败',
+      message: '无法启动随包 MCP Server，视频处理暂不可用。',
+      detail: `请确认 ZIP 已完整解压，并检查 Windows 安全中心是否隔离了程序文件。\n\n错误：${localServerError}\n\n诊断日志：${logFile}`,
+      buttons: ['知道了'],
+      defaultId: 0,
+      noLink: true,
+    }).catch(() => {});
+  }
+
+  attachDownloadHandlers({
+    session: mainWindow.webContents.session,
+    getMainWindow: () => mainWindow,
+    log,
+  });
+
+  // 元宝独立浮动 BrowserWindow（与 Chrome 扩展 content-yuanbao.js 复用同一份 DOM driver）
+  const yuanbao = createYuanbaoWindow({
+    mainWindow,
+    iconPath: resolveAppIconPath(),
+    yuanbaoProfileDir: YUANBAO_PROFILE_DIR,
+    log,
+  });
+  log.info('[main] yuanbao window attached (independent floating)');
+
+  buildMenu({ mainWindow, log });
+}
+
+// ---------- 5. 生命周期 ----------
+app.whenReady().then(() => {
+  bootstrap();
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) bootstrap();
+  });
+});
+
+app.on('window-all-closed', () => {
+  // 非 macOS：所有窗口关闭后退出；macOS：保持 dock 行为
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', () => {
+  // 退出时回收本地后端子进程（若复用外部服务则 child 为 null，noop）
+  stopLocalServer(localServerChild);
+});

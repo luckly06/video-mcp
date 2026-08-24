@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
+  <title>视频去重工位</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    body { width: 500px; min-height: 560px; padding: 0; }
+    .topbar { padding: 8px 12px; }
+    .topbar h1 { font-size: 15px; }
+    .main-content { padding: 10px 12px; }
+    .work-card { margin-bottom: 10px; }
+    .work-card h3 { font-size: 14px; }
+    .field-label { font-size: 12px; }
+    .field-help { font-size: 11px; }
+    textarea.tts-textarea { font-size: 12px; }
+    .btn { font-size: 12px; }
+    .btn-primary { font-size: 13px; padding: 8px 16px; }
+    .probe-grid { font-size: 11px; }
+    .check-item { font-size: 12px; }
+    .upload-zone { padding: 16px; }
+  </style>
+</head>
+<body>
+  <!-- SVG 图标精灵表 -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="ico-package" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12.89 1.45l8 4A2 2 0 0 1 22 7.24v9.53a2 2 0 0 1-1.11 1.79l-8 4a2 2 0 0 1-1.79 0l-8-4a2 2 0 0 1-1.1-1.8V7.24a2 2 0 0 1 1.11-1.79l8-4a2 2 0 0 1 1.78 0Z"/><path d="M2.32 6.16L12 11l9.68-4.84"/><path d="M12 22.76V11"/>
+    </symbol>
+    <symbol id="ico-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+    </symbol>
+    <symbol id="ico-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+    </symbol>
+    <symbol id="ico-sparkle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/>
+    </symbol>
+    <symbol id="ico-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10Z"/><path d="m9 12 2 2 4-4"/>
+    </symbol>
+    <symbol id="ico-xcircle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>
+    </symbol>
+  </svg>
+
+  <header class="topbar">
+    <div class="brand-group">
+      <div><h1>视频去重工位</h1><p>上传 · 探测 · 改写 · 去重</p></div>
+    </div>
+    <span id="conn-badge" class="service-badge" style="font-size:11px;padding:2px 8px;">连接中</span>
+  </header>
+
+  <main class="main-content">
+    <!-- 上传 + 选择 -->
+    <section class="work-card" style="margin-bottom:8px;">
+      <div class="form-row">
+        <div id="upload-zone" class="upload-zone">
+          <input type="file" id="file-upload" class="file-input" accept="video/*" />
+          <label for="file-upload" class="upload-label">
+            <span id="upload-text">点击或拖拽上传视频</span>
+            <small>MP4 / MOV 等格式</small>
+          </label>
+        </div>
+        <div id="upload-progress" class="upload-progress hidden">
+          <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+          <span id="progress-text">上传中…</span>
+        </div>
+      </div>
+      <div class="form-row asset-row" id="existing-assets-row">
+        <label class="field-label" for="asset-select">已上传素材</label>
+        <select id="asset-select" class="wb-select"><option value="">加载素材中…</option></select>
+        <button id="btn-refresh-assets" class="btn btn-icon" type="button" title="刷新"><svg class="ico-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 7v4h-4M5 17v-4h4M6.7 9a6 6 0 0 1 10.1-2.2L19 9M5 15l2.2 2.2A6 6 0 0 0 17.3 15"/></svg></button>
+        <button id="btn-probe" class="btn btn-primary" type="button">探测</button>
+      </div>
+      <div id="probe-card" class="result-card hidden">
+        <div class="result-head" id="probe-head" style="cursor:pointer"><div><span class="result-eyebrow">probe_video</span><h4>素材探测结果</h4></div><div style="display:flex;align-items:center;gap:8px"><span class="tier-chip tier-audit">已审计</span><svg id="probe-toggle" width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0"><path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></div></div>
+        <div id="probe-body" class="container">
+          <div id="probe-grid" class="probe-grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TTS + 改写（可选） -->
+    <section class="work-card">
+      <div class="card-heading"><h3>AI 配音 + 改写 <span style="font-size:11px;color:var(--gray-500);font-weight:400;">（可选）</span></h3></div>
+      <div class="parameter-group">
+        <div class="tts-rows">
+          <label class="tts-rewrite-toggle" style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin-bottom:6px;">
+            <input type="checkbox" id="chk-rewrite" /> <span>启用元宝改写</span>
+          </label>
+          <div id="tts-template-wrap" style="display:none;">
+            <label for="tts-topic" style="font-size:12px;color:var(--gray-700);font-weight:500;display:block;margin-bottom:3px;">视频内容简述</label>
+            <input id="tts-topic" class="tts-textarea" style="height:32px;margin-bottom:8px;" placeholder="例如：海边夕阳慢动作" />
+            <label for="tts-template" style="font-size:12px;color:var(--gray-700);font-weight:500;display:block;margin-bottom:3px;">改写模板</label>
+            <textarea id="tts-template" class="tts-textarea" rows="2" placeholder="例如：你是带货主播，改写为口播文案。"></textarea>
+            <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-mini tts-template-fill" data-template="带货"><svg class="ico-16" style="color:#F59E0B"><use href="#ico-package"/></svg> 带货</button>
+              <button type="button" class="btn btn-mini tts-template-fill" data-template="解说"><svg class="ico-16" style="color:#3B82F6"><use href="#ico-mic"/></svg> 解说</button>
+              <button type="button" class="btn btn-mini tts-template-fill" data-template="Vlog"><svg class="ico-16" style="color:#10B981"><use href="#ico-phone"/></svg> Vlog</button>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+            <button type="button" id="btn-rewrite-preview" class="btn btn-primary" style="flex:1"><svg class="ico-16" style="color:#A855F7"><use href="#ico-sparkle"/></svg> AI 改写预览</button>
+            <span id="conn-badge-ext" style="font-size:10px;color:var(--gray-500);">扩展已就绪</span>
+          </div>
+          <div id="rewrite-preview" style="display:none;margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--surface);"></div>
+          <div id="tts-text-wrap" style="display:none;margin-top:8px;">
+            <label for="tts-text" style="font-size:12px;color:var(--gray-700);font-weight:500;display:block;margin-bottom:4px;">待配音文案（确认后自动填入，可手动修改）</label>
+            <textarea id="tts-text" class="tts-textarea" rows="3" placeholder="确认使用元宝改写文案后将自动填入此处..."></textarea>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+        <select id="tts-voice" class="wb-select compact"><option value="冰糖">冰糖</option><option value="茉莉">茉莉</option><option value="苏打">苏打</option><option value="白桦">白桦</option></select>
+        <select id="tts-speed" class="wb-select compact">
+          <option value="0.8">0.8×</option><option value="1.0" selected>1.0×</option><option value="1.2">1.2×</option><option value="1.5">1.5×</option>
+        </select>
+        <span id="tts-status" class="field-help" style="margin:0;">MiMo TTS</span>
+        <button type="button" class="btn btn-mini" id="btn-template-clear">清空模板</button>
+      </div>
+    </section>
+
+    <!-- 去重参数 -->
+    <section class="work-card" style="margin-bottom:8px;">
+      <div class="card-heading"><h3>去重参数</h3></div>
+      <div class="parameter-group">
+        <div class="field-label">强度档</div>
+        <div class="seg" id="level-seg" role="radiogroup">
+          <button type="button" class="seg-btn" data-level="light">轻度</button>
+          <button type="button" class="seg-btn active" data-level="medium">中度</button>
+          <button type="button" class="seg-btn" data-level="heavy">重度</button>
+        </div>
+      </div>
+      <div class="parameter-group">
+        <div class="field-label">处理维度</div>
+        <div class="dim-grid" id="dim-grid">
+          <label class="dim-chk"><input type="checkbox" data-dim="picture" checked /><span>画面</span></label>
+          <label class="dim-chk"><input type="checkbox" data-dim="rotate" checked /><span>微旋转</span></label>
+          <label class="dim-chk"><input type="checkbox" data-dim="crop" checked /><span>裁切</span></label>
+          <label class="dim-chk"><input type="checkbox" data-dim="speed" checked /><span>变速</span></label>
+          <label class="dim-chk"><input type="checkbox" data-dim="trim" checked /><span>去头尾</span></label>
+          <label class="dim-chk dim-flip"><input type="checkbox" data-dim="flip" /><span>翻转</span></label>
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-600);margin-bottom:4px;cursor:pointer;">
+        <input type="checkbox" id="chk-skip-phash" checked /><span>跳过 pHash 自检（快 3-5 分钟）</span>
+      </label>
+      <button id="btn-dedup" class="btn btn-primary" type="button" style="width:100%">开始单条去重</button>
+      <div id="dedup-progress" class="processing-progress hidden" style="margin-top:8px">
+        <div class="progress-row"><strong id="dedup-progress-label">去重处理中</strong><span id="dedup-progress-time"></span></div>
+        <div class="orb-loader"><div class="orb-path"><div class="orb-globe"><div class="orb-wrapper"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div></div></div>
+      </div>
+      <div id="dedup-card" class="result-card hidden" style="margin-top:8px">
+        <div class="result-head"><h4>去重结果</h4></div>
+        <div class="checks" id="dedup-checks"></div>
+        <div id="dedup-artifact" class="artifact-highlight hidden">
+          <strong id="dedup-artifact-name"></strong>
+          <button id="btn-download-output" class="btn btn-mini hidden" style="background:#4A90D9;color:#fff;margin-left:8px;">下载</button>
+          <a id="dedup-artifact-url" class="hidden" target="_blank" style="display:block;margin-top:4px;font-size:10px;color:#4A90D9;word-break:break-all;"></a>
+        </div>
+        <div id="dedup-fail-hint" class="hidden" style="margin-top:8px;padding:8px 10px;border-radius:6px;background:#FFF6E5;border:1px solid #F1D295;font-size:11px;color:#A96700;">
+          <span id="dedup-fail-text"></span>
+        </div>
+        <div id="dedup-tts-hint" class="hidden" style="margin-top:8px;padding:8px 10px;border-radius:6px;background:#FDF2F8;border:1px solid #F5C6D7;font-size:11px;color:#9B2C5E;">
+          <span id="dedup-tts-text"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 最近产物（独立卡片，紧跟在去重参数下方） -->
+    <section class="work-card" style="margin-bottom:8px;">
+      <div class="card-heading" style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>最近产物</h3>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <a id="recover-refresh-link" href="#" class="hidden" style="font-size:11px;color:#6B7280;text-decoration:none;">↻ 刷新</a>
+          <button id="btn-recover-outputs" class="btn btn-mini hidden" style="background:#6B7280;color:#fff;">▲ 收起</button>
+        </div>
+      </div>
+      <div id="recover-outputs-list" class="hidden" style="margin-top:4px;font-size:11px;"></div>
+    </section>
+  </main>
+
+  <div id="toast-area" style="position:fixed;bottom:12px;left:12px;right:12px;z-index:999;display:none;padding:8px 12px;border-radius:var(--radius-sm);font-size:12px;text-align:center;pointer-events:none;"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -568,6 +568,109 @@ flowchart TD
 
 ---
 
+## 模块六：桌面端（Electron）—— 与 Chrome 扩展并存
+
+> 本模块为 2026-08-12 通过 `changes/add-desktop-electron/` 提案新增。**不替换** Chrome 扩展，**不动**服务端 MCP 接口；只是新增 Electron 桌面壳作为第二条独立前端入口，复用 `archive/web/` 的完整 Web UI（95KB app.js）。
+>
+> **冻结前提**：本模块不重启已冻结的下载瓶颈优化（见 `docs/05-扩展功能/decisions/2026-08-12-下载瓶颈冻结与对象存储迁移.md`）；只在体验层把"无进度 UI"变成"原生进度条"。OSS 迁移是独立后续决策。
+
+### 6.1 模块职责
+
+用 Electron 包裹 `archive/web/`，启动一个独立桌面窗口对接远端 MCP（默认 `http://124.71.209.36:8765`），与 Chrome 扩展**并存**：
+
+- 主进程：app 生命周期、userData 隔离、单实例锁、菜单、原生下载接管
+- preload：contextBridge 暴露 `desktop.onDownloadProgress` / `desktop.openExternal` 两条 API
+- renderer：**不复制** `archive/web/`，磁盘共享 `loadFile('../archive/web/index.html')` —— bugfix 双端自动生效
+
+### 6.2 数据 / 接口 / 异常
+
+- **接口契约**：
+  - 主↔渲染：通过 `ipcRenderer.on('download-progress')` / `ipcRenderer.invoke('shell:open-external')`
+  - 主↔后端：复用既有 MCP `/mcp`、`/local/upload`、`/local/download` 三个 endpoint（**未新增**）
+- **数据**：
+  - `userData`：`app.getPath('appData')/video-dedup-desktop`（与机器上其他 Electron app 隔离）
+  - renderer localStorage：`vds_memory_timeline_v1`、`video-dedup-progress-history-v1`（与扩展 popup 各自的 userData 隔离）
+- **异常**：
+  - HMAC `requestState` 进程本地（`mcp_server.py:58`）：服务端重启会作废进行中确认 → renderer 端需在收到 401/State 失效时引导用户重试（本变更不实现，记入 design.md Open Questions）
+
+### 6.3 Feature 与 AI 执行订单（模块六）
+
+**骨干闭环顺序**：`F-桌面-001`（骨架） → `F-桌面-002`（加载 archive/web + CSP + API_BASE 兜底） → `F-桌面-003`（下载接管） → `F-桌面-004`（IPC 桥）；`F-桌面-005` 打包占位本轮不实现。
+
+---
+
+#### F-桌面-001 — Electron 主进程骨架
+
+- **输入**：服务端 MCP 地址（`当前状态.md:108-110`，默认 `http://124.71.209.36:8765`，可通过环境变量 `VIDEODEDUP_API_BASE` 覆盖）；无既有 Electron 依赖
+- **核心逻辑**：
+  - `app.setPath('userData', path.join(app.getPath('appData'), 'video-dedup-desktop'))`：隔离用户缓存
+  - `app.requestSingleInstanceLock()` + `second-instance` 事件聚焦已有窗口
+  - `app.whenReady()` → `bootstrap()`：解析 API_BASE → 创建主窗口 → 挂下载接管 → 装菜单
+  - `window-all-closed`：非 darwin 平台 `app.quit()`；macOS 保持 dock 行为
+  - `activate`：无窗口时重建（macOS）
+  - 安全基线：contextIsolation / nodeIntegration / sandbox 全部开启
+- **预期产出**：
+  - `station/desktop/main.js`（约 100 行）
+  - `station/desktop/lib/window.js`：`createMainWindow({ apiBase, loadTarget, log })` + `pathToFileUrlWithQuery`
+  - `station/desktop/lib/menu.js`：File / Edit / View / Help 最小集
+  - `station/desktop/lib/logger.js`：logs/desktop.log 同步追加
+  - `station/desktop/lib/api-base.js`：解析 API_BASE
+  - `station/desktop/package.json`：electron ^31.7.7 devDep
+  - `station/desktop/.gitignore`、`station/desktop/README.md`
+
+---
+
+#### F-桌面-002 — 渲染 archive/web/
+
+- **输入**：F-桌面-001 已创建 BrowserWindow；既有 `archive/web/{index.html, app.js, style.css}` 完整 UI
+- **核心逻辑**：
+  - main.js 计算 `loadTarget = path.join(__dirname, '..', '..', 'archive', 'web', 'index.html')` 转 `file://` URL 追加 `?apiBase=<值>`
+  - `archive/web/app.js:17-23` IIFE 顶部插入 query 兜底：`URLSearchParams(window.location.search).get('apiBase')` 经白名单校验后覆写派生结果
+  - `archive/web/index.html` 在 viewport meta 后插入 CSP meta：`default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://124.71.209.36:8765 https://yuanbao.tencent.com;` —— inline `onclick/onmouseover` 仅在元宝 QR modal（`app.js:1904-1907`）与改写预览 modal（`1992-1993`）出现，refactor 收益小于风险
+  - 加载顺序：ready-to-show 后再 show，避免白闪
+- **预期产出**：
+  - `archive/web/index.html` 第 5 行后插入 CSP meta（1 处）
+  - `archive/web/app.js` IIFE 顶部 +6 行
+  - `station/desktop/lib/window.js`：`pathToFileUrlWithQuery` 工具
+
+---
+
+#### F-桌面-003 — 原生下载接管
+
+- **输入**：F-桌面-001 BrowserWindow；服务端 `/local/download/<fname>`（`mcp_server.py:680-722`，200 + Content-Disposition + 64KB 流式 + 路径越界防护）
+- **核心逻辑**：
+  - 主进程：`session.defaultSession.on('will-download', (event, item, webContents) => {...})`
+  - `event.preventDefault()` 后调 `dialog.showSaveDialog(win, { defaultPath: downloadsDir/filename, filters: 推断类型 })`
+  - 取消 → `item.cancel()`；接受 → `item.setSavePath(filePath)`
+  - `item.on('updated', ...)`：`received/total` 百分比调 `win.webContents.send('download-progress', { phase:'progress', percent, ... })`
+  - `item.on('done', (_, state) => ...)`：state ∈ {completed, cancelled, interrupted} 推 `phase:'done'`
+  - **不解决带宽瓶颈**，只把"无进度 UI"变成"原生进度条"
+- **预期产出**：
+  - `station/desktop/lib/download.js`：`attachDownloadHandlers({ session, getMainWindow, log })`
+
+---
+
+#### F-桌面-004 — desktop.* IPC 桥
+
+- **输入**：F-桌面-003 推送的下载进度；如需"在系统浏览器打开外链"
+- **核心逻辑**：
+  - `desktop.onDownloadProgress(cb) => unsubscribe`：`ipcRenderer.on('download-progress', handler)`，返回 `removeListener` 包装
+  - `desktop.openExternal(url) => Promise<{ok, reason?}>`：走 `ipcRenderer.invoke('shell:open-external', url)`，主进程 `ipcMain.handle` 校验协议白名单（`^https?://`）后调 `shell.openExternal`
+  - preload 不暴露 `ipcRenderer` / `require` / `process` —— 完全沙箱
+- **预期产出**：
+  - `station/desktop/preload.js`（约 30 行）
+  - `station/desktop/lib/download.js`：注册 `ipcMain.handle('shell:open-external', ...)`
+
+---
+
+#### F-桌面-005 — **[占位]** electron-builder 打包（nsis / Windows）
+
+- **输入**：无
+- **核心逻辑**：占位；何时启用待 OSS 迁移决策落地后再评估（OSS 影响下载体验，是桌面端最大卖点之一）
+- **预期产出**：无（仅在 DD 留位）
+
+---
+
 ## 附录 A：本期交付物清单（物理路径）
 
 > 落地状态截至 2026-08-04（112 passed in 27.99s）。✅ = 已落地；浏览器步骤 5–7 已有实现侧报告，独立 QA 签字仍待补，不计入独立验收通过。

@@ -25,6 +25,9 @@ import threading
 import subprocess
 import configparser
 from pathlib import Path
+import logging
+
+logger = logging.getLogger("vu.pipeline")
 
 # 感知度量域（模块一）。同目录模块，保证 pytest / server 两种入口都能导入。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -45,9 +48,12 @@ FFMPEG = Path(os.environ.get("VU_FFMPEG",  _VENDOR / "ffmpeg" / "ffmpeg.exe"))
 FFPROBE = Path(os.environ.get("VU_FFPROBE", _VENDOR / "ffmpeg" / "ffprobe.exe"))
 WATERMARKS_DIR = Path(os.environ.get("VU_WATERMARKS", _VENDOR / "watermarks"))
 
-VIDEO_DIR = Path(os.environ.get("VU_ASSETS", Path(__import__("tempfile").gettempdir()) / "vu-uploads"))   # 上传素材临时目录（系统自动回收）
-# 输出目录：提到工程根 video-uniqueness/output（相对锚定 = PROJECT_DIR/output）
-OUTPUT_DIR = Path(os.environ.get("VU_OUTPUT", PROJECT_DIR / "output"))
+VIDEO_DIR = Path(os.environ.get("VU_ASSETS", PROJECT_DIR / "input"))   # 用户素材只读目录
+# 输出目录：优先 VU_OUTPUT 环境变量（含 mcp_server 启动时从 config.json 注入）；
+# 否则落到用户 Videos 目录下的固定位置 —— 打包成 exe 后 PROJECT_DIR/output 会
+# 权限失败或随临时解压目录丢失，故默认改用用户可写目录。
+_OUTPUT_DEFAULT = Path.home() / "Videos" / "视频去重产物"
+OUTPUT_DIR = Path(os.environ.get("VU_OUTPUT", _OUTPUT_DEFAULT))
 
 
 class PipelineError(Exception):
@@ -189,9 +195,10 @@ def md5_of(path):
     return h.hexdigest()
 
 
-def _reserve_output_path(out_name):
+def _reserve_output_path(out_name, base_dir=None):
     """在 output/ 内原子预留不冲突的文件名，已有文件自动追加序号。"""
-    requested = _resolve_safe(out_name, OUTPUT_DIR, must_exist=False)
+    _base = base_dir or OUTPUT_DIR
+    requested = _resolve_safe(out_name, _base, must_exist=False)
     for index in range(1, 10001):
         candidate = requested if index == 1 else requested.with_name(
             f"{requested.stem}_{index}{requested.suffix}")
@@ -265,6 +272,21 @@ def list_assets():
     return items
 
 
+def list_outputs():
+    """列出 output/ 目录下已生成的去重产物（用于恢复丢失的下载链接）。"""
+    if not OUTPUT_DIR.exists():
+        return []
+    items = []
+    for p in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.is_file() and p.name != ".gitkeep":
+            items.append({
+                "name": p.name,
+                "size_mb": round(p.stat().st_size / 1024 / 1024, 2),
+                "mtime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime)),
+            })
+    return items
+
+
 def probe_video(path, base_dir=None):
     """用 ffprobe 读取视频关键信息。🔒 F3.3：path 必须落在 base_dir 白名单内。
 
@@ -311,6 +333,29 @@ def probe_video(path, base_dir=None):
         "audio_codec": astream.get("codec_name", ""),
         "md5": md5_of(p),
     }
+
+
+def _probe_seconds(path):
+    """轻量取视频时长（秒）。失败返回 0.0。用于 TTS 混音时把音频补齐到视频时长。"""
+    try:
+        p = _resolve_safe(path, OUTPUT_DIR, must_exist=True)
+    except Exception:
+        try:
+            p = _resolve_safe(path, VIDEO_DIR, must_exist=True)
+        except Exception:
+            return 0.0
+    if not FFPROBE.exists():
+        return 0.0
+    try:
+        cmd = [str(FFPROBE), "-v", "quiet", "-print_format", "json",
+               "-show_format", str(p)]
+        rc, out, _ = _run(cmd, timeout=60)
+        if rc != 0:
+            return 0.0
+        data = json.loads(out)
+        return float(data.get("format", {}).get("duration", 0) or 0)
+    except Exception:
+        return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +619,9 @@ def _clamp_speed_for_floor(factor, base_dur):
 
 
 def dedup_video(src, params=None, out_name=None, seed=None,
-                level=None, dimensions=None, flip_mode=None, trim_phase=None):
+                level=None, dimensions=None, flip_mode=None, trim_phase=None,
+                tts_text=None, tts_voice=None, tts_speed=None,
+                skip_phash=False, subdir="去重"):
     """
     对单个视频执行去重（本期增量：强度档 + 构图/时序维度 + pHash 自检升级）。
 
@@ -588,8 +635,11 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     trim_phase: ∈[0,1]，裂变专用。把去头尾配比按相位铺开而非 iid 随机取，
         使各变体在源时间轴上的错位量最大化（见 _calc_trim phase 参数说明）。
         None = 单片模式，保持原随机行为。
+    subdir: 产物子目录名（默认"去重"，输出到 OUTPUT_DIR/subdir/）；空字符串表示直接输出到 OUTPUT_DIR。
     返回处理报告字典（checks 含 phash 与 all_passed）。
     """
+    # 产物目录：默认按子目录区分；服务端传空字符串时，表示已把 OUTPUT_DIR 切到具体任务目录。
+    _task_dir = OUTPUT_DIR if not subdir else (OUTPUT_DIR / subdir)
     # 路径安全：src 必须在 assets 白名单内
     src_path = _resolve_safe(src, VIDEO_DIR, must_exist=True)
 
@@ -603,12 +653,12 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
     src_info = probe_video(str(src_path))
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _task_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(src_info["name"]).stem
     if not out_name:
         out_name = f"{stem}_去重.mp4"
     # 先做白名单校验，实际文件预留延后到 FFmpeg 执行前，避免前置计算失败留空文件。
-    _resolve_safe(out_name, OUTPUT_DIR, must_exist=False)
+    _resolve_safe(out_name, _task_dir, must_exist=False)
 
     vf, applied = build_filter(resolved, src_info)
     fps = _pick_fps(resolved)
@@ -664,7 +714,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         applied["bitrate_kbps"] = kbps
 
     # 原子预留输出名：已有或正被另一任务预留时自动递增，避免覆盖/文件占用失败。
-    out_path = _reserve_output_path(out_name)
+    out_path = _reserve_output_path(out_name, base_dir=_task_dir)
 
     # 组装 ffmpeg 命令（列表式传参，禁 shell 拼接）
     # ⚠️ -ss/-t 均放在 -i 【之前】作为输入侧选项，使去头尾在【源时间轴】上生效。
@@ -680,7 +730,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         cmd += ["-t", str(out_dur)]       # 去尾：源时间轴上读取的时长
     cmd += ["-i", src_info["path"]]
     cmd += ["-vf", vf, "-r", str(fps), "-b:v", vbitrate,
-            "-c:v", "libx264", "-preset", "medium",
+            "-c:v", "libx264", "-preset", "veryfast",
             "-c:a", "aac", "-b:a", "128k"]
     if af_nodes:
         cmd += ["-af", ",".join(af_nodes)]
@@ -696,8 +746,66 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         _cleanup_failed_output(out_path)
         raise PipelineError(_ffmpeg_error_message(err, out_path))
 
+    # --- TTS 配音（如果提供了文案且 MiMo 可用）---
+    tts_status = None
+    if tts_text and tts_text.strip():
+        # 回填供前端展示（设计：截断 100 字），无论成败都记录，避免"静默跳过"
+        applied["tts_text"] = tts_text.strip()[:100]
+        try:
+            # sys.path 已被模块顶部 insert 到 server/ 目录，直接 import 即可
+            import tts_client as T
+            if T.is_available():
+                voice = tts_voice or "冰糖"
+                speed = float(tts_speed or 1.0)
+                wav_path = T.tts_to_temp(tts_text.strip(), voice=voice, speed=speed)
+                try:
+                    # 产物时长 = 配音时长（基于文案长度）：混音用 -shortest 取
+                    # min(视频, 音频) = 配音时长，把视频截到配音长度。
+                    # 文案长度已按视频时长限制（mcp_server.max_chars = 视频时长×语速×0.95），
+                    # 故配音≈视频、旁白完整、尾部画面被裁，无静音尾。
+                    _tts_dur = _probe_seconds(str(wav_path))
+                    applied["tts_duration"] = round(_tts_dur, 3) if _tts_dur > 0 else None
+                    tmp_out = Path(str(out_path) + ".tts.mp4")
+                    mix_cmd = [
+                        str(FFMPEG), "-y",
+                        "-i", str(out_path),
+                        "-i", str(wav_path),
+                        "-c:v", "copy",
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-shortest",
+                        "-map", "0:v:0", "-map", "1:a:0",
+                        str(tmp_out),
+                    ]
+                    rc2, _, err2 = _run(mix_cmd, timeout=120)
+                    if rc2 == 0:
+                        tmp_out.replace(out_path)
+                        applied["tts_applied"] = True
+                        applied["tts_voice"] = voice
+                        applied["tts_speed"] = speed
+                        tts_status = "ok"
+                    else:
+                        applied["tts_applied"] = False
+                        applied["tts_warning"] = "混音失败（ffmpeg 合并 TTS 音轨失败）"
+                        tts_status = "混音失败"
+                        logger.warning("TTS 混音失败: %s", err2[:200])
+                finally:
+                    try: wav_path.unlink(missing_ok=True)
+                    except Exception: pass
+            else:
+                applied["tts_applied"] = False
+                reason = TTS.unavailable_reason() or "未知原因"
+                applied["tts_warning"] = f"TTS 不可用（{reason}）"
+                tts_status = f"TTS 不可用（{reason}）"
+        except Exception as e:
+            applied["tts_applied"] = False
+            applied["tts_warning"] = str(e)[:200]
+            tts_status = str(e)[:200]
+            logger.warning("TTS 配音跳过: %s", e)
+    elif tts_text:
+        tts_status = "文案为空，跳过"
+
     try:
-        out_info = probe_video(str(out_path), base_dir=OUTPUT_DIR)
+        out_info = probe_video(str(out_path), base_dir=_task_dir)
     except Exception:
         _cleanup_failed_output(out_path)
         raise
@@ -708,9 +816,26 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         expected = out_dur if out_dur is not None else src_info["duration"]
         if speed_factor:
             expected = expected / speed_factor
-        duration_close = abs(out_info["duration"] - expected) <= max(0.5, expected * 0.03)
+        dur_tol = max(0.5, expected * 0.03)
     else:
-        duration_close = abs(src_info["duration"] - out_info["duration"]) < 1.0
+        expected = src_info["duration"]
+        dur_tol = 1.0
+
+    # TTS 生效：产物时长 = 配音时长（基于文案长度），以配音时长作为期望值，
+    # 否则输出(配音时长) < 原视频时长 → duration_close 误判失败。
+    # 兜底：tts_duration 来自对临时 wav 的探测，而临时 wav 不在 OUTPUT/VIDEO 目录内，
+    # _probe_seconds 的白名单校验会失败返回 0.0 → tts_duration 被写成 None。此时成片
+    # 时长(=配音时长, -shortest) 就是权威值，用它兜底，既修正自检基准，又把 tts_duration
+    # 回填给前端显示「配音时长匹配」。
+    if applied.get("tts_applied"):
+        _tts_dur = applied.get("tts_duration") or out_info.get("duration")
+        if _tts_dur:
+            expected = _tts_dur
+            dur_tol = max(0.5, expected * 0.05)
+            if not applied.get("tts_duration"):
+                applied["tts_duration"] = round(_tts_dur, 3)
+
+    duration_close = abs(out_info["duration"] - expected) <= dur_tol
 
     md5_changed = src_info["md5"] != out_info["md5"]
     resolution_kept = (src_info["width"], src_info["height"]) == (out_info["width"], out_info["height"])
@@ -722,16 +847,21 @@ def dedup_video(src, params=None, out_name=None, seed=None,
     else:
         min_duration_ok = True
 
-    # pHash：变体 vs 原素材（度量“够不够不同”）。批量取消发生在自检期间时，
+    # pHash：变体 vs 原素材（度量"够不够不同"）。批量取消发生在自检期间时，
     # 当前变体尚未完成完整验收，清理它；此前已完成并入列表的变体不受影响。
-    try:
-        phash = M.compare_videos(str(src_path), str(out_path))
-    except PipelineCancelled:
-        _cleanup_failed_output(out_path)
-        raise
+    # skip_phash=True 可跳过此步（省 3-5 分钟 CPU 时间，仅剩 MD5+分辨率+时长校验）
+    if skip_phash:
+        phash = {"skipped": True, "passed": None, "method": "skipped"}
+    else:
+        try:
+            phash = M.compare_videos(str(src_path), str(out_path))
+        except PipelineCancelled:
+            _cleanup_failed_output(out_path)
+            raise
 
     all_passed = (md5_changed and resolution_kept and duration_close
-                  and min_duration_ok and bool(phash.get("passed")))
+                  and min_duration_ok
+                  and (bool(phash.get("passed")) if not skip_phash else True))
 
     return {
         "src": src_info,
@@ -739,6 +869,7 @@ def dedup_video(src, params=None, out_name=None, seed=None,
         "output_path": str(out_path),
         "applied_params": applied,
         "fps": fps,
+        "tts": tts_status,
         "checks": {
             "md5_changed": md5_changed,
             "resolution_kept": resolution_kept,
@@ -751,8 +882,11 @@ def dedup_video(src, params=None, out_name=None, seed=None,
 
 
 def batch_fission(src, count=5, params=None,
-                  level=None, dimensions=None, flip_mode=None, cancel_token=None):
+                  level=None, dimensions=None, flip_mode=None, cancel_token=None, subdir="裂变"):
     """裂变：同一素材生成 count 个不同参数的变体（本期增量：档位/维度透传 + 距离矩阵）。
+
+    ⚠️ 不支持 TTS 配音：裂变刻意保持无云依赖、可并行批量，不接 copy_rewriter/tts_client。
+       需要配音请走单条 dedup_video（含「改写→配音」链路）。
 
     每变体用不同 seed 保证互异；开启 flip 后自动轮换 h/v/90；产出后调
     metrics.distance_matrix 计算两两感知哈希距离，并入顶层 matrix。
@@ -793,7 +927,7 @@ def batch_fission(src, count=5, params=None,
                 r = dedup_video(src, params=params, out_name=out_name,
                                 seed=random.randint(1, 10 ** 9),
                                 level=level, dimensions=dimensions, flip_mode=variant_flip_mode,
-                                trim_phase=phase)
+                                trim_phase=phase, subdir=subdir)
                 results.append({
                     "index": i + 1,
                     "output_path": r["output_path"],

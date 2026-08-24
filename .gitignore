@@ -8,6 +8,8 @@ output/*
 !output/.gitkeep
 station/logs/*
 !station/logs/.gitkeep
+station/server/logs/
+station/server/.env
 .claude/settings.local.json
 **/.claude/settings.local.json
 __pycache__/
@@ -19,3 +21,18 @@ venv/
 station/_exp_*.py
 station/_diag_*.py
 station/_smoke_*.py
+
+# === 2026-08-12 补充 ===
+# 大型模型包（应放 OSS / HuggingFace）
+*.tar.gz
+*.zip
+
+# 根目录临时测试脚本（应归到 tests/ 或 archive/）
+/test_*.py
+
+# === 2026-08-12 补充：Electron 桌面壳 ===
+station/desktop/node_modules/
+station/desktop/dist/
+station/desktop/out/
+station/desktop/logs/
+station/desktop/build/runtime-config.bin
