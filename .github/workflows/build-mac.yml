@@ -109,20 +109,12 @@ jobs:
         working-directory: station/desktop
         run: npm ci
 
-      - name: 准备 macOS ffmpeg/ffprobe（ffmpeg-static 静态二进制，与架构匹配）
+      - name: 准备 macOS ffmpeg/ffprobe（静态二进制；逻辑见 scripts/prepare-ffmpeg.js）
+        # 曾用 node -e "process.stdout.write(require('ffmpeg-static'))" 直取路径，
+        # 但 ffmpeg-static 5.x 在 Node 22 下 require() 返回 { default: ... } 对象，
+        # process.stdout.write(obj) 会抛 ERR_INVALID_ARG_TYPE —— 已固化为脚本容错解析。
         working-directory: station/desktop
-        run: |
-          mkdir -p ../vendor/ffmpeg
-          FFMPEG_SRC="$(node -e "process.stdout.write(require('ffmpeg-static') || '')")"
-          FFPROBE_SRC="$(node -e "process.stdout.write(require('ffprobe-static') || '')")"
-          if [ -z "$FFMPEG_SRC" ] || [ -z "$FFPROBE_SRC" ]; then
-            echo "::error::ffmpeg-static/ffprobe-static 未提供当前架构二进制（ARCH=$ARCH）"
-            exit 1
-          fi
-          cp "$FFMPEG_SRC" ../vendor/ffmpeg/ffmpeg
-          cp "$FFPROBE_SRC" ../vendor/ffmpeg/ffprobe
-          chmod +x ../vendor/ffmpeg/ffmpeg ../vendor/ffmpeg/ffprobe
-          ../vendor/ffmpeg/ffmpeg -version | head -1
+        run: node scripts/prepare-ffmpeg.js
 
       - name: electron-builder 打包 macOS（${{ github.event.inputs.arch || 'arm64' }}）
         working-directory: station/desktop
