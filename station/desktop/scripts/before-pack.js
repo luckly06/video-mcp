@@ -30,12 +30,31 @@ function prepareRuntimeConfig() {
   console.log('[before-pack] runtime config prepared (MIMO_API_KEY hidden)');
 }
 
-module.exports = async function beforePack() {
+// 离线 ASR 模型（paraformer-zh-small，约 78 MiB）随桌面发行包携带。
+// Windows / macOS 发布运行时都已内置 sherpa_onnx，保留模型才能开箱即用离线转写。
+const ASR_RESOURCE_TO = 'station/vendor/asr_models';
+
+function platformOf(context) {
+  const fromContext = context && context.electronPlatformName;
+  if (fromContext) return String(fromContext);
+  return process.platform;
+}
+
+function pruneAsrModels(context) {
+  const platform = platformOf(context);
+  console.log(`[before-pack] keep ASR models (${platform})`);
+  return false;
+}
+
+module.exports = async function beforePack(context) {
   prepareRuntimeConfig();
+  pruneAsrModels(context);
 };
 
 module.exports.readEnv = readEnv;
 module.exports.prepareRuntimeConfig = prepareRuntimeConfig;
+module.exports.pruneAsrModels = pruneAsrModels;
+module.exports.ASR_RESOURCE_TO = ASR_RESOURCE_TO;
 
 if (require.main === module) {
   prepareRuntimeConfig();

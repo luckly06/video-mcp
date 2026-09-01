@@ -7,7 +7,10 @@ const path = require('node:path');
 const { resolveResource } = require('./paths');
 
 function bundledPythonPath() {
-  return resolveResource('py', 'python.exe');
+  // Windows 发行包：py/python.exe；macOS 发行包：py/bin/python3（prepare-python-runtime.js 按平台裁剪）
+  return process.platform === 'win32'
+    ? resolveResource('py', 'python.exe')
+    : resolveResource('py', 'bin', 'python3');
 }
 
 function resolvePython({ env = process.env, platform = process.platform, homedir = os.homedir() } = {}) {

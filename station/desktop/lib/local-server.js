@@ -14,7 +14,8 @@ const { spawn } = require('node:child_process');
 const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
-const { resolveServerScriptPath } = require('./paths');
+const os = require('node:os');
+const { resolveResource, resolveServerScriptPath } = require('./paths');
 const { loadRuntimeConfig } = require('./runtime-config');
 const { resolvePython } = require('./python-runtime');
 
@@ -47,14 +48,25 @@ function injectRuntimeConfig(env, log) {
 /**
  * 探测 ASR 模型目录（sherpa-onnx）：
  *   1) 环境变量 VU_ASR_MODELS（用户显式指定）
- *   2) 常见下载目录（F/E/D/C:\Download\A-models\sherpa-onnx）
+ *   2) Windows：常见下载目录（F/E/D/C:\Download\A-models\sherpa-onnx）
+ *   3) macOS：~/Downloads、~/Download、/opt 下的 A-models/sherpa-onnx
  * 找不到返回 null —— 不设环境变量，后端 ASR 自动降级为空文案（去重/探测不受影响）。
  */
 function resolveAsrModels(env) {
   if (env.VU_ASR_MODELS && fs.existsSync(env.VU_ASR_MODELS)) return env.VU_ASR_MODELS;
-  const drives = process.platform === 'win32' ? ['F:', 'E:', 'D:', 'C:'] : [];
-  for (const d of drives) {
-    const p = path.join(d, 'Download', 'A-models', 'sherpa-onnx');
+  const candidates = [];
+  candidates.push(resolveResource('station', 'vendor', 'asr_models'));
+  if (process.platform === 'win32') {
+    for (const d of ['F:', 'E:', 'D:', 'C:']) {
+      candidates.push(path.join(d, 'Download', 'A-models', 'sherpa-onnx'));
+    }
+  } else {
+    const home = os.homedir();
+    candidates.push(path.join(home, 'Downloads', 'A-models', 'sherpa-onnx'));
+    candidates.push(path.join(home, 'Download', 'A-models', 'sherpa-onnx'));
+    candidates.push('/opt/sherpa-onnx');
+  }
+  for (const p of candidates) {
     if (fs.existsSync(p)) return p;
   }
   return null;

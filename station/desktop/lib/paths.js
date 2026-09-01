@@ -29,9 +29,13 @@ function resolveExtensionFilePath(filename) {
 }
 
 function resolveAppIconPath() {
-  return app && app.isPackaged
-    ? path.join(process.resourcesPath, 'build', 'icon.ico')
-    : path.join(__dirname, '..', 'build', 'icon.ico');
+  if (app && app.isPackaged) {
+    // macOS 上 .ico 无法用作窗口图标，回退 build/icon.png（electron-builder 也会用它生成 .icns）
+    return process.platform === 'darwin'
+      ? path.join(process.resourcesPath, 'build', 'icon.png')
+      : path.join(process.resourcesPath, 'build', 'icon.ico');
+  }
+  return path.join(__dirname, '..', 'build', 'icon.ico');
 }
 
 function resolveDesktopAssetsDir() {

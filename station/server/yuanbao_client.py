@@ -45,6 +45,7 @@ DEBUG_PROFILE = Path(os.environ.get(
 EDGE_CANDIDATES = (
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
 )
 YUANBAO_URL = "https://yuanbao.tencent.com/"
 
@@ -250,7 +251,7 @@ def ensure_edge_debug_port():
 
     edge = _edge_exe()
     if not edge:
-        return fail("未找到 Edge 可执行文件（已查找 Program Files / Program Files (x86)）", False)
+        return fail("未找到 Edge 可执行文件（Windows: Program Files；macOS: /Applications/Microsoft Edge.app）", False)
     _dlog(f"edge={edge}")
 
     _sweep_stale_profiles()
@@ -678,6 +679,83 @@ async def start_fresh_chat(page):
     return False
 
 
+async def first_visible(page, selectors):
+    for sel in selectors:
+        try:
+            loc = page.locator(sel)
+            cnt = await loc.count()
+            for i in range(min(cnt, 8)):
+                item = loc.nth(i)
+                try:
+                    if await item.is_visible():
+                        return item, sel
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return None, ""
+
+
+async def input_attachment_count(page):
+    """只统计输入区/上传队列里的图片附件，避免数到页面头像、历史消息等图片。"""
+    selectors = [
+        '.app-search-bar [aria-label^="预览图片"]',
+        '.app-search-bar img[src]',
+        '.app-search-bar [class*="FileList_inputFileListItemImage"]',
+        '.app-search-bar [class*="inputFileListItemImage"]',
+        '[data-input-main-content="true"] [aria-label^="预览图片"]',
+        '[data-input-main-content="true"] img[src]',
+    ]
+    total = 0
+    for sel in selectors:
+        try:
+            loc = page.locator(sel)
+            cnt = await loc.count()
+            for i in range(cnt):
+                try:
+                    if await loc.nth(i).is_visible():
+                        total += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return total
+
+
+async def open_image_upload_entry(page):
+    upload_selectors = [
+        '[role="menuitem"]:has-text("上传图片")',
+        'button:has-text("上传图片")',
+        '[role="menuitem"]:has-text("图片")',
+        'button:has-text("图片")',
+    ]
+    item, sel = await first_visible(page, upload_selectors)
+    if item is not None:
+        log("找到图片上传菜单项 selector=" + sel)
+        return item
+
+    trigger_selectors = [
+        '[data-new-input-control="add-tools-trigger"]',
+        'button[aria-label="添加"]',
+        '[aria-label="添加"]',
+        '[class*="UploadFileSelector_iconContainer"]',
+    ]
+    trigger, trigger_sel = await first_visible(page, trigger_selectors)
+    if trigger is None:
+        log("未找到添加/上传触发按钮")
+        return None
+    await trigger.click()
+    log("已点击添加按钮 selector=" + trigger_sel)
+    for _ in range(15):
+        await asyncio.sleep(0.2)
+        item, sel = await first_visible(page, upload_selectors)
+        if item is not None:
+            log("找到图片上传菜单项 selector=" + sel)
+            return item
+    log("点击添加后仍未找到图片上传菜单项")
+    return None
+
+
 async def main():
     profile = Path(r"{profile}")
     profile.mkdir(parents=True, exist_ok=True)
@@ -702,7 +780,7 @@ async def main():
             s = socket.create_connection(("127.0.0.1", CDP_PORT), timeout=2)
             s.close()
         except Exception:
-            print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "调试端口 " + str(CDP_PORT) + " 已失效（调试 Edge 可能被关闭），请重试改写。"}}, ensure_ascii=False))
+            print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "调试端口 " + str(CDP_PORT) + " 已失效（调试 Edge 可能被关闭），请重试改写。"}}, ensure_ascii=True))
             return
         p = await async_playwright().start()
         browser_ctx = await p.chromium.connect_over_cdp(CDP_URL)
@@ -725,7 +803,7 @@ async def main():
     log("当前 URL: " + (page.url or ""))
 
     if any(k in page.url.lower() for k in ("/login","/sign_in","passport")):
-        print(json.dumps({{"rewritten": None, "vision_desc": "", "error":"元宝未登录（页面跳到了登录页）"}}, ensure_ascii=False))
+        print(json.dumps({{"rewritten": None, "vision_desc": "", "error":"元宝未登录（页面跳到了登录页）"}}, ensure_ascii=True))
         return
 
     # 元宝未登录时是弹窗/iframe，不会改 URL —— 必须单独检测，否则后面会卡在找输入框
@@ -736,7 +814,7 @@ async def main():
         need_login = False
     if need_login:
         log("检测到登录弹窗 → 复制的登录态未生效")
-        print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝显示未登录：请在弹出的调试 Edge 窗口里扫码登录一次，之后会一直复用该实例。"}}, ensure_ascii=False))
+        print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝显示未登录：请在弹出的调试 Edge 窗口里扫码登录一次，之后会一直复用该实例。"}}, ensure_ascii=True))
         return
 
     await start_fresh_chat(page)
@@ -747,68 +825,71 @@ async def main():
     #           它由浏览器内部受信派发 input/change 事件，React 能正确响应，且【不弹系统文件对话框】
     #           （set_input_files 与 expect_file_chooser 无关，不会触发原生选择框）。
     frames = {frames}
+    image_upload_expected = bool(frames)
+    image_upload_ok = False
     if frames:
         try:
             import base64 as _b64
             _imgs, _temp = [], []
             for i, b in enumerate(frames[:3]):
                 _src = b
-                if _src.startswith('data:'):
+                if isinstance(b, str) and os.path.exists(b):
+                    _imgs.append(b)   # 桌面端传入的是真实帧图路径，必须优先使用原文件
+                    continue
+                if isinstance(_src, str) and _src.startswith('data:'):
                     _src = _src.split(',', 1)[1]
                 try:
-                    _data = _b64.b64decode(_src)
+                    _data = _b64.b64decode(_src, validate=True)
                     _p = r"{station_dir}" + ("/_yb_frame_%d.png" % i)
                     with open(_p, "wb") as _f:
                         _f.write(_data)
                     _imgs.append(_p)
                     _temp.append(_p)
                 except Exception:
-                    if os.path.exists(b):
-                        _imgs.append(b)   # 真实帧路径，不加入 _temp（不删除源文件）
+                    pass
             if _imgs:
-                # 关键：必须走「+ 上传图标 → 点『图片』菜单项」这条 UI 路径，
+                before_attach_count = await input_attachment_count(page)
+                log("输入区图片附件基线=%d" % before_attach_count)
+                # 关键：必须走「+ 上传图标 → 点『上传图片/图片』菜单项」这条 UI 路径，
                 # 才能挂载『真正负责随消息发送的图片 input』。直接对常驻
                 # input[type=file].first 灌文件，元宝会把它当成别的入口，
                 # 预览虽然出现，但发出的消息里不带图（此前一直踩这个坑）。
                 # 这里用 Playwright 的 file_chooser 接管（受信注入，不弹系统对话框）。
-                ub = page.locator('[class*="UploadFileSelector_iconContainer"]').first
-                if await ub.count() > 0:
-                    await ub.click()
-                    await asyncio.sleep(0.6)
-                pic = page.locator('xpath=//*[normalize-space(text())="图片"]').first
-                if await pic.count() > 0:
+                pic = await open_image_upload_entry(page)
+                if pic is not None:
                     try:
                         async with page.expect_file_chooser(timeout=5000) as _ci:
                             await pic.click()   # 触发该图片 input 的原生选择框
                         _chooser = await _ci.value
                         await _chooser.set_files(_imgs)   # 受信注入，等同 set_input_files
-                        log("已 set_files %d 张图片（经『图片』菜单，图片 input）" % len(_imgs))
+                        log("已 set_files %d 张图片（经图片上传菜单，图片 input）" % len(_imgs))
                     except Exception as _ce:
-                        # 退化：『图片』没触发选择框时，直接对图片 input 注入
-                        log("『图片』未触发选择框，退化直注: " + str(_ce)[:120])
-                        fi = page.locator('input[type="file"]').first
+                        # 退化：菜单项没触发选择框时，直接对图片 input 注入
+                        log("图片上传菜单未触发选择框，退化直注: " + str(_ce)[:120])
+                        fi = page.locator('input[type="file"][accept*="image"], input[type="file"]').first
                         if await fi.count() > 0:
                             await fi.set_input_files(_imgs)
                             log("退化：直接 set_input_files %d 张" % len(_imgs))
                         else:
                             log("未找到图片 input，图片未上传")
                 else:
-                    # 退化：找不到『图片』菜单项，直接对常驻 input 注入
-                    fi = page.locator('input[type="file"]').first
+                    # 退化：找不到图片上传菜单项，直接对常驻 input 注入；后续必须通过输入区附件校验才允许发送。
+                    fi = page.locator('input[type="file"][accept*="image"], input[type="file"]').first
                     if await fi.count() > 0:
                         await fi.set_input_files(_imgs)
-                        log("退化：直接 set_input_files %d 张（无『图片』入口）" % len(_imgs))
+                        log("退化：直接 set_input_files %d 张（无图片上传菜单）" % len(_imgs))
                     else:
                         log("未找到图片入口，图片未上传")
                 # 等图片缩略图真正出现在输入框，确保上传完成再发文案
                 _ok = False
                 for _ in range(30):
                     await asyncio.sleep(0.5)
-                    _n = await page.locator('div[contenteditable="true"] img, [class*="upload"] img, [class*="image"] img').count()
-                    if _n > 0:
+                    _n = await input_attachment_count(page)
+                    if _n > before_attach_count:
                         _ok = True
                         break
-                log("图片缩略图出现: " + str(_ok))
+                image_upload_ok = _ok
+                log("输入区图片缩略图出现: %s（%d -> %d）" % (str(_ok), before_attach_count, _n if '_n' in locals() else before_attach_count))
                 await asyncio.sleep(1)
                 for _p in _temp:
                     try: os.remove(_p)
@@ -817,6 +898,12 @@ async def main():
                 log("无可用图片（帧路径不存在或解码失败）")
         except Exception as eu:
             log("图片上传异常: " + str(eu)[:200])
+
+    if image_upload_expected and not image_upload_ok:
+        try: await page.screenshot(path=r"{station_dir}" + "/logs/yb_image_upload_failed.png")
+        except Exception: pass
+        print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "图片上传失败：为避免只给元宝发送纯文案，本次已中止。截图见 station/server/logs/yb_image_upload_failed.png"}}, ensure_ascii=True))
+        return
 
     # === 改写 ===
     raw = {raw_text}
@@ -842,14 +929,30 @@ async def main():
         try: await page.screenshot(path=r"{station_dir}" + "/logs/yb_no_editor.png")
         except Exception: pass
         log("找不到可见的输入框")
-        print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝页面找不到输入框（截图见 station/server/logs/yb_no_editor.png），可能未登录或页面结构变化。"}}, ensure_ascii=False))
+        print(json.dumps({{"rewritten": None, "vision_desc": "", "error": "元宝页面找不到输入框（截图见 station/server/logs/yb_no_editor.png），可能未登录或页面结构变化。"}}, ensure_ascii=True))
         return
 
-    # 填充：contenteditable 用 innerText，textarea 用 value；都需 dispatch input 事件
-    # （Playwright 的 fill() 仅支持 input/textarea，对 contenteditable 会失效——这是此前发不出去的根因）
-    await editor.evaluate(
-        "(el, text) => {{ if (el.getAttribute('contenteditable') === 'true') {{ el.innerText = text; }} else {{ el.value = text; }} el.dispatchEvent(new Event('input', {{bubbles:true}})); }}",
-        pmt)
+    # 填充：有图片时绝不能 innerText 覆盖 contenteditable，否则会把已上传的图片节点清掉。
+    # contenteditable 走真实键盘输入追加文本；textarea 才直接写 value。
+    try:
+        is_ce = await editor.evaluate("el => el.getAttribute('contenteditable') === 'true'")
+    except Exception:
+        is_ce = False
+    if is_ce:
+        try:
+            await editor.click()
+            try: await page.keyboard.press("Control+End")
+            except Exception: pass
+            await page.keyboard.insert_text(pmt)
+            await editor.evaluate("el => el.dispatchEvent(new Event('input', {{bubbles:true}}))")
+        except Exception:
+            await editor.evaluate(
+                "(el, text) => {{ el.append(document.createTextNode(text)); el.dispatchEvent(new Event('input', {{bubbles:true}})); }}",
+                pmt)
+    else:
+        await editor.evaluate(
+            "(el, text) => {{ el.value = text; el.dispatchEvent(new Event('input', {{bubbles:true}})); }}",
+            pmt)
     await asyncio.sleep(0.4)
     log("已填入提示词 %d 字" % len(pmt))
 
@@ -891,7 +994,7 @@ async def main():
     # Windows：保留调试 Edge 实例，供下次改写直接复用（不关窗口）
     await p.stop()
     err = "" if rw else "元宝在 %ss 内没有返回可用结果（可到调试 Edge 窗口看当时状态）" % {timeout}
-    print(json.dumps({{"rewritten": rw or None, "vision_desc": "", "error": err}}, ensure_ascii=False))
+    print(json.dumps({{"rewritten": rw or None, "vision_desc": "", "error": err}}, ensure_ascii=True))
 
 
 asyncio.run(main())
@@ -932,9 +1035,13 @@ def vision_and_rewrite(frames, raw_text, rewrite_template=None,
     fd, tmp = tempfile.mkstemp(suffix=".py", prefix="vu_yb_")
     os.close(fd)
     Path(tmp).write_text(script, encoding="utf-8")
+    child_env = os.environ.copy()
+    child_env["PYTHONIOENCODING"] = "utf-8"
+    child_env["PYTHONUTF8"] = "1"
     try:
         r = subprocess.run([_venv_python(), tmp], capture_output=True,
-                           text=True, timeout=timeout + 60, cwd=str(_HERE.parent))
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout + 60, cwd=str(_HERE.parent), env=child_env)
         if r.stderr.strip():
             _dlog("子进程 stderr:\n" + r.stderr.strip()[-3000:])
         if r.stdout.strip():

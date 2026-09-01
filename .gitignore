@@ -1,6 +1,13 @@
 .workbuddy/
 CRVideoMate/
-station/vendor/
+station/vendor/*
+# watermarks 水印配置（.ini 文本）需入库：CI 打包时没有本机 vendor，靠仓库内文件
+!station/vendor/watermarks/
+!station/vendor/watermarks/*
+# 离线 ASR 模型（paraformer-zh-small，约 78 MiB）随包分发：CI 无本机模型目录，靠仓库内文件
+# 单文件 model.int8.onnx 约 81.8MB，低于 GitHub 100MB 硬限制，可直接入库
+!station/vendor/asr_models/
+!station/vendor/asr_models/**
 station/assets/**/*.mp4
 input/*
 !input/.gitkeep

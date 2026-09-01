@@ -1,0 +1,149 @@
+# ============================================================
+# 在 GitHub Actions 的 macOS runner 上打包「视频去重工位」macOS 版
+#
+# 触发方式：
+#   1) 手动：仓库 Actions 页 → Build macOS App → Run workflow（选架构）
+#   2) 打 tag（v*）后自动构建 arm64 并创建 GitHub Release
+#
+# 前置要求（首次运行前必须配置）：
+#   仓库 Settings → Secrets and variables → Actions → New repository secret
+#     Name:  MIMO_API_KEY
+#     Value: 本机 station/server/.env 中 MIMO_API_KEY 的值
+#   缺失该 Secret 时工作流会直接失败并提示。
+#
+# 产物说明：
+#   - arm64：Apple Silicon（M1/M2/M3…）Mac
+#   - x64  ：Intel Mac
+#   - 未签名（无 Apple 开发者证书）：用户首次打开需「右键 → 打开」，
+#     或执行：xattr -cr "/Applications/视频去重工位.app"
+#   - 包内含 macOS 版 Python 运行时 + ffmpeg/ffprobe（静态二进制）
+#   - ASR 模型与元宝改写（Edge）依赖用户本机环境，详见交付说明
+# ============================================================
+name: Build macOS App
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        type: choice
+        description: 目标架构（Apple Silicon 选 arm64，Intel Mac 选 x64）
+        options:
+          - arm64
+          - x64
+        default: arm64
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-mac:
+    name: macOS ${{ github.event.inputs.arch || 'arm64' }}
+    # 手动触发：按所选架构挑 runner；打 tag 触发：固定 arm64（macos-14 = Apple Silicon）
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.arch == 'x64') && 'macos-15-intel' || 'macos-14' }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # 无签名证书，禁止 electron-builder 尝试签名
+      ARCH: ${{ github.event.inputs.arch || 'arm64' }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: station/desktop/package-lock.json
+
+      - name: 安装 Python 3.13（构建 mac 版 Python 运行时用）
+        id: python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 校验并写入 MIMO_API_KEY（打包时注入 runtime-config.bin）
+        run: |
+          if [ -z "${{ secrets.MIMO_API_KEY }}" ]; then
+            echo "::error::未配置 MIMO_API_KEY。请到 仓库 Settings → Secrets and variables → Actions 新增，值为本机 station/server/.env 中的 MIMO_API_KEY"
+            exit 1
+          fi
+          mkdir -p station/server
+          printf 'MIMO_API_KEY=%s\n' "${{ secrets.MIMO_API_KEY }}" > station/server/.env
+          echo "已写入 station/server/.env（$(wc -c < station/server/.env) 字节）"
+
+      - name: 安装 Playwright + 离线 ASR 推理引擎
+        # 必须在「裁剪 Python 运行时」之前装：裁剪脚本只复制这里装进来的包。
+        # sherpa-onnx 会带进 onnxruntime / numpy；soundfile 供 asr_client 读 wav。
+        # 注意：prepare-python-runtime.js 末尾已硬性 import sherpa_onnx/numpy/soundfile，
+        #      这里不装会直接导致构建失败。
+        run: |
+          python -m pip install playwright==1.61.0 sherpa-onnx soundfile
+          python -c "import sherpa_onnx, onnxruntime, soundfile, numpy; print('asr deps ok')"
+
+      - name: 裁剪 macOS Python 运行时（vendor/python：bin/python3 + lib）
+        run: |
+          cd station/desktop
+          VU_BUILD_PYTHON="${{ steps.python.outputs.python-path }}" node scripts/prepare-python-runtime.js
+          ls -la ../vendor/python/bin
+          ../vendor/python/bin/python3 -c "import sys; print('runtime python:', sys.version.split()[0])"
+
+      - name: ASR 实跑冒烟（裁剪后的运行时 + 随包模型 + 真实识别）
+        # 比单纯 import 更严：能同时挡住 dylib 加载失败、模型文件损坏、路径错配三类问题。
+        working-directory: station/desktop
+        run: |
+          ../vendor/python/bin/python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, os.path.abspath('../server'))
+          os.environ['VU_ASR_MODELS'] = os.path.abspath('../vendor/asr_models')
+          import asr_client
+          assert asr_client.is_available(), 'ASR 不可用：sherpa_onnx 或模型未就位'
+          text = asr_client.transcribe('scripts/asr-smoke.wav')
+          print('ASR_SMOKE_TEXT:', text)
+          assert text.strip(), 'ASR 识别结果为空'
+          print('asr smoke ok')
+          PY
+
+      - name: 安装桌面端 npm 依赖
+        working-directory: station/desktop
+        run: npm ci
+
+      - name: 准备 macOS ffmpeg/ffprobe（ffmpeg-static 静态二进制，与架构匹配）
+        working-directory: station/desktop
+        run: |
+          mkdir -p ../vendor/ffmpeg
+          FFMPEG_SRC="$(node -e "process.stdout.write(require('ffmpeg-static') || '')")"
+          FFPROBE_SRC="$(node -e "process.stdout.write(require('ffprobe-static') || '')")"
+          if [ -z "$FFMPEG_SRC" ] || [ -z "$FFPROBE_SRC" ]; then
+            echo "::error::ffmpeg-static/ffprobe-static 未提供当前架构二进制（ARCH=$ARCH）"
+            exit 1
+          fi
+          cp "$FFMPEG_SRC" ../vendor/ffmpeg/ffmpeg
+          cp "$FFPROBE_SRC" ../vendor/ffmpeg/ffprobe
+          chmod +x ../vendor/ffmpeg/ffmpeg ../vendor/ffmpeg/ffprobe
+          ../vendor/ffmpeg/ffmpeg -version | head -1
+
+      - name: electron-builder 打包 macOS（${{ github.event.inputs.arch || 'arm64' }}）
+        working-directory: station/desktop
+        run: npx electron-builder --mac --${ARCH} --publish never
+
+      - name: 核对产物
+        working-directory: station/desktop
+        run: ls -lh dist/*.dmg dist/*.zip
+
+      - name: 上传构建产物（Actions 页面可下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: 视频去重工位-mac-${{ github.event.inputs.arch || 'arm64' }}
+          path: |
+            station/desktop/dist/*.dmg
+            station/desktop/dist/*.zip
+          if-no-files-found: error
+
+      - name: 打 tag 触发时发布 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            station/desktop/dist/*.dmg
+            station/desktop/dist/*.zip
+          generate_release_notes: true

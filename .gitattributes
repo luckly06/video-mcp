@@ -1,0 +1,4 @@
+# ASR 模型与音频素材：一律按二进制处理，禁止任何换行/编码转换。
+# 否则在 core.autocrlf 不同的机器上 checkout 会静默损坏模型文件。
+station/vendor/asr_models/** binary
+station/desktop/scripts/asr-smoke.wav binary

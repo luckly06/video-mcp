@@ -44,8 +44,12 @@ STATION_DIR = _SERVER_DIR.parent                       # video-uniqueness/statio
 PROJECT_DIR = STATION_DIR.parent                       # video-uniqueness/
 _VENDOR = STATION_DIR / "vendor"                       # 自包含依赖目录
 
-FFMPEG = Path(os.environ.get("VU_FFMPEG",  _VENDOR / "ffmpeg" / "ffmpeg.exe"))
-FFPROBE = Path(os.environ.get("VU_FFPROBE", _VENDOR / "ffmpeg" / "ffprobe.exe"))
+_IS_WIN = os.name == "nt"
+_FFMPEG_NAME = "ffmpeg.exe" if _IS_WIN else "ffmpeg"
+_FFPROBE_NAME = "ffprobe.exe" if _IS_WIN else "ffprobe"
+
+FFMPEG = Path(os.environ.get("VU_FFMPEG",  _VENDOR / "ffmpeg" / _FFMPEG_NAME))
+FFPROBE = Path(os.environ.get("VU_FFPROBE", _VENDOR / "ffmpeg" / _FFPROBE_NAME))
 WATERMARKS_DIR = Path(os.environ.get("VU_WATERMARKS", _VENDOR / "watermarks"))
 
 VIDEO_DIR = Path(os.environ.get("VU_ASSETS", PROJECT_DIR / "input"))   # 用户素材只读目录
