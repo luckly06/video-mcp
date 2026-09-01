@@ -158,18 +158,10 @@
       "icon": "build/icon.png",
       "target": [
         {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
+          "target": "zip"
         },
         {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
+          "target": "dmg"
         }
       ],
       "artifactName": "${productName}-mac-${version}-${arch}.${ext}",
