@@ -62,8 +62,10 @@ pkgs = {
     "greenlet": str(pathlib.Path(greenlet.__file__).parent),
     "typing_extensions": str(pathlib.Path(typing_extensions.__file__))
 }
-# Windows 发布包也内置 ASR：sherpa-onnx + numpy + soundfile/cffi。
-for mod in ("sherpa_onnx", "numpy", "soundfile", "cffi", "pycparser", "_soundfile"):
+# 离线 ASR：sherpa-onnx + numpy + soundfile/cffi。
+# sherpa_onnx_core 必须一起带上：sherpa-onnx 1.13+ 把 onnxruntime 推理引擎并进了这个包，
+# 只复制 sherpa_onnx 会导致 import 时找不到核心库。（onnxruntime 1.13+ 不再是独立 pip 包）
+for mod in ("sherpa_onnx", "sherpa_onnx_core", "numpy", "soundfile", "cffi", "pycparser", "_soundfile"):
     spec = importlib.util.find_spec(mod)
     if spec and spec.origin:
         p = pathlib.Path(spec.origin)
@@ -98,7 +100,8 @@ function copyRuntimePackages(sitePackages) {
     copyEntry(source, packageDestination(sitePackages, name, source));
   }
   for (const entry of fs.readdirSync(info.site)) {
-    if (/^(playwright|pyee|greenlet|typing_extensions|sherpa_onnx|onnxruntime|soundfile|numpy|cffi|pycparser)-.*\.dist-info$/i.test(entry)) {
+    // 注意 sherpa_onnx_core 必须单独列出：^sherpa_onnx- 匹配不到它（后面跟的是 _core- 而非 -）
+    if (/^(playwright|pyee|greenlet|typing_extensions|sherpa_onnx_core|sherpa_onnx|onnxruntime|soundfile|numpy|cffi|pycparser)-.*\.dist-info$/i.test(entry)) {
       copyEntry(path.join(info.site, entry), path.join(sitePackages, entry));
     }
     if (/^(numpy\.libs|_soundfile_data)$/i.test(entry)) {

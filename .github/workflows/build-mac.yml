@@ -73,12 +73,14 @@ jobs:
 
       - name: 安装 Playwright + 离线 ASR 推理引擎
         # 必须在「裁剪 Python 运行时」之前装：裁剪脚本只复制这里装进来的包。
-        # sherpa-onnx 会带进 onnxruntime / numpy；soundfile 供 asr_client 读 wav。
         # 注意：prepare-python-runtime.js 末尾已硬性 import sherpa_onnx/numpy/soundfile，
         #      这里不装会直接导致构建失败。
+        # 关于 onnxruntime：sherpa-onnx 1.13+ 已把推理引擎并入 sherpa-onnx-core，
+        #      不再单独依赖 onnxruntime 这个 pip 包。所以这里既不要装、也不要 import
+        #      它（1.13.7 实测：装完只多出 sherpa_onnx / sherpa_onnx_core 两个包）。
         run: |
           python -m pip install playwright==1.61.0 sherpa-onnx soundfile
-          python -c "import sherpa_onnx, onnxruntime, soundfile, numpy; print('asr deps ok')"
+          python -c "import sherpa_onnx, soundfile, numpy; print('asr deps ok')"
 
       - name: 裁剪 macOS Python 运行时（vendor/python：bin/python3 + lib）
         run: |
