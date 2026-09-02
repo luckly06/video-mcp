@@ -1,6 +1,6 @@
 {
   "name": "video-dedup-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "视频去重工位 Electron 桌面版",
   "main": "main.js",
@@ -11,12 +11,15 @@
     "prepare:python-runtime": "node scripts/prepare-python-runtime.js",
     "prepare:asr-models": "node scripts/prepare-asr-models.js",
     "pack": "electron-builder --dir --win --x64",
-    "dist": "electron-builder --win portable --x64",
+    "dist": "electron-builder --win nsis --x64 --publish never",
+    "dist:portable": "electron-builder --win portable --x64 --publish never",
     "dist:mac": "electron-builder --mac --publish never",
     "dist:mac:x64": "electron-builder --mac x64 --publish never",
     "dist:mac:arm64": "electron-builder --mac arm64 --publish never"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
   "devDependencies": {
     "electron": "^31.7.7",
     "electron-builder": "^24.13.3",
@@ -146,14 +149,31 @@
       "icon": "build/icon.ico",
       "target": [
         {
-          "target": "portable",
+          "target": "nsis",
           "arch": [
             "x64"
           ]
         }
       ],
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "video-dedup-desktop-setup-${version}.${ext}"
     },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "video-dedup-desktop-setup-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "luckly06",
+        "repo": "video-mcp",
+        "releaseType": "release"
+      }
+    ],
     "mac": {
       "icon": "build/icon.png",
       "target": [
@@ -168,7 +188,10 @@
       "category": "public.app-category.video",
       "identity": null
     },
-    "asar": true
+    "asar": true,
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    }
   },
   "engines": {
     "node": ">=20.0.0"

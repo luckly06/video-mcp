@@ -9,8 +9,9 @@ const { app, Menu, shell } = require('electron');
  * @param {object} opts
  * @param {BrowserWindow} [opts.mainWindow] 用于 reload / toggleDevTools 的目标窗口
  * @param {object} [opts.log]
+ * @param {Function} [opts.onCheckUpdates]
  */
-function buildMenu({ mainWindow, log }) {
+function buildMenu({ mainWindow, log, onCheckUpdates }) {
   const isMac = process.platform === 'darwin';
   const devMenuItems = app.isPackaged
     ? []
@@ -84,6 +85,11 @@ function buildMenu({ mainWindow, log }) {
     {
       label: '帮助',
       submenu: [
+        {
+          label: '检查更新',
+          click: () => onCheckUpdates?.(),
+        },
+        { type: 'separator' },
         {
           label: '项目说明',
           click: async () => {

@@ -71,6 +71,7 @@ const el = {
   badgeStatus: $("badge-status"),
   workflowSteps: $("workflow-steps"),
   btnOpenOutputTop: $("btn-open-output-top"),
+  btnCheckUpdate: $("btn-check-update"),
   btnToggleSidebars: $("btn-toggle-sidebars"),
   btnFontSmaller: $("btn-font-smaller"),
   btnFontReset: $("btn-font-reset"),
@@ -1890,6 +1891,79 @@ el.btnOpenOutputTop.addEventListener("click", () => {
   if (!currentDedupArtifact) { toast("请先生成产物", "warn"); return; }
   downloadArtifact(currentDedupArtifact, "去重");
 });
+
+/* ---------------------------------------------------------------------------
+   桌面版自动更新
+   --------------------------------------------------------------------------- */
+let manualUpdateCheck = false;
+let updateReadyToDownload = false;
+let updateReadyToInstall = false;
+function updateButtonLabel(label, disabled) {
+  if (!el.btnCheckUpdate) return;
+  el.btnCheckUpdate.textContent = label;
+  el.btnCheckUpdate.disabled = !!disabled;
+}
+async function checkAppUpdate(manual = true) {
+  if (!window.desktop || typeof window.desktop.checkForUpdates !== "function") {
+    if (manual) toast("当前不是支持自动更新的安装版", "warn");
+    return;
+  }
+  manualUpdateCheck = manual;
+  updateReadyToDownload = false;
+  updateReadyToInstall = false;
+  updateButtonLabel("检查中…", true);
+  const r = await window.desktop.checkForUpdates();
+  if (r && !r.ok && manual) toast(r.reason || "检查更新失败", "err");
+  if (r && !r.ok) updateButtonLabel("检查更新", false);
+}
+if (el.btnCheckUpdate) el.btnCheckUpdate.addEventListener("click", async () => {
+  if (updateReadyToDownload && window.desktop?.downloadUpdate) {
+    updateReadyToDownload = false;
+    updateButtonLabel("准备下载…", true);
+    await window.desktop.downloadUpdate();
+    return;
+  }
+  if (updateReadyToInstall && window.desktop?.installUpdate) {
+    await window.desktop.installUpdate();
+    return;
+  }
+  checkAppUpdate(true);
+});
+if (window.desktop && typeof window.desktop.onAppUpdateStatus === "function") {
+  window.desktop.onAppUpdateStatus(async (status) => {
+    const state = status && status.state;
+    if (state === "checking") {
+      updateButtonLabel("检查中…", true);
+    } else if (state === "available") {
+      updateReadyToDownload = true;
+      updateReadyToInstall = false;
+      updateButtonLabel("下载更新", false);
+      const version = status.version ? ` v${status.version}` : "";
+      if (manualUpdateCheck && window.confirm(`发现新版本${version}，现在下载吗？`)) {
+        updateReadyToDownload = false;
+        updateButtonLabel("准备下载…", true);
+        await window.desktop.downloadUpdate();
+      }
+    } else if (state === "downloading") {
+      updateReadyToDownload = false;
+      updateReadyToInstall = false;
+      updateButtonLabel(`下载中 ${Math.round(status.percent || 0)}%`, true);
+    } else if (state === "downloaded") {
+      updateReadyToDownload = false;
+      updateReadyToInstall = true;
+      updateButtonLabel("重启安装", false);
+      if (window.confirm("更新已下载完成，现在重启安装吗？")) {
+        await window.desktop.installUpdate();
+      }
+    } else if (state === "not-available") {
+      updateButtonLabel("检查更新", false);
+      if (manualUpdateCheck) toast("当前已是最新版本", "ok");
+    } else if (state === "error") {
+      updateButtonLabel("检查更新", false);
+      if (manualUpdateCheck) toast("更新失败：" + (status.message || "请稍后重试"), "err");
+    }
+  });
+}
 el.btnToggleSidebars.addEventListener("click", () => {
   const shell = document.querySelector(".workspace-shell");
   const auditPanel = document.getElementById("audit-panel");

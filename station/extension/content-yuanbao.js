@@ -17,11 +17,12 @@ async function doRewrite({ frames_b64, raw_text, template, topic, max_chars }) {
 
     // 2. 上传图片
     if (frames_b64 && frames_b64.length > 0) {
-      await uploadImages(frames_b64, editor);
+      const ok = await uploadImages(frames_b64, editor);
+      if (!ok) return done({ error: '图片上传失败：为避免只给元宝发送纯文案，本次已中止。' });
     }
 
     // 3. 构建提示词并填入
-    const prompt = buildPrompt(raw_text, template, topic, max_chars || 30);
+    const prompt = buildPrompt(raw_text, template, topic, max_chars || 30, !!(frames_b64 && frames_b64.length > 0));
     await fillEditor(editor, prompt);
     await sleep(300);
 
@@ -71,12 +72,20 @@ async function waitForEditor(timeout) {
 async function uploadImages(b64List, editor) {
   try {
     editor.focus(); editor.click(); await sleep(500);
-    const ub = document.querySelector('[class*="UploadFileSelector_iconContainer"]');
-    if (ub) { ub.click(); await sleep(800); }
-    const picBtn = findElementByText('图片');
+    const addBtn = findVisibleBySelectors([
+      '[data-new-input-control="add-tools-trigger"]',
+      'button[aria-label="添加"]',
+      '[aria-label="添加"]',
+      '[class*="UploadFileSelector_iconContainer"]',
+    ]);
+    if (addBtn) { addBtn.click(); await sleep(500); }
+    const picBtn = findVisibleByText(['上传图片', '图片']);
     if (picBtn) { picBtn.click(); await sleep(500); }
-    await sleep(800);
-    const fileInput = document.querySelector('input[type="file"]');
+    await sleep(600);
+    const fileInput = findVisibleBySelectors([
+      'input[type="file"][accept*="image"]',
+      'input[type="file"]',
+    ]);
     if (!fileInput) return false;
     const dt = new DataTransfer();
     b64List.forEach((b64, i) => { const f = b64ToFile(b64, 'frame_' + i + '.png'); dt.items.add(f); });
@@ -94,16 +103,54 @@ function b64ToFile(b64, name) {
   return new File([u8], name, { type: 'image/png' });
 }
 
-function findElementByText(text) {
-  const result = document.evaluate('//*[normalize-space(text())="' + text + '"]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-  return result.singleNodeValue;
+function findVisibleBySelectors(selectors) {
+  for (const sel of selectors) {
+    try {
+      const nodes = document.querySelectorAll(sel);
+      for (const el of nodes) {
+        if (el && el.offsetParent !== null) return el;
+      }
+    } catch (_) { /* ignore */ }
+  }
+  return null;
+}
+
+function findVisibleByText(textList) {
+  const texts = Array.isArray(textList) ? textList : [textList];
+  const nodes = document.querySelectorAll('button,[role="button"],[role="menuitem"],div,span');
+  for (const el of nodes) {
+    if (!el || el.offsetParent === null) continue;
+    const txt = ((el.textContent || el.innerText || '') + '').trim();
+    if (!txt) continue;
+    if (texts.some(t => txt.includes(t))) return el;
+  }
+  return null;
 }
 
 // ---- 填入发送 ----
 async function fillEditor(editor, text) {
   editor.focus();
   if (editor.getAttribute('contenteditable') === 'true') {
-    editor.innerText = text;
+    try {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      const ok = document.execCommand && document.execCommand('insertText', false, text);
+      if (!ok) {
+        const node = document.createTextNode(text);
+        range.insertNode(node);
+        range.setStartAfter(node);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    } catch (_) {
+      const node = document.createTextNode(text);
+      editor.appendChild(node);
+    }
     editor.dispatchEvent(new Event('input', { bubbles: true }));
   } else {
     editor.value = text;
@@ -132,8 +179,11 @@ var SYSTEM_PROMPT = '你是短视频配音文案优化师。\n\n' +
   '## 要求\n1. **口语化**：自然说话语气，不要书面语\n2. **有钩子**：开头 3 秒抓注意力（悬念/提问/冲击性陈述）\n3. **有行动**：结尾留互动引导（"点赞关注"、"评论区聊聊"等）\n4. **时长适配**：30-100 字，适合 15-60 秒短视频\n5. **纯文案**：只输出最终文案，不要解释、前缀、标注\n\n' +
   '## 示例\n输入：这段打斗太精彩了\n输出：你见过这么炸裂的打斗吗？三秒之内反转三次，这操作你学不来！评论区告诉我你看到了第几遍，点赞关注不迷路！';
 
-function buildPrompt(rawText, template, topic, maxChars) {
+function buildPrompt(rawText, template, topic, maxChars, hasImages) {
   var parts = [];
+  if (hasImages) {
+    parts.push('## 重要说明\n本次改写会结合你上传的关键帧图片和原文一起判断，不要忽略图片内容。');
+  }
   if (topic && topic.trim()) parts.push('## 视频主题\n这个视频的内容是：' + topic.trim());
   if (template) {
     if (REWRITE_TEMPLATES[template]) {

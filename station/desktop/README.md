@@ -2,7 +2,7 @@
 
 Electron 桌面壳，**包裹** `archive/web/` 整套 Web UI，**本地拉起 MCP 后端**（`station/server/mcp_server.py`，监听 `http://127.0.0.1:8765`），并复用 `station/extension/content-yuanbao.js` 作为元宝页面驱动。不依赖远端服务器。
 
-当前支持 Windows portable exe 打包；图标来自 `station/desktop/build/icon.ico`，运行时资源通过 `process.resourcesPath` 读取。
+当前支持 Windows NSIS 安装版打包（带自动更新），同时保留 portable 备用脚本；图标来自 `station/desktop/build/icon.ico`，运行时资源通过 `process.resourcesPath` 读取。
 
 ---
 
@@ -56,8 +56,15 @@ npm run dist
 
 产物默认生成到：
 
-- `station/desktop/dist/视频去重工位-0.1.0-x64.exe`
+- `station/desktop/dist/视频去重工位-0.2.0-x64.exe`
+- `station/desktop/dist/latest.yml`
 - `station/desktop/dist/win-unpacked/`
+
+如果你只想要免安装便携版，可以改跑：
+
+```bash
+npm run dist:portable
+```
 
 打包时会随包携带：
 
@@ -118,7 +125,8 @@ station/desktop/
 - **发布态 TTS 配置**：构建钩子从 `station/server/.env` 读取 `MIMO_API_KEY`，生成不含明文 Key 的 `build/runtime-config.bin` 并装入 `app.asar`；主进程启动本地后端时解密并通过环境变量注入。TTS 客户端使用 Python 标准库直连 MiMo，不再要求用户安装 `openai`。
 - **元宝登录态只认调试窗口**：首次使用【元宝登录】会打开与 AI 改写共用的调试 Edge/Profile；请在这个窗口扫码，避免登录到系统 Edge 后改写仍要求重新登录。
 - **HMAC requestState 进程本地**：服务端重启会作废进行中的确认流。renderer 需在收到 401/State 错误时引导用户重试。
-- **未签名**：当前产物为 Windows portable exe，未做代码签名，首次运行可能触发系统安全提示。
+- **未签名**：当前 Windows 安装包未做代码签名，首次运行可能触发系统安全提示。若发布正式版，建议配合代码签名证书进一步降低拦截概率。
+- **自动更新依赖 Release**：Windows 安装版会读取 GitHub Release 的 `latest.yml` 和安装包进行更新检查；若你手工改版号，请同步重新发布 Release 产物。
 
 ---
 

@@ -19,6 +19,7 @@ const { createLogger } = require('./lib/logger');
 const { createYuanbaoWindow } = require('./lib/yuanbao-window');
 const { startLocalServer, stopLocalServer } = require('./lib/local-server');
 const { resolveAppIconPath, resolveDesktopAssetsDir, resolveWebIndexPath } = require('./lib/paths');
+const { setupAutoUpdater } = require('./lib/auto-updater');
 
 // ---------- 1. userData 隔离 ----------
 // 避免与机器上其他 Electron 应用共享缓存目录
@@ -52,6 +53,20 @@ const log = createLogger({
 let mainWindow = null;
 let localServerChild = null;
 let localServerError = null;
+let updater = null;
+
+ipcMain.handle('app:check-for-updates', async () => {
+  if (!updater) return { ok: false, reason: '更新服务尚未就绪' };
+  return updater.check();
+});
+ipcMain.handle('app:download-update', async () => {
+  if (!updater) return { ok: false, reason: '更新服务尚未就绪' };
+  return updater.download();
+});
+ipcMain.handle('app:install-update', () => {
+  if (!updater) return { ok: false, reason: '更新服务尚未就绪' };
+  return updater.install();
+});
 
 // ---------- 4.5 IPC：TTS 失败原生弹窗 ----------
 // 渲染进程在「用户启用了 TTS 但产物未成功配音」时调用，弹出系统级对话框提示用户。
@@ -132,7 +147,17 @@ async function bootstrap() {
   });
   log.info('[main] yuanbao window attached (independent floating)');
 
-  buildMenu({ mainWindow, log });
+  buildMenu({
+    mainWindow,
+    log,
+    onCheckUpdates: () => updater?.check(),
+  });
+
+  if (!updater) {
+    updater = setupAutoUpdater({ getMainWindow: () => mainWindow, log });
+    // 启动后延迟检查，避免和本地 MCP 启动、首屏加载抢资源。
+    setTimeout(() => updater?.check(), 8000);
+  }
 }
 
 // ---------- 5. 生命周期 ----------

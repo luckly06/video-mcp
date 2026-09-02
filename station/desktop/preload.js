@@ -65,4 +65,23 @@ contextBridge.exposeInMainWorld('desktop', {
     try { return await ipcRenderer.invoke('app:show-tts-warning', payload); }
     catch (e) { return { ok: false, reason: e.message || String(e) }; }
   },
+
+  async checkForUpdates() {
+    try { return await ipcRenderer.invoke('app:check-for-updates'); }
+    catch (e) { return { ok: false, reason: e.message || String(e) }; }
+  },
+  async downloadUpdate() {
+    try { return await ipcRenderer.invoke('app:download-update'); }
+    catch (e) { return { ok: false, reason: e.message || String(e) }; }
+  },
+  async installUpdate() {
+    try { return await ipcRenderer.invoke('app:install-update'); }
+    catch (e) { return { ok: false, reason: e.message || String(e) }; }
+  },
+  onAppUpdateStatus(cb) {
+    if (typeof cb !== 'function') throw new TypeError('requires a function');
+    const handler = (_evt, payload) => { try { cb(payload); } catch (e) { console.error(e); } };
+    ipcRenderer.on('app-update-status', handler);
+    return () => ipcRenderer.removeListener('app-update-status', handler);
+  },
 });

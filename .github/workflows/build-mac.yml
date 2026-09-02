@@ -43,6 +43,9 @@ jobs:
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # 无签名证书，禁止 electron-builder 尝试签名
       ARCH: ${{ github.event.inputs.arch || 'arm64' }}
+      ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/'
+      ELECTRON_BUILDER_BINARIES_MIRROR: 'https://npmmirror.com/mirrors/electron-builder-binaries/'
+      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
 
     steps:
       - name: 检出代码
@@ -54,6 +57,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: station/desktop/package-lock.json
+
+      - name: 缓存 electron-builder 下载
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/electron-builder-cache
+          key: ${{ runner.os }}-electron-builder-${{ github.event.inputs.arch || 'arm64' }}-${{ hashFiles('station/desktop/package-lock.json', 'station/desktop/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-builder-${{ github.event.inputs.arch || 'arm64' }}-
+            ${{ runner.os }}-electron-builder-
 
       - name: 安装 Python 3.13（构建 mac 版 Python 运行时用）
         id: python

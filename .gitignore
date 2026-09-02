@@ -43,3 +43,4 @@ station/desktop/dist/
 station/desktop/out/
 station/desktop/logs/
 station/desktop/build/runtime-config.bin
+station/desktop/.electron-builder-cache/

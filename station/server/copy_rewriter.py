@@ -67,20 +67,40 @@ def _extract_frames(video_path, ffmpeg_path, n=5):
     import subprocess
     import tempfile
 
-    try:
-        result = subprocess.run(
-            [str(ffmpeg_path), "-i", str(video_path), "-f", "null", "-"],
-            capture_output=True, timeout=15,
-        )
-    except Exception:
-        return []
     duration = 60.0
-    stderr = result.stderr or b""
-    if isinstance(stderr, bytes):
-        stderr = stderr.decode("utf-8", errors="replace")
-    m = re.search(r"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)", stderr)
-    if m:
-        duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3)) + int(m.group(4)) / 100
+    # 读取时长不要用 ffmpeg 把整段视频完整解码：长视频/大文件很容易超过旧的 15 秒超时，
+    # 随后被静默当成“无帧”，导致元宝改写只收到文案。优先调用同目录 ffprobe，瞬时返回元数据。
+    ffmpeg_p = Path(ffmpeg_path)
+    probe_candidates = [
+        ffmpeg_p.with_name("ffprobe.exe"),
+        ffmpeg_p.with_name("ffprobe"),
+    ]
+    probe_path = next((p for p in probe_candidates if p.exists()), None)
+    if probe_path:
+        try:
+            probe = subprocess.run(
+                [str(probe_path), "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+                capture_output=True, text=True, timeout=15,
+            )
+            duration = float((probe.stdout or "").strip() or 0)
+        except Exception:
+            duration = 0.0
+    if duration <= 0:
+        # 兼容开发环境缺少 ffprobe 的情况；放宽兜底超时，但仍只为取元数据。
+        try:
+            result = subprocess.run(
+                [str(ffmpeg_path), "-i", str(video_path), "-f", "null", "-"],
+                capture_output=True, timeout=90,
+            )
+            stderr = result.stderr or b""
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            m = re.search(r"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)", stderr)
+            if m:
+                duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3)) + int(m.group(4)) / 100
+        except Exception:
+            return []
     if duration <= 0:
         return []
 
